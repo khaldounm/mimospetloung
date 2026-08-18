@@ -57,10 +57,10 @@ function LoginForm() {
             component="img"
             src={
               mode === "dark"
-                ? "/dr-zeina-semaan-logo-white.webp"
-                : "/dr-zeina-semaan-logo.webp"
+                ? "/mimos-logo-white.webp"
+                : "/mimos-logo.webp"
             }
-            alt="Dr. Zeina Semaan Vet Clinic"
+            alt="Mimo's Pet Lounge  "
             sx={{
               height: LOGIN_LOGO_HEIGHT,
               width: "auto",

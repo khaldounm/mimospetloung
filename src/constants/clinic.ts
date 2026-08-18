@@ -1,11 +1,11 @@
 // Seller (clinic) identity printed on invoice PDFs.
 export const CLINIC = {
-  name: "Dr Zeina Veterinary Clinic",
+  name: "Mimo's Pet Lounge",
   // IANA timezone for the clinic. Used to render dates/times (e.g. appointment
   // reminders) in local time regardless of where the server runs (Vercel = UTC).
   timezone: "Asia/Beirut",
   // Logo lives in /public. Dimensions keep the source 1280x389 aspect ratio.
-  logo: { src: "/dr-zeina-semaan-logo.png", width: 170, height: 52 },
+  logo: { src: "/mimos-logo.png", width: 170, height: 52 },
   // One line per array entry; blank entries are skipped.
   addressLines: [
     "Qornayel Main road",
@@ -15,7 +15,7 @@ export const CLINIC = {
   ],
   phone: "Mobile: 70 121 556",
   email: "",
-  website: "https://zeinavetclinic.com",
+  website: "https://mimospetlounge.vercel.app",
   // Tax / business registration number (e.g. EIN, VAT, ABN).
   taxId: "",
 } as const;

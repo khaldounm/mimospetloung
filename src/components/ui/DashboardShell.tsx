@@ -151,8 +151,8 @@ export default function DashboardShell({
               component="img"
               // Always the white variant: the nav pane is a dark fill in both
               // modes, so the ink logo would disappear against it in light mode.
-              src="/dr-zeina-semaan-logo-white.webp"
-              alt="Dr. Zeina Semaan Vet Clinic"
+              src="/mimos-logo-white.webp"
+              alt="Mimo's Pet Lounge"
               sx={{
                 height: DRAWER_LOGO_HEIGHT,
                 width: "auto",
@@ -369,10 +369,10 @@ export default function DashboardShell({
             component="img"
             src={
               mode === "dark"
-                ? "/dr-zeina-semaan-logo-white.webp"
-                : "/dr-zeina-semaan-logo.webp"
+                ? "/mimos-logo-white.webp"
+                : "/mimos-logo.webp"
             }
-            alt="Dr. Zeina Semaan Veterinary Clinic"
+            alt="Mimo's Pet Lounge"
             sx={{
               height: APPBAR_LOGO_HEIGHT,
               width: "auto",

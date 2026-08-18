@@ -1,7 +1,7 @@
 -- ============================================================
 -- WEBSITE CONTACT MESSAGES
 -- Inbound enquiries from the public marketing site's contact form. The public
--- site (zeinavet) inserts rows here; staff triage them in the VCMS. These are
+-- site (mimo's pet lounge) inserts rows here; staff triage them in the VCMS. These are
 -- leads, not yet linked to a client record, so no FK to clients.
 --
 -- status carries the triage lifecycle (New / Read / Archived). updated_at is
