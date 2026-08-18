@@ -18,32 +18,51 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import { apiRequest } from "@/utils/api-client";
+import AlphabetBar from "@/components/ui/AlphabetBar";
+import TablePaginationBar from "@/components/ui/TablePaginationBar";
 import type { PatientDTO } from "@/types/entities";
-import PatientFormDialog, { type ClientOption } from "./PatientFormDialog";
+import PatientFormDialog from "./PatientFormDialog";
 import ReviewBadge from "@/components/ui/ReviewBadge";
 
 interface Props {
   initialPatients: PatientDTO[];
-  clientOptions: ClientOption[];
+  initialTotal: number;
+  pageSize: number;
+  letters: { letter: string; count: number }[];
   canWrite: boolean;
 }
 
 export default function PatientsTable({
   initialPatients,
-  clientOptions,
+  initialTotal,
+  pageSize,
+  letters,
   canWrite,
 }: Props) {
   const [patients, setPatients] = useState(initialPatients);
+  const [total, setTotal] = useState(initialTotal);
+  const [page, setPage] = useState(0); // zero-based, matching the pager
   const [query, setQuery] = useState("");
+  const [letter, setLetter] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const firstRender = useRef(true);
 
-  async function load(q: string) {
-    const params = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
-    const data = await apiRequest<{ patients: PatientDTO[] }>(
-      `/api/patients${params}`,
-    );
-    setPatients(data.patients);
+  async function load(q: string, l: string | null, p: number) {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set("q", q.trim());
+    if (l) params.set("letter", l);
+    params.set("page", String(p + 1));
+    setLoading(true);
+    try {
+      const data = await apiRequest<{ patients: PatientDTO[]; total: number }>(
+        `/api/patients?${params}`,
+      );
+      setPatients(data.patients);
+      setTotal(data.total);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -51,9 +70,15 @@ export default function PatientsTable({
       firstRender.current = false;
       return;
     }
-    const t = setTimeout(() => void load(query), 300);
+    const t = setTimeout(() => void load(query, letter, page), 300);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, letter, page]);
+
+  // A new filter invalidates the current offset.
+  function changeFilter(next: () => void) {
+    setPage(0);
+    next();
+  }
 
   return (
     <Box>
@@ -79,12 +104,19 @@ export default function PatientsTable({
       </Stack>
 
       <TextField
-        placeholder="Search by name, species, breed, or microchip"
+        placeholder="Search by pet or owner name, phone, species, breed"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => changeFilter(() => setQuery(e.target.value))}
         fullWidth
         size="small"
         sx={{ mb: 2 }}
+      />
+
+      <AlphabetBar
+        letters={letters}
+        value={letter}
+        onChange={(next) => changeFilter(() => setLetter(next))}
+        disabled={loading}
       />
 
       <TableContainer component={Paper}>
@@ -124,13 +156,20 @@ export default function PatientsTable({
             )}
           </TableBody>
         </Table>
+        <TablePaginationBar
+          page={page}
+          count={total}
+          pageSize={pageSize}
+          onChange={setPage}
+          loading={loading}
+          noun="pets"
+        />
       </TableContainer>
 
       <PatientFormDialog
         open={dialogOpen}
-        clientOptions={clientOptions}
         onClose={() => setDialogOpen(false)}
-        onSaved={() => void load(query)}
+        onSaved={() => void load(query, letter, page)}
       />
     </Box>
   );

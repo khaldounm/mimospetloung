@@ -2,33 +2,25 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
-import { patientInclude, toPatientDTO } from "@/lib/patients";
+import { listPatients, patientInclude, toPatientDTO } from "@/lib/patients";
 import { patientCreateSchema } from "@/schemas/patient";
 
 export async function GET(request: Request) {
   return handle(async () => {
     await requirePermission("patients:read");
 
-    const q = new URL(request.url).searchParams.get("q")?.trim();
-    const patients = await prisma.patient.findMany({
-      where: {
-        deletedAt: null,
-        ...(q
-          ? {
-              OR: [
-                { name: { contains: q, mode: "insensitive" } },
-                { species: { contains: q, mode: "insensitive" } },
-                { breed: { contains: q, mode: "insensitive" } },
-                { microchipId: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {}),
-      },
-      orderBy: { name: "asc" },
-      include: patientInclude,
+    const sp = new URL(request.url).searchParams;
+    const pageRaw = sp.get("page")?.trim();
+
+    // Paged and filtered in SQL; the response also carries the letter buckets
+    // so the jump bar reflects the data rather than a hardcoded alphabet.
+    const page = await listPatients({
+      q: sp.get("q")?.trim() || undefined,
+      letter: sp.get("letter")?.trim() || undefined,
+      page: pageRaw ? Number(pageRaw) : 1,
     });
 
-    return NextResponse.json({ patients: patients.map(toPatientDTO) });
+    return NextResponse.json(page);
   });
 }
 

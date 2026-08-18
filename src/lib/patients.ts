@@ -1,3 +1,4 @@
+import { prisma } from "@/lib/prisma";
 import { toDateOnly } from "@/utils/format";
 import type { PatientDTO } from "@/types/entities";
 
@@ -40,5 +41,120 @@ export function toPatientDTO(p: PatientWithClient): PatientDTO {
     needsReview: p.needsReview,
     reviewNote: p.reviewNote,
     clientName: `${p.client.firstName} ${p.client.lastName}`,
+  };
+}
+
+// ---- Patient list (paged) ----
+
+/**
+ * One page of the patient list, plus the letter buckets the jump bar needs.
+ *
+ * Raw SQL because the letter filter runs on upper(left(name,1)), which has its
+ * own expression index, and because the bucket counts are wanted in the same
+ * round trip as the page itself.
+ */
+export interface PatientListPage {
+  patients: PatientDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Every first letter present in the data, with how many pets sit under it. */
+  letters: { letter: string; count: number }[];
+}
+
+export interface PatientListQuery {
+  q?: string;
+  letter?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export const PATIENT_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+
+type PatientListRow = {
+  patient_id: number;
+  client_id: number;
+  name: string;
+  species: string | null;
+  breed: string | null;
+  date_of_birth: Date | null;
+  sex: string | null;
+  is_neutered: boolean;
+  microchip_id: string | null;
+  notes: string | null;
+  needs_review: boolean;
+  review_note: string | null;
+  first_name: string;
+  last_name: string;
+  total_count: bigint;
+};
+
+export async function listPatients(
+  query: PatientListQuery = {},
+): Promise<PatientListPage> {
+  const pageSize = Math.min(query.pageSize ?? PATIENT_PAGE_SIZE, MAX_PAGE_SIZE);
+  const page = Math.max(query.page ?? 1, 1);
+  const offset = (page - 1) * pageSize;
+
+  // A single letter only; anything else is ignored rather than rejected, so a
+  // stale link cannot break the page.
+  const letter =
+    query.letter && /^[A-Za-z]$/.test(query.letter)
+      ? query.letter.toUpperCase()
+      : null;
+  // Searching the owner's name matters as much as the pet's: staff are given
+  // "Leo, Sarah's cat" and 36 pets here are called Leo.
+  const search = query.q?.trim() ? `%${query.q.trim().toLowerCase()}%` : null;
+
+  const [rows, letters] = await Promise.all([
+    prisma.$queryRaw<PatientListRow[]>`
+      SELECT p.patient_id, p.client_id, p.name, p.species, p.breed,
+             p.date_of_birth, p.sex, p.is_neutered, p.microchip_id, p.notes,
+             p.needs_review, p.review_note,
+             c.first_name, c.last_name,
+             COUNT(*) OVER () AS total_count
+      FROM patients p
+      JOIN clients c ON c.client_id = p.client_id
+      WHERE p.deleted_at IS NULL
+        AND (${letter}::text IS NULL OR upper(left(p.name, 1)) = ${letter})
+        AND (
+          ${search}::text IS NULL
+          OR lower(p.name) LIKE ${search}
+          OR lower(c.first_name || ' ' || c.last_name) LIKE ${search}
+          OR lower(coalesce(p.species, '')) LIKE ${search}
+          OR lower(coalesce(p.breed, '')) LIKE ${search}
+          OR lower(coalesce(c.phone, '')) LIKE ${search}
+        )
+      ORDER BY p.name ASC, p.patient_id ASC
+      LIMIT ${pageSize} OFFSET ${offset}`,
+    prisma.$queryRaw<{ letter: string; count: bigint }[]>`
+      SELECT upper(left(name, 1)) AS letter, count(*) AS count
+      FROM patients
+      WHERE deleted_at IS NULL AND name ~ '^[A-Za-z]'
+      GROUP BY 1
+      ORDER BY 1`,
+  ]);
+
+  return {
+    patients: rows.map((r) => ({
+      patientId: r.patient_id,
+      clientId: r.client_id,
+      name: r.name,
+      species: r.species,
+      breed: r.breed,
+      dateOfBirth: toDateOnly(r.date_of_birth),
+      sex: r.sex,
+      isNeutered: r.is_neutered,
+      microchipId: r.microchip_id,
+      notes: r.notes,
+      needsReview: r.needs_review,
+      reviewNote: r.review_note,
+      clientName: `${r.first_name} ${r.last_name}`,
+    })),
+    total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
+    page,
+    pageSize,
+    letters: letters.map((l) => ({ letter: l.letter, count: Number(l.count) })),
   };
 }

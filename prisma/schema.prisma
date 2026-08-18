@@ -153,6 +153,11 @@ model Patient {
   notifications   Notification[]
   reminders       Reminder[]
 
+  // Name ordering for the paged list. The companion expression index on
+  // upper(left(name,1)), which serves the letter jump bar, lives only in the
+  // migration: Prisma cannot express a function index, and does not manage
+  // what it cannot see.
+  @@index([name, patientId], map: "idx_patients_name")
   @@map("patients")
 }
 

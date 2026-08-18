@@ -1,38 +1,24 @@
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
-import { patientInclude, toPatientDTO } from "@/lib/patients";
+import { listPatients } from "@/lib/patients";
 import PatientsTable from "@/components/patients/PatientsTable";
-import type { ClientOption } from "@/components/patients/PatientFormDialog";
 
 export default async function PatientsPage() {
   const session = await auth();
   const canWrite = hasPermission(session?.user, "patients:write");
 
-  const [patients, clients] = await Promise.all([
-    prisma.patient.findMany({
-      where: { deletedAt: null },
-      orderBy: { name: "asc" },
-      include: patientInclude,
-    }),
-    prisma.client.findMany({
-      where: { deletedAt: null },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-      select: { clientId: true, firstName: true, lastName: true },
-    }),
-  ]);
-
-  const initialPatients = patients.map(toPatientDTO);
-
-  const clientOptions: ClientOption[] = clients.map((c) => ({
-    clientId: c.clientId,
-    label: `${c.firstName} ${c.lastName}`,
-  }));
+  // First page only. Paging, search and the letter filter all run in SQL, and
+  // the owner list the create dialog needs is fetched when that dialog opens.
+  const { patients, total, pageSize, letters } = await listPatients({
+    page: 1,
+  });
 
   return (
     <PatientsTable
-      initialPatients={initialPatients}
-      clientOptions={clientOptions}
+      initialPatients={patients}
+      initialTotal={total}
+      pageSize={pageSize}
+      letters={letters}
       canWrite={canWrite}
     />
   );

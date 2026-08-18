@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Autocomplete,
@@ -17,7 +17,7 @@ import {
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
 import { PATIENT_SEXES } from "@/types/enums";
-import type { PatientDTO } from "@/types/entities";
+import type { ClientDTO, PatientDTO } from "@/types/entities";
 
 export interface ClientOption {
   clientId: number;
@@ -51,14 +51,29 @@ export default function PatientFormDialog({ open, onClose, ...rest }: Props) {
 
 type FormProps = Omit<Props, "open">;
 
-function PatientForm({
-  patient,
-  fixedClientId,
-  clientOptions = [],
-  onClose,
-  onSaved,
-}: FormProps) {
+function PatientForm({ patient, fixedClientId, onClose, onSaved }: FormProps) {
   const editing = Boolean(patient);
+  // Owners are fetched when the dialog opens rather than shipped with every
+  // page load: the list is ~1,900 rows and most visits never open this form.
+  const [clientOptions, setClientOptions] = useState<ClientOption[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const data = await apiRequest<{ clients: ClientDTO[] }>("/api/clients");
+      if (cancelled) return;
+      setClientOptions(
+        data.clients.map((c) => ({
+          clientId: c.clientId,
+          label: `${c.firstName} ${c.lastName}`,
+        })),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [clientId, setClientId] = useState<number | null>(
     patient?.clientId ?? fixedClientId ?? null,
   );
