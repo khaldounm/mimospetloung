@@ -1,0 +1,650 @@
+// Vet Clinic — Prisma schema
+//
+// Faithful translation of vet_clinic_schema_v3.sql. The DATABASE is the source
+// of truth: the initial migration is the raw SQL file, so all integrity rules
+// (CHECK constraints, the booking-overlap EXCLUDE constraint, updated_at
+// triggers, citext, the generated line_total column, partial indexes) live in
+// Postgres. This schema models everything Prisma can express so the generated
+// client is fully typed.
+//
+// CHECK-constrained string columns (record_type, status, channel, method, sex,
+// transaction type) are modelled as String here and enforced by the DB CHECK
+// constraints. Allowed values are mirrored as TS string-literal unions in
+// src/types/enums.ts for compile-time safety.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// USERS & ACCESS
+// ============================================================
+model Role {
+  roleId      Int     @id @default(autoincrement()) @map("role_id")
+  name        String  @unique @db.VarChar(50)
+  description String? @db.Text
+
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  permissionId Int     @id @default(autoincrement()) @map("permission_id")
+  name         String  @unique @db.VarChar(100)
+  description  String? @db.Text
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       Int @map("role_id")
+  permissionId Int @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [roleId], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [permissionId], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  userId       Int       @id @default(autoincrement()) @map("user_id")
+  roleId       Int       @map("role_id")
+  email        String    @unique @db.Citext
+  passwordHash String?   @map("password_hash") @db.VarChar(255)
+  firstName    String    @map("first_name") @db.VarChar(100)
+  lastName     String    @map("last_name") @db.VarChar(100)
+  phone        String?   @db.VarChar(20)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  role                  Role                   @relation(fields: [roleId], references: [roleId], onDelete: Restrict)
+  clinicalRecords       ClinicalRecord[]
+  bookings              Booking[]
+  inventoryTransactions InventoryTransaction[]
+  runningCosts          RunningCost[]
+  partnerPayouts        PartnerPayout[]
+  purchaseOrders        PurchaseOrder[]
+  supplierPayments      SupplierPayment[]
+  auditLogs             AuditLog[]
+
+  @@index([roleId], map: "idx_users_role")
+  @@map("users")
+}
+
+// ============================================================
+// CLIENTS & PATIENTS
+// ============================================================
+model Client {
+  clientId  Int       @id @default(autoincrement()) @map("client_id")
+  firstName String    @map("first_name") @db.VarChar(100)
+  lastName  String    @map("last_name") @db.VarChar(100)
+  phone     String?   @db.VarChar(20)
+  email     String?   @db.Citext
+  notes     String?   @db.Text
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  patients      Patient[]
+  bookings      Booking[]
+  invoices      Invoice[]
+  notifications Notification[]
+
+  @@map("clients")
+}
+
+model Patient {
+  patientId   Int       @id @default(autoincrement()) @map("patient_id")
+  clientId    Int       @map("client_id")
+  name        String    @db.VarChar(100)
+  species     String?   @db.VarChar(50)
+  breed       String?   @db.VarChar(100)
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  sex         String?   @db.VarChar(10)
+  isNeutered  Boolean   @default(false) @map("is_neutered")
+  microchipId String?   @unique @map("microchip_id") @db.VarChar(50)
+  notes       String?   @db.Text
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  client          Client           @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  clinicalRecords ClinicalRecord[]
+  bookings        Booking[]
+  notifications   Notification[]
+  reminders       Reminder[]
+
+  @@map("patients")
+}
+
+model ClinicalRecord {
+  recordId    Int       @id @default(autoincrement()) @map("record_id")
+  patientId   Int       @map("patient_id")
+  performedBy Int?      @map("performed_by")
+  recordType  String    @map("record_type") @db.VarChar(20)
+  subcategory String?   @db.VarChar(100)
+  title       String    @db.VarChar(255)
+  notes       String?   @db.Text
+  details     Json?     @db.JsonB
+  performedAt DateTime  @default(now()) @map("performed_at") @db.Date
+  nextDueDate DateTime? @map("next_due_date") @db.Date
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  patient   Patient    @relation(fields: [patientId], references: [patientId], onDelete: Restrict)
+  performer User?      @relation(fields: [performedBy], references: [userId], onDelete: SetNull)
+  reminders Reminder[]
+
+  @@index([patientId], map: "idx_clinical_patient")
+  @@map("clinical_records")
+}
+
+// Recall reminder for a patient (vaccination / grooming follow-up). One Open row
+// per (patient, recordType) is the active recall, materialised from the latest
+// due-bearing clinical record so the Notifications tabs read a small, indexed
+// table instead of scanning all clinical history. The "due / upcoming / overdue"
+// bucket is derived from dueDate at read time, so it never goes stale and needs
+// no cron; status carries only the lifecycle (Open / Done / Dismissed) that
+// cannot be derived from the source record.
+//
+// DB-only invariants (not expressible in Prisma, enforced by the migration):
+//   - partial UNIQUE (patient_id, record_type) WHERE status = 'Open'
+//   - updated_at maintained by the shared trigger
+model Reminder {
+  reminderId     Int       @id @default(autoincrement()) @map("reminder_id")
+  patientId      Int       @map("patient_id")
+  sourceRecordId Int?      @map("source_record_id")
+  recordType     String    @map("record_type") @db.VarChar(20)
+  title          String    @db.VarChar(255)
+  dueDate        DateTime  @map("due_date") @db.Date
+  status         String    @default("Open") @db.VarChar(20)
+  snoozedUntil   DateTime? @map("snoozed_until") @db.Date
+  followUpSentAt DateTime? @map("follow_up_sent_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  patient      Patient         @relation(fields: [patientId], references: [patientId], onDelete: Restrict)
+  sourceRecord ClinicalRecord? @relation(fields: [sourceRecordId], references: [recordId], onDelete: SetNull)
+
+  @@index([recordType, dueDate], map: "idx_reminders_due")
+  @@map("reminders")
+}
+
+// ============================================================
+// BOOKINGS
+// ============================================================
+model BookingType {
+  typeId          Int    @id @default(autoincrement()) @map("type_id")
+  name            String @unique @db.VarChar(100)
+  durationMinutes Int    @default(30) @map("duration_minutes")
+
+  bookings Booking[]
+
+  @@map("booking_types")
+}
+
+model Booking {
+  bookingId Int      @id @default(autoincrement()) @map("booking_id")
+  patientId Int      @map("patient_id")
+  clientId  Int      @map("client_id")
+  staffId   Int?     @map("staff_id")
+  typeId    Int?     @map("type_id")
+  startsAt  DateTime @map("starts_at") @db.Timestamptz(6)
+  endsAt    DateTime @map("ends_at") @db.Timestamptz(6)
+  status    String   @default("Scheduled") @db.VarChar(20)
+  notes     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  patient       Patient        @relation(fields: [patientId], references: [patientId], onDelete: Restrict)
+  client        Client         @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  staff         User?          @relation(fields: [staffId], references: [userId], onDelete: SetNull)
+  bookingType   BookingType?   @relation(fields: [typeId], references: [typeId], onDelete: SetNull)
+  invoices      Invoice[]
+  notifications Notification[]
+
+  @@index([staffId, startsAt], map: "idx_bookings_staff_time")
+  @@index([startsAt], map: "idx_bookings_starts")
+  @@map("bookings")
+}
+
+// ============================================================
+// SUPPLIERS (companies the clinic buys stock from)
+// ============================================================
+// A supplier sells product to the clinic, which pays for it and owns it
+// outright. Distinct from a Partner, who finances stock and shares its profit:
+// a supplier has no claim on a sale. Soft-deleted so historical purchase orders
+// keep naming who they were placed with.
+model Supplier {
+  supplierId    Int       @id @default(autoincrement()) @map("supplier_id")
+  name          String    @db.VarChar(120)
+  contactPerson String?   @map("contact_person") @db.VarChar(120)
+  phone         String?   @db.VarChar(40)
+  email         String?   @db.VarChar(160)
+  notes         String?   @db.Text
+  isActive      Boolean   @default(true) @map("is_active")
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  items    InventoryItem[]
+  orders   PurchaseOrder[]
+  payments SupplierPayment[]
+
+  @@index([name], map: "idx_suppliers_active")
+  @@map("suppliers")
+}
+
+// Money actually paid to a supplier. The clinic pays both on the spot and on
+// credit, so what was ordered and what has been settled are different figures
+// and neither can be derived from the other.
+//
+// orderId is optional on purpose: paying a specific bill links to that order,
+// while a lump sum paid against the account links to nothing and just reduces
+// the balance. Soft-deleted so a corrected entry leaves the history intact.
+model SupplierPayment {
+  paymentId  Int       @id @default(autoincrement()) @map("payment_id")
+  supplierId Int       @map("supplier_id")
+  orderId    Int?      @map("order_id")
+  amount     Decimal   @db.Decimal(12, 2)
+  paidOn     DateTime  @map("paid_on") @db.Date
+  method     String?   @db.VarChar(50)
+  reference  String?   @db.VarChar(100)
+  notes      String?   @db.Text
+  createdBy  Int?      @map("created_by")
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  supplier Supplier       @relation(fields: [supplierId], references: [supplierId], onDelete: Restrict)
+  order    PurchaseOrder? @relation(fields: [orderId], references: [orderId], onDelete: SetNull)
+  creator  User?          @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+
+  @@index([supplierId], map: "idx_supplier_payments_supplier")
+  @@index([paidOn], map: "idx_supplier_payments_paid")
+  @@map("supplier_payments")
+}
+
+// A reorder sheet for one supplier. Starts as a Draft (the "future order" the
+// low-stock basket fills), becomes Placed once sent, then Received when the
+// stock arrives. supplierId is nullable so items with no usual supplier still
+// have somewhere to collect; a draft cannot leave Draft until one is set.
+//
+// Deliberately carries no payment fields: under the clinic's accrual model an
+// order never touches profit, since cost reaches the P&L as COGS when the stock
+// sells. What was paid, and when, is tracked separately.
+model PurchaseOrder {
+  orderId        Int       @id @default(autoincrement()) @map("order_id")
+  supplierId     Int?      @map("supplier_id")
+  status         String    @default("Draft") @db.VarChar(20)
+  reference      String?   @db.VarChar(100)
+  orderedOn      DateTime? @map("ordered_on") @db.Date
+  // First delivery date. Stays set once any stock has arrived, even while the
+  // order is still Partial and waiting on the rest.
+  receivedOn     DateTime? @map("received_on") @db.Date
+  // The date the liability was recognised: when the order reached Received,
+  // whether by the last delivery arriving or by being closed short. Distinct
+  // from receivedOn, which marks the *first* delivery, so an order part
+  // delivered in one period and completed in the next is billed in the right
+  // one. Also the basis aging is measured from.
+  billedOn       DateTime? @map("billed_on") @db.Date
+  // What the supplier adds to or takes off the bill. taxRate is stored per order
+  // so a future change to the rate leaves historical orders alone. taxAmount is
+  // computed from the rate but held on the row and editable, so a supplier's own
+  // rounding wins over ours.
+  discountAmount Decimal?  @map("discount_amount") @db.Decimal(12, 2)
+  shippingAmount Decimal?  @map("shipping_amount") @db.Decimal(12, 2)
+  taxRate        Decimal?  @map("tax_rate") @db.Decimal(5, 2)
+  taxAmount      Decimal?  @map("tax_amount") @db.Decimal(12, 2)
+  notes          String?   @db.Text
+  createdBy      Int?      @map("created_by")
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  supplier Supplier?           @relation(fields: [supplierId], references: [supplierId], onDelete: Restrict)
+  creator  User?               @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+  lines    PurchaseOrderLine[]
+  payments SupplierPayment[]
+
+  @@index([supplierId], map: "idx_purchase_orders_supplier")
+  @@index([status], map: "idx_purchase_orders_status")
+  @@map("purchase_orders")
+}
+
+// One item on a purchase order. quantityReceived is carried from the start even
+// though the receive flow is all-or-nothing today, so supporting partial
+// deliveries later is a UI change rather than a migration.
+model PurchaseOrderLine {
+  lineId           Int      @id @default(autoincrement()) @map("line_id")
+  orderId          Int      @map("order_id")
+  itemId           Int      @map("item_id")
+  quantityOrdered  Decimal  @map("quantity_ordered") @db.Decimal(10, 2)
+  quantityReceived Decimal  @default(0) @map("quantity_received") @db.Decimal(10, 2)
+  unitCost         Decimal? @map("unit_cost") @db.Decimal(12, 2)
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  order PurchaseOrder @relation(fields: [orderId], references: [orderId], onDelete: Cascade)
+  item  InventoryItem @relation(fields: [itemId], references: [itemId], onDelete: Restrict)
+
+  // Adding an item that is already on the order bumps its quantity instead of
+  // creating a second line.
+  @@unique([orderId, itemId], map: "uq_po_lines_order_item")
+  @@index([orderId], map: "idx_po_lines_order")
+  @@map("purchase_order_lines")
+}
+
+// ============================================================
+// INVENTORY
+// ============================================================
+model InventoryItem {
+  itemId       Int       @id @default(autoincrement()) @map("item_id")
+  name         String    @db.VarChar(255)
+  category     String?   @db.VarChar(100)
+  barcode      String?   @unique @db.VarChar(100)
+  unit         String?   @db.VarChar(50)
+  currentStock Decimal   @default(0) @map("current_stock") @db.Decimal(10, 2)
+  reorderLevel Int       @default(0) @map("reorder_level")
+  salePrice    Decimal?  @map("sale_price") @db.Decimal(12, 2)
+  lastCost     Decimal?  @map("last_cost") @db.Decimal(12, 2)
+  // Consignment: when partnerId is set, this item is sourced from a partner who
+  // fronted its cost. partnerSharePct overrides the partner default when set.
+  partnerId       Int?     @map("partner_id")
+  partnerSharePct Decimal? @map("partner_share_pct") @db.Decimal(5, 2)
+  // Purchasing: the company this item is usually reordered from. Independent of
+  // partnerId (an item can have both, either, or neither) and advisory only, so
+  // it groups the reorder basket without constraining who an order goes to.
+  supplierId      Int?     @map("supplier_id")
+  expiryDate   DateTime? @map("expiry_date") @db.Date
+  notes        String?   @db.Text
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  partner      Partner?               @relation(fields: [partnerId], references: [partnerId], onDelete: SetNull)
+  supplier     Supplier?              @relation(fields: [supplierId], references: [supplierId], onDelete: SetNull)
+  transactions InventoryTransaction[]
+  lineItems    InvoiceLineItem[]
+  orderLines   PurchaseOrderLine[]
+
+  @@index([partnerId], map: "idx_inventory_items_partner")
+  @@index([supplierId], map: "idx_inventory_items_supplier")
+  @@map("inventory_items")
+}
+
+model InventoryTransaction {
+  transactionId Int      @id @default(autoincrement()) @map("transaction_id")
+  itemId        Int      @map("item_id")
+  performedBy   Int?     @map("performed_by")
+  type          String   @db.VarChar(20)
+  quantity      Decimal  @db.Decimal(10, 2)
+  unitCost      Decimal? @map("unit_cost") @db.Decimal(12, 2)
+  // Frozen sale price per unit on a Sold movement (and carried onto its void
+  // reversal), mirroring unitCost. With both frozen here, revenue, cost and
+  // profit are all readable from this table alone, with no join back to the
+  // invoice and no risk of an item's later reassignment rewriting history.
+  salePrice     Decimal? @map("sale_price") @db.Decimal(12, 2)
+  referenceType String?  @map("reference_type") @db.VarChar(50)
+  referenceId   Int?     @map("reference_id")
+  // Consignment: on a Sold movement of a partner item, the frozen amount owed to
+  // the partner (cost back + share of profit). Negated on a void reversal.
+  partnerId      Int?     @map("partner_id")
+  partnerPayable Decimal? @map("partner_payable") @db.Decimal(12, 2)
+  notes         String?  @db.Text
+  performedAt   DateTime @default(now()) @map("performed_at") @db.Timestamptz(6)
+
+  item      InventoryItem @relation(fields: [itemId], references: [itemId], onDelete: Restrict)
+  performer User?         @relation(fields: [performedBy], references: [userId], onDelete: SetNull)
+  partner   Partner?      @relation(fields: [partnerId], references: [partnerId], onDelete: SetNull)
+
+  @@index([itemId], map: "idx_invtx_item")
+  @@index([partnerId], map: "idx_invtx_partner")
+  @@map("inventory_transactions")
+}
+
+// ============================================================
+// PARTNERS (outsourced / consignment inventory)
+// ============================================================
+// A partner (e.g. a family member) fronts the purchase cost of certain items.
+// When such an item sells, the clinic owes the partner their cost back plus an
+// agreed share of the profit. Soft-deleted so historical balances stay
+// reproducible; DB CHECK keeps default_share_pct in 0..100.
+model Partner {
+  partnerId       Int       @id @default(autoincrement()) @map("partner_id")
+  name            String    @db.VarChar(120)
+  phone           String?   @db.VarChar(40)
+  defaultSharePct Decimal   @default(0) @map("default_share_pct") @db.Decimal(5, 2)
+  notes           String?   @db.Text
+  isActive        Boolean   @default(true) @map("is_active")
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  items        InventoryItem[]
+  transactions InventoryTransaction[]
+  payouts      PartnerPayout[]
+
+  @@index([name], map: "idx_partners_active")
+  @@map("partners")
+}
+
+// A recorded payment from the clinic to a partner. The running balance owed is
+// the sum of accrued payable on consigned sales minus the sum of payouts.
+model PartnerPayout {
+  payoutId  Int       @id @default(autoincrement()) @map("payout_id")
+  partnerId Int       @map("partner_id")
+  amount    Decimal   @db.Decimal(12, 2)
+  paidOn    DateTime  @map("paid_on") @db.Date
+  method    String?   @db.VarChar(50)
+  reference String?   @db.VarChar(100)
+  notes     String?   @db.Text
+  createdBy Int?      @map("created_by")
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  partner Partner @relation(fields: [partnerId], references: [partnerId], onDelete: Restrict)
+  creator User?   @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+
+  @@index([partnerId], map: "idx_partner_payouts_partner")
+  @@map("partner_payouts")
+}
+
+// ============================================================
+// INVOICING
+// ============================================================
+model Service {
+  serviceId   Int     @id @default(autoincrement()) @map("service_id")
+  name        String  @db.VarChar(255)
+  category    String? @db.VarChar(100)
+  price       Decimal @db.Decimal(12, 2)
+  isActive    Boolean @default(true) @map("is_active")
+  description String? @db.Text
+
+  lineItems InvoiceLineItem[]
+
+  @@map("services")
+}
+
+model Invoice {
+  invoiceId   Int       @id @default(autoincrement()) @map("invoice_id")
+  clientId    Int       @map("client_id")
+  bookingId   Int?      @map("booking_id")
+  status      String    @default("Draft") @db.VarChar(20)
+  subtotal    Decimal   @default(0) @db.Decimal(12, 2)
+  discountPct Decimal   @default(0) @map("discount_pct") @db.Decimal(5, 2)
+  taxPct      Decimal   @default(0) @map("tax_pct") @db.Decimal(5, 2)
+  taxAmount   Decimal   @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  total       Decimal   @default(0) @db.Decimal(12, 2)
+  issuedAt    DateTime? @map("issued_at") @db.Timestamptz(6)
+  dueDate     DateTime? @map("due_date") @db.Date
+  notes       String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  client    Client            @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  booking   Booking?          @relation(fields: [bookingId], references: [bookingId], onDelete: SetNull)
+  lineItems InvoiceLineItem[]
+  payments  Payment[]
+
+  @@index([clientId], map: "idx_invoices_client")
+  @@index([status], map: "idx_invoices_status")
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  lineItemId  Int     @id @default(autoincrement()) @map("line_item_id")
+  invoiceId   Int     @map("invoice_id")
+  serviceId   Int?    @map("service_id")
+  itemId      Int?    @map("item_id")
+  description String  @db.VarChar(255)
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  // GENERATED ALWAYS AS (quantity * unit_price) STORED — computed by Postgres.
+  lineTotal   Decimal @default(dbgenerated()) @map("line_total") @db.Decimal(12, 2)
+
+  invoice Invoice        @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+  service Service?       @relation(fields: [serviceId], references: [serviceId], onDelete: SetNull)
+  item    InventoryItem? @relation(fields: [itemId], references: [itemId], onDelete: SetNull)
+
+  @@index([invoiceId], map: "idx_lineitems_invoice")
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  paymentId Int      @id @default(autoincrement()) @map("payment_id")
+  invoiceId Int      @map("invoice_id")
+  amount    Decimal  @db.Decimal(12, 2)
+  method    String?  @db.VarChar(50)
+  reference String?  @db.VarChar(100)
+  paidAt    DateTime @default(now()) @map("paid_at") @db.Timestamptz(6)
+  notes     String?  @db.Text
+
+  invoice Invoice @relation(fields: [invoiceId], references: [invoiceId], onDelete: Restrict)
+
+  @@index([invoiceId], map: "idx_payments_invoice")
+  @@map("payments")
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+model NotificationTemplate {
+  templateId   Int     @id @default(autoincrement()) @map("template_id")
+  name         String  @db.VarChar(100)
+  channel      String? @db.VarChar(20)
+  triggerEvent String? @map("trigger_event") @db.VarChar(100)
+  body         String  @db.Text
+  isActive     Boolean @default(true) @map("is_active")
+
+  notifications Notification[]
+
+  @@map("notification_templates")
+}
+
+model Notification {
+  notificationId Int       @id @default(autoincrement()) @map("notification_id")
+  clientId       Int       @map("client_id")
+  patientId      Int?      @map("patient_id")
+  bookingId      Int?      @map("booking_id")
+  templateId     Int?      @map("template_id")
+  channel        String?   @db.VarChar(20)
+  recipient      String    @db.VarChar(255)
+  body           String    @db.Text
+  status         String    @default("Pending") @db.VarChar(20)
+  retryCount     Int       @default(0) @map("retry_count")
+  scheduledAt    DateTime? @map("scheduled_at") @db.Timestamptz(6)
+  sentAt         DateTime? @map("sent_at") @db.Timestamptz(6)
+  errorMessage   String?   @map("error_message") @db.Text
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  client   Client                @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  patient  Patient?              @relation(fields: [patientId], references: [patientId], onDelete: SetNull)
+  booking  Booking?              @relation(fields: [bookingId], references: [bookingId], onDelete: SetNull)
+  template NotificationTemplate? @relation(fields: [templateId], references: [templateId], onDelete: SetNull)
+
+  @@index([status, scheduledAt], map: "idx_notif_worker")
+  @@map("notifications")
+}
+
+// ============================================================
+// RUNNING COSTS (operating expenses)
+// ============================================================
+// Dated operating-cost entries (rent, salaries, utilities, consumables, ...).
+// Each row is one expense incurred on a given day; recurring bills are entered
+// per month. Admin-only; feeds the analytics net-profit figures. Soft-deleted
+// so historical profit reports stay reproducible.
+model RunningCost {
+  costId      Int       @id @default(autoincrement()) @map("cost_id")
+  category    String    @db.VarChar(100)
+  description String    @db.VarChar(200)
+  amount      Decimal   @db.Decimal(12, 2)
+  incurredOn  DateTime  @map("incurred_on") @db.Date
+  notes       String?   @db.Text
+  createdBy   Int?      @map("created_by")
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  creator User? @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+
+  @@index([incurredOn], map: "idx_running_costs_incurred")
+  @@map("running_costs")
+}
+
+// ============================================================
+// AUDIT LOG
+// ============================================================
+model AuditLog {
+  auditId   BigInt   @id @default(autoincrement()) @map("audit_id")
+  userId    Int?     @map("user_id")
+  action    String   @db.VarChar(20)
+  entity    String   @db.VarChar(50)
+  entityId  Int      @map("entity_id")
+  changes   Json?    @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [userId], onDelete: SetNull)
+
+  @@index([entity, entityId], map: "idx_audit_entity")
+  @@map("audit_log")
+}
+
+// ============================================================
+// WEBSITE CONTACT MESSAGES
+// ============================================================
+// Inbound enquiries submitted through the public marketing site's contact
+// form. The public site writes here; staff triage them in the VCMS. These are
+// leads, not yet linked to a client record. status is CHECK-constrained in the
+// DB; updated_at is maintained by the shared trigger.
+model ContactMessage {
+  messageId Int      @id @default(autoincrement()) @map("message_id")
+  name      String   @db.VarChar(80)
+  email     String   @db.Citext
+  phone     String?  @db.VarChar(40)
+  petName   String?  @map("pet_name") @db.VarChar(60)
+  petType   String?  @map("pet_type") @db.VarChar(40)
+  message   String   @db.Text
+  status    String   @default("New") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([createdAt], map: "idx_contact_messages_created")
+  @@index([status], map: "idx_contact_messages_status")
+  @@map("contact_messages")
+}
