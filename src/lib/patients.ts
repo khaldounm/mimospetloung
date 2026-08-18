@@ -20,6 +20,8 @@ type PatientWithClient = {
   isNeutered: boolean;
   microchipId: string | null;
   notes: string | null;
+  needsReview: boolean;
+  reviewNote: string | null;
   client: { firstName: string; lastName: string };
 };
 
@@ -35,6 +37,8 @@ export function toPatientDTO(p: PatientWithClient): PatientDTO {
     isNeutered: p.isNeutered,
     microchipId: p.microchipId,
     notes: p.notes,
+    needsReview: p.needsReview,
+    reviewNote: p.reviewNote,
     clientName: `${p.client.firstName} ${p.client.lastName}`,
   };
 }

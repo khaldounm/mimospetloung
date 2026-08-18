@@ -33,6 +33,8 @@ export default async function ClientDetailPage({
     phone: client.phone,
     email: client.email,
     notes: client.notes,
+    needsReview: client.needsReview,
+    reviewNote: client.reviewNote,
   };
 
   const patients: PatientDTO[] = client.patients.map((p) => ({
@@ -45,6 +47,8 @@ export default async function ClientDetailPage({
     sex: p.sex,
     isNeutered: p.isNeutered,
     microchipId: p.microchipId,
+    needsReview: p.needsReview,
+    reviewNote: p.reviewNote,
     notes: p.notes,
   }));
 

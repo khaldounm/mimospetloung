@@ -15,6 +15,8 @@ type ClientWithCount = {
   phone: string | null;
   email: string | null;
   notes: string | null;
+  needsReview: boolean;
+  reviewNote: string | null;
   _count: { patients: number };
 };
 
@@ -26,6 +28,8 @@ export function toClientDTO(c: ClientWithCount): ClientDTO {
     phone: c.phone,
     email: c.email,
     notes: c.notes,
+    needsReview: c.needsReview,
+    reviewNote: c.reviewNote,
     patientCount: c._count.patients,
   };
 }

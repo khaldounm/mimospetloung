@@ -34,6 +34,7 @@ import { groupItemsByCategory } from "@/utils/inventory";
 import type { InventoryItemDTO, SupplierDTO } from "@/types/entities";
 import AddToOrderDialog from "@/components/orders/AddToOrderDialog";
 import InventoryItemFormDialog from "./InventoryItemFormDialog";
+import ReviewBadge from "@/components/ui/ReviewBadge";
 
 // Filter value for items that have no usual supplier assigned yet. Matches the
 // sentinel the inventory API understands.
@@ -322,6 +323,10 @@ export default function InventoryTable({
                             <Link href={`/inventory/${it.itemId}`}>
                               {it.name}
                             </Link>
+                            <ReviewBadge
+                              needsReview={it.needsReview}
+                              note={it.reviewNote}
+                            />
                             {it.partnerName && (
                               <Chip
                                 size="small"

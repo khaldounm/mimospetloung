@@ -10,6 +10,8 @@ import type { InventoryTxType } from "@/types/enums";
 
 // Shape returned by inventory item queries.
 type ItemRow = {
+  needsReview: boolean;
+  reviewNote: string | null;
   itemId: number;
   name: string;
   category: string | null;
@@ -70,6 +72,8 @@ export function toInventoryItemDTO(i: ItemRow): InventoryItemDTO {
     supplierName: i.supplier?.name ?? null,
     expiryDate: toDateOnly(i.expiryDate),
     notes: i.notes,
+    needsReview: i.needsReview,
+    reviewNote: i.reviewNote,
     // Only nag about reorder when a level is actually configured.
     isLowStock: i.reorderLevel > 0 && currentStock <= i.reorderLevel,
     isExpired: isExpired(i.expiryDate),

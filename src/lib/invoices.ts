@@ -46,7 +46,9 @@ type LineItemRow = {
 
 type PaymentRow = {
   paymentId: number;
-  invoiceId: number;
+  // Null when the payment sits on the client's account without being applied
+  // to a specific invoice.
+  invoiceId: number | null;
   amount: Prisma.Decimal;
   method: string | null;
   reference: string | null;
@@ -55,6 +57,8 @@ type PaymentRow = {
 };
 
 type InvoiceRow = {
+  needsReview: boolean;
+  reviewNote: string | null;
   invoiceId: number;
   clientId: number;
   bookingId: number | null;
@@ -196,6 +200,8 @@ export function toInvoiceDTO(i: InvoiceRow): InvoiceDTO {
     dueDate: toDateOnly(i.dueDate),
     notes: i.notes,
     createdAt: i.createdAt.toISOString(),
+    needsReview: i.needsReview,
+    reviewNote: i.reviewNote,
     isOverdue: isOverdue(i.status, i.dueDate, balance),
     lineItems: i.lineItems.map(toLineItemDTO),
     payments: i.payments.map(toPaymentDTO),
@@ -500,6 +506,9 @@ export async function recordPayment(
 
     const payment = await tx.payment.create({
       data: {
+        // A payment always belongs to the client's account; the invoice link
+        // records which visit it was taken against.
+        clientId: invoice.clientId,
         invoiceId,
         amount,
         method: data.method ?? null,
@@ -514,6 +523,14 @@ export async function recordPayment(
       ? "Paid"
       : "Partial";
     await tx.invoice.update({ where: { invoiceId }, data: { status } });
+
+    // Keep the client's running account balance in step: taking money in
+    // reduces what they owe. The balance can go negative, which is the client
+    // sitting in credit.
+    await tx.client.update({
+      where: { clientId: invoice.clientId },
+      data: { accountBalance: { decrement: amount } },
+    });
 
     const updated = await tx.invoice.findUnique({
       where: { invoiceId },

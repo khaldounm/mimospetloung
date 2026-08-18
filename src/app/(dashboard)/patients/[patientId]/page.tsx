@@ -60,6 +60,8 @@ export default async function PatientDetailPage({
     isNeutered: patient.isNeutered,
     microchipId: patient.microchipId,
     notes: patient.notes,
+    needsReview: patient.needsReview,
+    reviewNote: patient.reviewNote,
   };
 
   const records: ClinicalRecordDTO[] = canReadClinical

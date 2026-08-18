@@ -56,9 +56,7 @@ function LoginForm() {
           <Box
             component="img"
             src={
-              mode === "dark"
-                ? "/mimos-logo-white.webp"
-                : "/mimos-logo.webp"
+              mode === "dark" ? "/mimos-logo-white.webp" : "/mimos-logo.webp"
             }
             alt="Mimo's Pet Lounge  "
             sx={{

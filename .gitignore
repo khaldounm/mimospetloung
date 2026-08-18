@@ -52,3 +52,11 @@ graphify-out/
 
 # Dev-only auth bypass, must never be committed.
 prisma/dev-session.ts
+
+# migration source data (real client PII)
+*.mdb
+
+# database dumps (real client PII, never commit)
+dumps/
+*.dump
+*.dump.toc

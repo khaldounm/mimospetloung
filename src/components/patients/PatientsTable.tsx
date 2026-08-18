@@ -20,6 +20,7 @@ import AddIcon from "@mui/icons-material/Add";
 import { apiRequest } from "@/utils/api-client";
 import type { PatientDTO } from "@/types/entities";
 import PatientFormDialog, { type ClientOption } from "./PatientFormDialog";
+import ReviewBadge from "@/components/ui/ReviewBadge";
 
 interface Props {
   initialPatients: PatientDTO[];
@@ -110,6 +111,10 @@ export default function PatientsTable({
                 <TableRow key={p.patientId} hover>
                   <TableCell>
                     <Link href={`/patients/${p.patientId}`}>{p.name}</Link>
+                    <ReviewBadge
+                      needsReview={p.needsReview}
+                      note={p.reviewNote}
+                    />
                   </TableCell>
                   <TableCell>{p.species ?? "-"}</TableCell>
                   <TableCell>{p.breed ?? "-"}</TableCell>

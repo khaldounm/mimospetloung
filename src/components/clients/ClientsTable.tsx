@@ -20,6 +20,7 @@ import AddIcon from "@mui/icons-material/Add";
 import { apiRequest } from "@/utils/api-client";
 import type { ClientDTO } from "@/types/entities";
 import ClientFormDialog from "./ClientFormDialog";
+import ReviewBadge from "@/components/ui/ReviewBadge";
 
 interface Props {
   initialClients: ClientDTO[];
@@ -107,6 +108,10 @@ export default function ClientsTable({ initialClients, canWrite }: Props) {
                     <Link href={`/clients/${c.clientId}`}>
                       {c.firstName} {c.lastName}
                     </Link>
+                    <ReviewBadge
+                      needsReview={c.needsReview}
+                      note={c.reviewNote}
+                    />
                   </TableCell>
                   <TableCell>{c.phone ?? "-"}</TableCell>
                   <TableCell>{c.email ?? "-"}</TableCell>

@@ -14,6 +14,8 @@ const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
 // Shape returned by supplier queries. Kept structural (not a Prisma payload
 // type) so create/update rows map through the same function.
 type SupplierRow = {
+  needsReview: boolean;
+  reviewNote: string | null;
   supplierId: number;
   name: string;
   contactPerson: string | null;
@@ -36,6 +38,8 @@ export function toSupplierDTO(
   const dto: SupplierDTO = {
     supplierId: s.supplierId,
     name: s.name,
+    needsReview: s.needsReview,
+    reviewNote: s.reviewNote,
     contactPerson: s.contactPerson,
     phone: s.phone,
     email: s.email,

@@ -27,6 +27,7 @@ import { formatMoney } from "@/utils/format";
 import StatCard from "@/components/ui/StatCard";
 import type { SupplierDTO } from "@/types/entities";
 import SupplierFormDialog from "./SupplierFormDialog";
+import ReviewBadge from "@/components/ui/ReviewBadge";
 
 interface Props {
   initialSuppliers: SupplierDTO[];
@@ -180,6 +181,10 @@ export default function SuppliersTable({
                       sx={{ alignItems: "center", flexWrap: "wrap" }}
                     >
                       <Link href={`/suppliers/${s.supplierId}`}>{s.name}</Link>
+                      <ReviewBadge
+                        needsReview={s.needsReview}
+                        note={s.reviewNote}
+                      />
                       {!s.isActive && <Chip size="small" label="Inactive" />}
                     </Stack>
                     {s.contactPerson && (

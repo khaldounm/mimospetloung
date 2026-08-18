@@ -21,6 +21,9 @@ export interface ClientDTO {
   email: string | null;
   notes: string | null;
   patientCount?: number;
+  // Set by the legacy .mdb import when a value needs a human to confirm it.
+  needsReview: boolean;
+  reviewNote: string | null;
 }
 
 export interface PatientDTO {
@@ -35,6 +38,9 @@ export interface PatientDTO {
   microchipId: string | null;
   notes: string | null;
   clientName?: string;
+  // Set by the legacy .mdb import when a value needs a human to confirm it.
+  needsReview: boolean;
+  reviewNote: string | null;
 }
 
 export interface BookingDTO {
@@ -114,6 +120,9 @@ export interface InventoryItemDTO {
   notes: string | null;
   isLowStock: boolean;
   isExpired: boolean;
+  // Set by the legacy .mdb import when a value needs a human to confirm it.
+  needsReview: boolean;
+  reviewNote: string | null;
 }
 
 export interface InventoryTransactionDTO {
@@ -153,7 +162,7 @@ export interface InvoiceLineItemDTO {
 
 export interface PaymentDTO {
   paymentId: number;
-  invoiceId: number;
+  invoiceId: number | null;
   amount: string;
   method: PaymentMethod | null;
   reference: string | null;
@@ -184,6 +193,9 @@ export interface InvoiceDTO {
   isOverdue: boolean;
   lineItems: InvoiceLineItemDTO[];
   payments: PaymentDTO[];
+  // Set by the legacy .mdb import when a value needs a human to confirm it.
+  needsReview: boolean;
+  reviewNote: string | null;
 }
 
 // ── Notifications ─────────────────────────────────────────
@@ -477,6 +489,9 @@ export interface SupplierDTO {
   itemCount?: number; // inventory items whose usual supplier is this one
   money?: SupplierMoneyDTO;
   createdAt: string;
+  // Set by the legacy .mdb import when a value needs a human to confirm it.
+  needsReview: boolean;
+  reviewNote: string | null;
 }
 
 // ---- Supplier statement (accounts payable) ----
