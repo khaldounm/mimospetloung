@@ -4,6 +4,7 @@ import { ApiError } from "@/lib/api";
 import { isStockCheckViolation } from "@/lib/inventory";
 import { computePartnerPayable, effectiveSharePct } from "@/lib/partners";
 import { toDateOnly } from "@/utils/format";
+import { INVOICE_STATUSES } from "@/types/enums";
 import type {
   InvoiceDTO,
   InvoiceLineItemDTO,
@@ -205,6 +206,110 @@ export function toInvoiceDTO(i: InvoiceRow): InvoiceDTO {
     isOverdue: isOverdue(i.status, i.dueDate, balance),
     lineItems: i.lineItems.map(toLineItemDTO),
     payments: i.payments.map(toPaymentDTO),
+  };
+}
+
+// ---- Invoice list (paged) ----
+
+/**
+ * One page of the invoice list.
+ *
+ * Written as raw SQL rather than a Prisma query for one reason: the amount paid
+ * has to be summed by the database. Including `payments` pulled every payment
+ * row into Node just to add it up, which on the imported data meant shipping
+ * thousands of rows to render twenty-five.
+ */
+export interface InvoiceListPage {
+  invoices: InvoiceListItemDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface InvoiceListQuery {
+  q?: string;
+  status?: string;
+  clientId?: number;
+  page?: number;
+  pageSize?: number;
+}
+
+type ListRow = {
+  invoice_id: number;
+  status: string;
+  total: Prisma.Decimal;
+  amount_paid: Prisma.Decimal;
+  issued_at: Date | null;
+  due_date: Date | null;
+  first_name: string;
+  last_name: string;
+  total_count: bigint;
+};
+
+export const INVOICE_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+
+export async function listInvoices(
+  query: InvoiceListQuery = {},
+): Promise<InvoiceListPage> {
+  const pageSize = Math.min(query.pageSize ?? INVOICE_PAGE_SIZE, MAX_PAGE_SIZE);
+  const page = Math.max(query.page ?? 1, 1);
+  const offset = (page - 1) * pageSize;
+
+  const status =
+    query.status &&
+    (INVOICE_STATUSES as readonly string[]).includes(query.status)
+      ? query.status
+      : null;
+  const clientId =
+    query.clientId && Number.isInteger(query.clientId) ? query.clientId : null;
+  // Matches an invoice number typed with or without its padding ("42", "INV-0042")
+  // as well as the client's name.
+  const search = query.q?.trim() ? `%${query.q.trim().toLowerCase()}%` : null;
+  const searchId = query.q?.trim().replace(/\D/g, "");
+
+  const rows = await prisma.$queryRaw<ListRow[]>`
+    SELECT i.invoice_id, i.status, i.total, i.issued_at, i.due_date,
+           c.first_name, c.last_name,
+           COALESCE(p.paid, 0) AS amount_paid,
+           COUNT(*) OVER () AS total_count
+    FROM invoices i
+    JOIN clients c ON c.client_id = i.client_id
+    LEFT JOIN LATERAL (
+      SELECT SUM(amount) AS paid FROM payments WHERE invoice_id = i.invoice_id
+    ) p ON TRUE
+    WHERE (${status}::text IS NULL OR i.status = ${status})
+      AND (${clientId}::int IS NULL OR i.client_id = ${clientId})
+      AND (
+        ${search}::text IS NULL
+        OR lower(c.first_name || ' ' || c.last_name) LIKE ${search}
+        OR (${searchId || null}::text IS NOT NULL
+            AND i.invoice_id::text = ${searchId || null})
+      )
+    ORDER BY i.created_at DESC, i.invoice_id DESC
+    LIMIT ${pageSize} OFFSET ${offset}`;
+
+  return {
+    invoices: rows.map((r) => {
+      const paid = D(r.amount_paid).toDecimalPlaces(2);
+      const total = D(r.total);
+      const balance = total.minus(paid).toDecimalPlaces(2);
+      return {
+        invoiceId: r.invoice_id,
+        number: formatInvoiceNumber(r.invoice_id),
+        clientName: `${r.first_name} ${r.last_name}`,
+        status: r.status as InvoiceStatus,
+        total: total.toFixed(2),
+        amountPaid: paid.toFixed(2),
+        balance: balance.toFixed(2),
+        issuedAt: r.issued_at ? r.issued_at.toISOString() : null,
+        dueDate: toDateOnly(r.due_date),
+        isOverdue: isOverdue(r.status, r.due_date, balance),
+      };
+    }),
+    total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
+    page,
+    pageSize,
   };
 }
 

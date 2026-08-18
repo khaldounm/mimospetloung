@@ -58,21 +58,25 @@ export function redact(url: string): string {
 }
 
 /**
- * A password containing "@" splits the URL in the wrong place, so everything
- * after it is read as the hostname. Postgres passwords with @ are common and
- * the resulting DNS error names a host nobody recognises, so say what it is.
+ * A password containing "@" splits the connection string in the wrong place.
+ *
+ * This has to be checked by hand because the two parsers disagree: JavaScript's
+ * URL splits the authority on the LAST "@" and sees a valid host, while libpq
+ * (psql, pg_dump) splits on the FIRST one. So Node reports a sensible hostname
+ * while pg_dump fails on a host nobody recognises. Checking it libpq's way
+ * turns that into an error that says what to fix.
  */
 function assertParsable(url: string, label: string) {
-  let host: string;
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    throw new Error(`${label} is not a valid connection string.`);
-  }
-  if (host.includes("@") || /^\d/.test(host)) {
+  const after = url.split("://")[1];
+  if (!after) throw new Error(`${label} is not a valid connection string.`);
+  const firstAt = after.indexOf("@");
+  if (firstAt === -1) return;
+  const hostAsLibpqSeesIt = after.slice(firstAt + 1);
+  if (hostAsLibpqSeesIt.includes("@")) {
     throw new Error(
-      `${label} has an unencoded character in its password: the host reads as ` +
-        `"${host}".\nPercent-encode it (@ becomes %40, : becomes %3A, / becomes %2F).`,
+      `${label} has an unencoded "@" in its password.\n` +
+        `Postgres tools read the host as "${hostAsLibpqSeesIt.split("/")[0]}".\n` +
+        "Percent-encode it: @ becomes %40, : becomes %3A, / becomes %2F.",
     );
   }
 }
@@ -296,18 +300,41 @@ export function restore(dumpFile: string, targetUrl: string, preserve = true) {
       );
     }
     // Sequences now trail the restored rows, so the next insert would collide.
-    for (const t of PRESERVED_TABLES) {
-      psql(
-        targetUrl,
-        `SELECT setval(pg_get_serial_sequence('"${t}"', c.column_name),
-                       GREATEST((SELECT COALESCE(max(x), 1) FROM (
-                          SELECT (row_to_json(r) ->> c.column_name)::bigint x FROM "${t}" r
-                       ) v), 1))
-         FROM information_schema.columns c
-         WHERE c.table_schema = 'public' AND c.table_name = '${t}'
-           AND pg_get_serial_sequence('"${t}"', c.column_name) IS NOT NULL`,
-      );
-    }
+    //
+    // This has to be done in plpgsql rather than a single SELECT. The obvious
+    // version filters information_schema by table_schema and calls
+    // pg_get_serial_sequence in the same query, but Postgres may evaluate the
+    // function before the filter. On a managed host that also has auth.users
+    // (Supabase), it then asks for a column of auth.users against public.users
+    // and dies with "column instance_id of relation users does not exist".
+    // Resolving the sequence per table, inside a loop, removes the ordering
+    // question entirely.
+    psql(
+      targetUrl,
+      `DO $$
+       DECLARE t text; col text; seq text; mx bigint;
+       BEGIN
+         FOREACH t IN ARRAY ARRAY[${PRESERVED_TABLES.map((x) => `'${x}'`).join(",")}]
+         LOOP
+           SELECT a.attname INTO col
+           FROM pg_attribute a
+           JOIN pg_class c ON c.oid = a.attrelid
+           WHERE c.relname = t
+             AND c.relnamespace = 'public'::regnamespace
+             AND a.attnum > 0
+             AND pg_get_serial_sequence('public.' || t, a.attname) IS NOT NULL
+           LIMIT 1;
+
+           IF col IS NOT NULL THEN
+             seq := pg_get_serial_sequence('public.' || t, col);
+             EXECUTE format('SELECT COALESCE(max(%I), 0) FROM public.%I', col, t)
+               INTO mx;
+             PERFORM setval(seq, GREATEST(mx, 1), mx > 0);
+           END IF;
+           col := NULL;
+         END LOOP;
+       END $$;`,
+    );
   }
 }
 

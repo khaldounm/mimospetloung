@@ -40,7 +40,7 @@ import { printInvoiceReceipt } from "@/utils/print-receipt";
 import { downloadReceiptImage } from "@/utils/receipt-image";
 import { INVOICE_STATUS_COLOR } from "@/constants/invoice";
 import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
-import InvoiceFormDialog, { type ClientOption } from "./InvoiceFormDialog";
+import InvoiceFormDialog from "./InvoiceFormDialog";
 import LineItemDialog, {
   type ItemLineOption,
   type ServiceLineOption,
@@ -49,7 +49,6 @@ import PaymentDialog from "./PaymentDialog";
 
 interface Props {
   invoice: InvoiceDTO;
-  clientOptions: ClientOption[];
   serviceOptions: ServiceLineOption[];
   itemOptions: ItemLineOption[];
   canWrite: boolean;
@@ -67,7 +66,6 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export default function InvoiceDetail({
   invoice: initialInvoice,
-  clientOptions,
   serviceOptions,
   itemOptions,
   canWrite,
@@ -501,7 +499,6 @@ export default function InvoiceDetail({
       />
       <InvoiceFormDialog
         open={editInvoiceOpen}
-        clientOptions={clientOptions}
         invoice={invoice}
         onClose={() => setEditInvoiceOpen(false)}
         onSaved={applyInvoice}

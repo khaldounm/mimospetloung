@@ -5,7 +5,6 @@ import { hasPermission } from "@/lib/permissions";
 import { invoiceInclude, toInvoiceDTO, toServiceDTO } from "@/lib/invoices";
 import { toInventoryItemDTO } from "@/lib/inventory";
 import InvoiceDetail from "@/components/invoices/InvoiceDetail";
-import type { ClientOption } from "@/components/invoices/InvoiceFormDialog";
 import type {
   ItemLineOption,
   ServiceLineOption,
@@ -24,15 +23,10 @@ export default async function InvoiceDetailPage({
   const canWrite = hasPermission(session?.user, "invoices:write");
   const canPay = hasPermission(session?.user, "payments:write");
 
-  const [invoice, clients, services, items] = await Promise.all([
+  const [invoice, services, items] = await Promise.all([
     prisma.invoice.findUnique({
       where: { invoiceId: id },
       include: invoiceInclude,
-    }),
-    prisma.client.findMany({
-      where: { deletedAt: null },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-      select: { clientId: true, firstName: true, lastName: true },
     }),
     prisma.service.findMany({
       where: { isActive: true },
@@ -44,11 +38,6 @@ export default async function InvoiceDetailPage({
     }),
   ]);
   if (!invoice) notFound();
-
-  const clientOptions: ClientOption[] = clients.map((c) => ({
-    clientId: c.clientId,
-    label: `${c.firstName} ${c.lastName}`,
-  }));
 
   const serviceOptions: ServiceLineOption[] = services
     .map(toServiceDTO)
@@ -68,7 +57,6 @@ export default async function InvoiceDetailPage({
   return (
     <InvoiceDetail
       invoice={toInvoiceDTO(invoice)}
-      clientOptions={clientOptions}
       serviceOptions={serviceOptions}
       itemOptions={itemOptions}
       canWrite={canWrite}

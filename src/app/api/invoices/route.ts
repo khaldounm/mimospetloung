@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
-import {
-  invoiceInclude,
-  invoiceListInclude,
-  toInvoiceDTO,
-  toInvoiceListItemDTO,
-} from "@/lib/invoices";
+import { invoiceInclude, listInvoices, toInvoiceDTO } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
 import { invoiceCreateSchema } from "@/schemas/invoice";
 import { INVOICE_STATUSES } from "@/types/enums";
@@ -16,24 +11,19 @@ export async function GET(request: Request) {
     await requirePermission("invoices:read");
 
     const sp = new URL(request.url).searchParams;
-    const status = sp.get("status")?.trim();
     const clientIdRaw = sp.get("clientId")?.trim();
-    const clientId = clientIdRaw ? Number(clientIdRaw) : undefined;
+    const pageRaw = sp.get("page")?.trim();
 
-    const invoices = await prisma.invoice.findMany({
-      where: {
-        ...(status && (INVOICE_STATUSES as readonly string[]).includes(status)
-          ? { status }
-          : {}),
-        ...(clientId && Number.isInteger(clientId) ? { clientId } : {}),
-      },
-      orderBy: { createdAt: "desc" },
-      include: invoiceListInclude,
+    // Paged and filtered in SQL. Returning every invoice meant the browser
+    // received thousands of rows, plus a payment row for each, to show 25.
+    const page = await listInvoices({
+      q: sp.get("q")?.trim() || undefined,
+      status: sp.get("status")?.trim() || undefined,
+      clientId: clientIdRaw ? Number(clientIdRaw) : undefined,
+      page: pageRaw ? Number(pageRaw) : 1,
     });
 
-    return NextResponse.json({
-      invoices: invoices.map(toInvoiceListItemDTO),
-    });
+    return NextResponse.json(page);
   });
 }
 

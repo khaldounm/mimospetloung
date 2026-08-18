@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
@@ -13,7 +13,7 @@ import {
   TextField,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
-import type { InvoiceDTO } from "@/types/entities";
+import type { ClientDTO, InvoiceDTO } from "@/types/entities";
 
 export interface ClientOption {
   clientId: number;
@@ -22,7 +22,6 @@ export interface ClientOption {
 
 interface Props {
   open: boolean;
-  clientOptions: ClientOption[];
   // When provided, the dialog edits this draft instead of creating a new one.
   invoice?: InvoiceDTO | null;
   onClose: () => void;
@@ -47,8 +46,33 @@ export default function InvoiceFormDialog({ open, onClose, ...rest }: Props) {
 
 type FormProps = Omit<Props, "open">;
 
-function InvoiceForm({ clientOptions, invoice, onClose, onSaved }: FormProps) {
+function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
   const editing = Boolean(invoice);
+  // Clients are fetched when the dialog opens rather than shipped with every
+  // page load: the list is ~1,900 rows and most visits never open this form.
+  const [clientOptions, setClientOptions] = useState<ClientOption[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await apiRequest<{ clients: ClientDTO[] }>("/api/clients");
+        if (cancelled) return;
+        setClientOptions(
+          data.clients.map((c) => ({
+            clientId: c.clientId,
+            label: `${c.firstName} ${c.lastName}`,
+          })),
+        );
+      } finally {
+        if (!cancelled) setClientsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [clientId, setClientId] = useState(
     invoice ? String(invoice.clientId) : "",
   );
@@ -96,6 +120,8 @@ function InvoiceForm({ clientOptions, invoice, onClose, onSaved }: FormProps) {
             onChange={(e) => setClientId(e.target.value)}
             required
             fullWidth
+            disabled={clientsLoading}
+            helperText={clientsLoading ? "Loading clients..." : undefined}
           >
             {clientOptions.map((c) => (
               <MenuItem key={c.clientId} value={String(c.clientId)}>

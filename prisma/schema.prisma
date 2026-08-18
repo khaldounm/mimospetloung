@@ -560,6 +560,9 @@ model Invoice {
 
   @@index([clientId], map: "idx_invoices_client")
   @@index([status], map: "idx_invoices_status")
+  // Newest-first listing, and the same ordering within a status filter.
+  @@index([createdAt(sort: Desc), invoiceId(sort: Desc)], map: "idx_invoices_created_at")
+  @@index([status, createdAt(sort: Desc), invoiceId(sort: Desc)], map: "idx_invoices_status_created_at")
   @@map("invoices")
 }
 
