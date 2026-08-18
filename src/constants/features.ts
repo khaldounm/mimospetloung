@@ -19,16 +19,16 @@ export const ENABLED_MODULES = [
   "notifications",
   "users",
   "audit",
-] as const;
-
-// Off for this deployment. Documentation only, nothing reads this array: the
-// gate is a whitelist, so anything missing from ENABLED_MODULES is denied.
-export const DISABLED_MODULES = [
   "inventory", // she runs a separate store application
   "orders", // purchase orders and suppliers
   "partners",
   "costs",
   "analytics", // mostly store-derived, off for v1
+] as const;
+
+// Off for this deployment. Documentation only, nothing reads this array: the
+// gate is a whitelist, so anything missing from ENABLED_MODULES is denied.
+export const DISABLED_MODULES = [
   "messages", // website contact form
 ] as const;
 
