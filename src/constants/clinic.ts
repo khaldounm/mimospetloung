@@ -8,14 +8,14 @@ export const CLINIC = {
   logo: { src: "/mimos-logo.png", width: 170, height: 52 },
   // One line per array entry; blank entries are skipped.
   addressLines: [
-    "Qornayel Main road",
-    "Near Yehya Hilal Station",
-    "Baabda, Mount-Lebanon",
+    "qabershmoun",
+    "Basetine main road",
+    "Aley, Mount-Lebanon",
     "Lebanon",
   ],
-  phone: "Mobile: 70 121 556",
+  phone: "Mobile: 81 949 367",
   email: "",
-  website: "https://mimospetlounge.vercel.app",
+  website: "https://mimospetlounge.com",
   // Tax / business registration number (e.g. EIN, VAT, ABN).
   taxId: "",
 } as const;

@@ -151,7 +151,7 @@ export default function DashboardShell({
               component="img"
               // Always the white variant: the nav pane is a dark fill in both
               // modes, so the ink logo would disappear against it in light mode.
-              src="/mimos-logo-white.webp"
+              src="/mimos-logo-wide-white.webp"
               alt="Mimo's Pet Lounge"
               sx={{
                 height: DRAWER_LOGO_HEIGHT,
