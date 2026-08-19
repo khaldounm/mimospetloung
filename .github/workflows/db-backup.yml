@@ -43,7 +43,12 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
-          pg_dump --version
+          # /usr/bin/pg_dump is a pg_wrapper shim that picks its version from
+          # the newest server cluster on the box, and the runner image ships a
+          # PostgreSQL 16 cluster. Left alone it runs 16.14 against a 17.6
+          # server and aborts. Put the real 17 binaries first instead.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Dump the database
         env:
