@@ -1,0 +1,125 @@
+# Nightly backup of the Supabase database to Google Drive.
+#
+# Supabase's free tier keeps no backups at all, so this is the only copy of the
+# clinic's data outside the live database. It runs on GitHub's schedule rather
+# than a laptop, so it does not depend on anyone's machine being awake.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   SUPABASE_DB_URL      the DIRECT connection string, port 5432 (NOT 6543:
+#                        the transaction pooler cannot serve pg_dump)
+#   BACKUP_PASSPHRASE    long random string; encrypts the dump before upload
+#   GDRIVE_CLIENT_ID     from `rclone config` on your machine
+#   GDRIVE_CLIENT_SECRET  "
+#   GDRIVE_TOKEN         the {"access_token":...} JSON rclone stores
+#   GDRIVE_FOLDER_ID     id of the Drive folder to write into (from its URL)
+
+name: Database backup
+
+on:
+  schedule:
+    # 22:00 UTC daily. GitHub's scheduler can lag by a few minutes under load,
+    # which is fine for a nightly backup.
+    - cron: "0 22 * * *"
+  workflow_dispatch: # so a backup can be taken by hand before risky changes
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install PostgreSQL 17 client
+        # The client must be at least the server's major version. Supabase is
+        # on 17.6; ubuntu-latest ships an older client by default.
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      - name: Dump the database
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          # Flags kept identical to src/lib/db-transfer.ts so a file from either
+          # source restores the same way.
+          pg_dump "$DB_URL" \
+            --format=custom --no-owner --no-privileges --schema=public \
+            --file="mimos-$STAMP.dump"
+          ls -lh "mimos-$STAMP.dump"
+
+      - name: Verify the dump is readable
+        # A backup nobody has ever opened is not a backup. This does not prove a
+        # full restore works, but it does catch a truncated or empty archive,
+        # which is the common silent failure.
+        run: |
+          set -euo pipefail
+          TABLES=$(pg_restore --list "mimos-$STAMP.dump" | grep -c "TABLE DATA" || true)
+          echo "tables with data in archive: $TABLES"
+          if [ "$TABLES" -lt 20 ]; then
+            echo "::error::Archive holds only $TABLES data tables; expected 25+."
+            exit 1
+          fi
+
+      - name: Encrypt
+        # The dump is real client PII: names, phone numbers, payment history.
+        # It is encrypted before it leaves the runner, so Drive only ever holds
+        # ciphertext. Decrypt with:
+        #   gpg --decrypt --batch --passphrase "$BACKUP_PASSPHRASE" file.dump.gpg > file.dump
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          gpg --batch --yes --symmetric --cipher-algo AES256 \
+            --passphrase "$PASSPHRASE" \
+            --output "mimos-$STAMP.dump.gpg" "mimos-$STAMP.dump"
+          rm -f "mimos-$STAMP.dump"
+          ls -lh "mimos-$STAMP.dump.gpg"
+
+      - name: Upload to Google Drive
+        # rclone is installed from its official script rather than via a
+        # third-party action, because this step is handed the Drive token and
+        # there is no reason to widen who can see it.
+        #
+        # Config comes from environment variables, so nothing is written to disk
+        # and the token never appears in a file the runner leaves behind.
+        env:
+          RCLONE_CONFIG_GDRIVE_TYPE: drive
+          RCLONE_CONFIG_GDRIVE_SCOPE: drive
+          RCLONE_CONFIG_GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          RCLONE_CONFIG_GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          RCLONE_CONFIG_GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+          RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone copy "mimos-$STAMP.dump.gpg" gdrive: --no-traverse
+          echo "uploaded mimos-$STAMP.dump.gpg"
+          # Read it back so a silent upload failure cannot pass as success.
+          rclone lsl gdrive: --include "mimos-$STAMP.dump.gpg" | tee /tmp/verify
+          test -s /tmp/verify
+
+      - name: Prune backups older than 30 days
+        env:
+          RCLONE_CONFIG_GDRIVE_TYPE: drive
+          RCLONE_CONFIG_GDRIVE_SCOPE: drive
+          RCLONE_CONFIG_GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          RCLONE_CONFIG_GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          RCLONE_CONFIG_GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+          RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          rclone delete gdrive: --min-age 30d --include "mimos-*.dump.gpg"
+          echo "backups now held:"
+          rclone lsl gdrive: --include "mimos-*.dump.gpg" | wc -l
