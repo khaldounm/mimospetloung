@@ -5,15 +5,7 @@ import { hasPermission } from "@/lib/permissions";
 import { toInventoryItemDTO, toInventoryTransactionDTO } from "@/lib/inventory";
 import InventoryDetail from "@/components/inventory/InventoryDetail";
 
-export default async function InventoryItemPage({
-  params,
-}: {
-  params: Promise<{ itemId: string }>;
-}) {
-  const { itemId } = await params;
-  const id = Number(itemId);
-  if (!Number.isInteger(id) || id <= 0) notFound();
-
+export default async function InventoryItemPage({ id }: { id: number }) {
   const session = await auth();
   const canWrite = hasPermission(session?.user, "inventory:write");
   const canViewSuppliers = hasPermission(session?.user, "orders:read");

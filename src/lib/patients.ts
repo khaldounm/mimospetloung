@@ -60,6 +60,11 @@ export interface PatientListPage {
   pageSize: number;
   /** Every first letter present in the data, with how many pets sit under it. */
   letters: { letter: string; count: number }[];
+  /**
+   * How many pets are flagged in total, not just on this page. The filter chip
+   * shows it, so it must stay the same whatever else is filtered.
+   */
+  reviewCount: number;
 }
 
 export interface PatientListQuery {
@@ -67,6 +72,8 @@ export interface PatientListQuery {
   letter?: string;
   page?: number;
   pageSize?: number;
+  /** Show only records the migration flagged for a human to confirm. */
+  needsReview?: boolean;
 }
 
 export const PATIENT_PAGE_SIZE = 25;
@@ -107,7 +114,10 @@ export async function listPatients(
   // "Leo, Sarah's cat" and 36 pets here are called Leo.
   const search = query.q?.trim() ? `%${query.q.trim().toLowerCase()}%` : null;
 
-  const [rows, letters] = await Promise.all([
+  // Passed as a nullable boolean so one prepared statement serves both cases.
+  const reviewOnly = query.needsReview ? true : null;
+
+  const [rows, letters, reviewCount] = await Promise.all([
     prisma.$queryRaw<PatientListRow[]>`
       SELECT p.patient_id, p.client_id, p.name, p.species, p.breed,
              p.date_of_birth, p.sex, p.is_neutered, p.microchip_id, p.notes,
@@ -117,6 +127,7 @@ export async function listPatients(
       FROM patients p
       JOIN clients c ON c.client_id = p.client_id
       WHERE p.deleted_at IS NULL
+        AND (${reviewOnly}::boolean IS NULL OR p.needs_review = TRUE)
         AND (${letter}::text IS NULL OR upper(left(p.name, 1)) = ${letter})
         AND (
           ${search}::text IS NULL
@@ -134,6 +145,7 @@ export async function listPatients(
       WHERE deleted_at IS NULL AND name ~ '^[A-Za-z]'
       GROUP BY 1
       ORDER BY 1`,
+    prisma.patient.count({ where: { deletedAt: null, needsReview: true } }),
   ]);
 
   return {
@@ -156,5 +168,6 @@ export async function listPatients(
     page,
     pageSize,
     letters: letters.map((l) => ({ letter: l.letter, count: Number(l.count) })),
+    reviewCount,
   };
 }

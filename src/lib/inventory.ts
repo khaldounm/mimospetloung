@@ -2,6 +2,8 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { toDateOnly } from "@/utils/format";
+import { INVENTORY_CATEGORIES } from "@/constants/inventory";
+import { UNCATEGORISED, categorySlug } from "@/utils/inventory";
 import type {
   InventoryItemDTO,
   InventoryTransactionDTO,
@@ -227,4 +229,172 @@ export async function applyStockMovement(params: StockMovementParams) {
   } catch (err) {
     rethrowStockMovementError(err);
   }
+}
+
+// ---- Inventory list (paged, per category) ----
+
+/**
+ * The inventory page loads one category at a time. Previously it fetched every
+ * item with its partner and supplier joined, then grouped them client-side into
+ * accordions, so all 1,744 rows were in the DOM at once. Now the category is
+ * part of the route, the query returns one page, and the tab strip is served by
+ * a single grouped count.
+ */
+export interface InventoryListQuery {
+  /** Exact category. `UNCATEGORISED` selects items with no category set. */
+  category?: string;
+  q?: string;
+  lowStock?: boolean;
+  /** Supplier id, or "none" for items with no usual supplier yet. */
+  supplier?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface InventoryListPage {
+  items: InventoryItemDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface InventoryCategoryCount {
+  category: string;
+  slug: string;
+  count: number;
+  lowStockCount: number;
+}
+
+export const INVENTORY_PAGE_SIZE = 25;
+const MAX_INVENTORY_PAGE_SIZE = 100;
+
+/**
+ * Ids of items at or below their reorder level.
+ *
+ * Low stock compares two columns, and Prisma cannot express that in a `where`
+ * (reorder_level is an Int, current_stock a Decimal). The old list filtered
+ * after mapping, which was fine while it fetched everything, but silently
+ * wrong once the query is paged: it would take a page and then filter it. So
+ * the ids are selected first and used as a filter.
+ */
+async function lowStockItemIds(): Promise<number[]> {
+  const rows = await prisma.$queryRaw<{ item_id: number }[]>`
+    SELECT item_id FROM inventory_items
+    WHERE deleted_at IS NULL
+      AND reorder_level > 0
+      AND current_stock <= reorder_level`;
+  return rows.map((r) => r.item_id);
+}
+
+function inventoryWhere(
+  query: InventoryListQuery,
+  lowStockIds: number[] | null,
+): Prisma.InventoryItemWhereInput {
+  const q = query.q?.trim();
+  const supplierId = Number(query.supplier);
+  const supplierFilter: Prisma.InventoryItemWhereInput =
+    query.supplier === "none"
+      ? { supplierId: null }
+      : query.supplier && Number.isInteger(supplierId)
+        ? { supplierId }
+        : {};
+
+  const category =
+    query.category === UNCATEGORISED
+      ? { OR: [{ category: null }, { category: "" }] }
+      : query.category
+        ? { category: query.category }
+        : {};
+
+  return {
+    deletedAt: null,
+    ...category,
+    ...supplierFilter,
+    ...(q
+      ? {
+          OR: [
+            { name: { contains: q, mode: "insensitive" as const } },
+            { category: { contains: q, mode: "insensitive" as const } },
+            { barcode: { contains: q, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+    // "Low stock" only means something once a reorder level is configured,
+    // matching isLowStock on the DTO.
+    ...(lowStockIds ? { itemId: { in: lowStockIds } } : {}),
+  };
+}
+
+export async function listInventory(
+  query: InventoryListQuery = {},
+): Promise<InventoryListPage> {
+  const pageSize = Math.min(
+    query.pageSize ?? INVENTORY_PAGE_SIZE,
+    MAX_INVENTORY_PAGE_SIZE,
+  );
+  const page = Math.max(query.page ?? 1, 1);
+  const where = inventoryWhere(
+    query,
+    query.lowStock ? await lowStockItemIds() : null,
+  );
+
+  const [rows, total] = await Promise.all([
+    prisma.inventoryItem.findMany({
+      where,
+      include: {
+        partner: { select: { name: true } },
+        supplier: { select: { name: true } },
+      },
+      orderBy: [{ name: "asc" }, { itemId: "asc" }],
+      take: pageSize,
+      skip: (page - 1) * pageSize,
+    }),
+    prisma.inventoryItem.count({ where }),
+  ]);
+
+  return { items: rows.map(toInventoryItemDTO), total, page, pageSize };
+}
+
+/**
+ * Counts per category for the tab strip. One grouped query rather than loading
+ * every item to count them, and the low-stock tally comes with it so a tab can
+ * show a badge without a second pass.
+ */
+export async function getInventoryCategories(): Promise<
+  InventoryCategoryCount[]
+> {
+  const rows = await prisma.$queryRaw<
+    { category: string | null; count: bigint; low: bigint }[]
+  >`
+    SELECT nullif(trim(category), '') AS category,
+           count(*) AS count,
+           count(*) FILTER (
+             WHERE reorder_level > 0 AND current_stock <= reorder_level
+           ) AS low
+    FROM inventory_items
+    WHERE deleted_at IS NULL
+    GROUP BY 1`;
+
+  const known: readonly string[] = INVENTORY_CATEGORIES;
+  const rank = (category: string) => {
+    if (category === UNCATEGORISED) return known.length + 1;
+    const index = known.indexOf(category);
+    return index === -1 ? known.length : index;
+  };
+
+  return rows
+    .map((r) => {
+      const category = r.category ?? UNCATEGORISED;
+      return {
+        category,
+        slug: categorySlug(category),
+        count: Number(r.count),
+        lowStockCount: Number(r.low),
+      };
+    })
+    .sort(
+      (a, b) =>
+        rank(a.category) - rank(b.category) ||
+        a.category.localeCompare(b.category),
+    );
 }

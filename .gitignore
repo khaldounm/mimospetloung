@@ -60,3 +60,15 @@ prisma/dev-session.ts
 dumps/
 *.dump
 *.dump.toc
+
+# Curated seed data. The client and pet files carry the same real PII as the
+# .mdb they come from -- names, phone numbers, balances -- so they stay local.
+# The scripts that produce them are committed, so anyone with a GT_Data export
+# can regenerate them with:
+#   python3 prisma/seed-data/curate.py
+#   python3 prisma/seed-data/curate-inventory.py
+prisma/seed-data/clients.json
+prisma/seed-data/patients.json
+prisma/seed-data/review-worklist.csv
+
+prisma/seed-data/inventory.json

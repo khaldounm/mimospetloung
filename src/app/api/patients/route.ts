@@ -18,6 +18,7 @@ export async function GET(request: Request) {
       q: sp.get("q")?.trim() || undefined,
       letter: sp.get("letter")?.trim() || undefined,
       page: pageRaw ? Number(pageRaw) : 1,
+      needsReview: sp.get("review") === "1",
     });
 
     return NextResponse.json(page);

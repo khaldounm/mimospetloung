@@ -1,3 +1,15 @@
+/**
+ * One dynamic segment serves two things: an item's detail page and a category
+ * listing.
+ *
+ * Next.js allows only one dynamic slug name per path position, so
+ * /inventory/[itemId] and /inventory/[category] cannot both exist. Numeric
+ * segments are item ids and anything else is a category slug, which keeps the
+ * existing /inventory/123 links working while giving categories the
+ * /inventory/food shape.
+ */
+import { notFound } from "next/navigation";
+
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -6,29 +18,41 @@ import {
   INVENTORY_PAGE_SIZE,
 } from "@/lib/inventory";
 import { getActiveSuppliers } from "@/lib/suppliers";
+import { categoryFromSlug } from "@/utils/inventory";
 import InventoryTable from "@/components/inventory/InventoryTable";
+import ItemPage from "./ItemPage";
 
-export default async function InventoryPage({
+export default async function InventorySegmentPage({
+  params,
   searchParams,
 }: {
+  params: Promise<{ segment: string }>;
   searchParams: Promise<{ supplier?: string }>;
 }) {
+  const { segment } = await params;
+
+  if (/^\d+$/.test(segment)) {
+    const id = Number(segment);
+    if (!Number.isInteger(id) || id <= 0) notFound();
+    return <ItemPage id={id} />;
+  }
+
   const session = await auth();
   const canWrite = hasPermission(session?.user, "inventory:write");
   const canViewSuppliers = hasPermission(session?.user, "orders:read");
-  // One permission covers both creating a supplier inline and pushing items
-  // into a future order.
   const canPurchase = hasPermission(session?.user, "orders:write");
 
-  // ?supplier= arrives from the item counts on the suppliers page. Resolved
-  // here rather than with useSearchParams so the first paint is already
-  // filtered and the client needs no Suspense boundary.
+  const categories = await getInventoryCategories();
+  const category = categoryFromSlug(
+    segment,
+    categories.map((c) => c.category),
+  );
+  if (!category) notFound();
+
   const requested = canViewSuppliers ? (await searchParams).supplier : undefined;
 
-  // No category in the path means every category, still one page at a time.
-  const [page, categories, suppliers] = await Promise.all([
-    listInventory({ supplier: requested, page: 1 }),
-    getInventoryCategories(),
+  const [page, suppliers] = await Promise.all([
+    listInventory({ category, supplier: requested, page: 1 }),
     canViewSuppliers ? getActiveSuppliers() : Promise.resolve([]),
   ]);
 
@@ -38,7 +62,7 @@ export default async function InventoryPage({
       initialTotal={page.total}
       pageSize={INVENTORY_PAGE_SIZE}
       categories={categories}
-      activeCategory={null}
+      activeCategory={category}
       canWrite={canWrite}
       canViewSuppliers={canViewSuppliers}
       canCreateSuppliers={canPurchase}

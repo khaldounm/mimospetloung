@@ -16,6 +16,8 @@ export default function AlphabetBar({
   value,
   onChange,
   disabled = false,
+  noun = "pets",
+  nounSingular,
 }: {
   /** Every letter present in the data, with its row count. */
   letters: { letter: string; count: number }[];
@@ -23,7 +25,12 @@ export default function AlphabetBar({
   value: string | null;
   onChange: (letter: string | null) => void;
   disabled?: boolean;
+  /** What is being counted, for the tooltip and screen readers. */
+  noun?: string;
+  /** Singular form, when it is not just `noun` minus its final "s". */
+  nounSingular?: string;
 }) {
+  const one = nounSingular ?? noun.replace(/s$/, "");
   const counts = new Map(letters.map((l) => [l.letter, l.count]));
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
   const total = letters.reduce((sum, l) => sum + l.count, 0);
@@ -84,7 +91,7 @@ export default function AlphabetBar({
             disabled={empty}
             onClick={() => onChange(selected ? null : letter)}
             aria-pressed={selected}
-            aria-label={`${letter}, ${count} pets`}
+            aria-label={`${letter}, ${count} ${count === 1 ? one : noun}`}
             sx={{
               ...cell,
               color: selected
@@ -117,7 +124,7 @@ export default function AlphabetBar({
         ) : (
           <Tooltip
             key={letter}
-            title={`${count} ${count === 1 ? "pet" : "pets"}`}
+            title={`${count} ${count === 1 ? one : noun}`}
           >
             {button}
           </Tooltip>

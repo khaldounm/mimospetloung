@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
-import { isUniqueConstraintError, toInventoryItemDTO } from "@/lib/inventory";
+import {
+  isUniqueConstraintError,
+  listInventory,
+  toInventoryItemDTO,
+} from "@/lib/inventory";
 import { writeAudit } from "@/lib/audit";
 import { inventoryItemCreateSchema } from "@/schemas/inventory";
 
@@ -10,49 +14,19 @@ export async function GET(request: Request) {
     await requirePermission("inventory:read");
 
     const sp = new URL(request.url).searchParams;
-    const q = sp.get("q")?.trim();
-    const category = sp.get("category")?.trim();
-    const lowStock = sp.get("lowStock") === "true";
-    // "none" filters to items with no usual supplier assigned yet; a numeric id
-    // filters to that supplier. Anything else is ignored rather than erroring.
-    const supplier = sp.get("supplier")?.trim();
-    const supplierId = Number(supplier);
-    const supplierFilter =
-      supplier === "none"
-        ? { supplierId: null }
-        : supplier && Number.isInteger(supplierId)
-          ? { supplierId }
-          : {};
+    const pageRaw = sp.get("page")?.trim();
 
-    const items = await prisma.inventoryItem.findMany({
-      where: {
-        deletedAt: null,
-        ...(q
-          ? {
-              OR: [
-                { name: { contains: q, mode: "insensitive" } },
-                { category: { contains: q, mode: "insensitive" } },
-                { barcode: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {}),
-        ...(category ? { category } : {}),
-        ...supplierFilter,
-      },
-      include: {
-        partner: { select: { name: true } },
-        supplier: { select: { name: true } },
-      },
-      orderBy: { name: "asc" },
+    // Paged and filtered in SQL. The category comes from the route on the page
+    // itself, and is echoed here so a refetch after a search stays inside it.
+    const page = await listInventory({
+      category: sp.get("category")?.trim() || undefined,
+      q: sp.get("q")?.trim() || undefined,
+      lowStock: sp.get("lowStock") === "true",
+      supplier: sp.get("supplier")?.trim() || undefined,
+      page: pageRaw ? Number(pageRaw) : 1,
     });
 
-    // Low-stock compares two columns, so filter after mapping (the DTO already
-    // computes the flag). Inventory lists are small enough that this is cheap.
-    const dtos = items
-      .map(toInventoryItemDTO)
-      .filter((d) => (lowStock ? d.isLowStock : true));
-
-    return NextResponse.json({ items: dtos });
+    return NextResponse.json(page);
   });
 }
 

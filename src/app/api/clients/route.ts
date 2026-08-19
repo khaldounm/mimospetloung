@@ -2,33 +2,26 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
-import { clientInclude, toClientDTO } from "@/lib/clients";
+import { listClients } from "@/lib/clients";
 import { clientCreateSchema } from "@/schemas/client";
 
 export async function GET(request: Request) {
   return handle(async () => {
     await requirePermission("patients:read");
 
-    const q = new URL(request.url).searchParams.get("q")?.trim();
-    const clients = await prisma.client.findMany({
-      where: {
-        deletedAt: null,
-        ...(q
-          ? {
-              OR: [
-                { firstName: { contains: q, mode: "insensitive" } },
-                { lastName: { contains: q, mode: "insensitive" } },
-                { email: { contains: q, mode: "insensitive" } },
-                { phone: { contains: q } },
-              ],
-            }
-          : {}),
-      },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-      include: clientInclude,
+    const sp = new URL(request.url).searchParams;
+    const pageRaw = sp.get("page")?.trim();
+
+    // Paged and filtered in SQL; the response also carries the letter buckets
+    // so the jump bar reflects the data rather than a hardcoded alphabet.
+    const page = await listClients({
+      q: sp.get("q")?.trim() || undefined,
+      letter: sp.get("letter")?.trim() || undefined,
+      page: pageRaw ? Number(pageRaw) : 1,
+      needsReview: sp.get("review") === "1",
     });
 
-    return NextResponse.json({ clients: clients.map(toClientDTO) });
+    return NextResponse.json(page);
   });
 }
 

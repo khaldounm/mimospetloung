@@ -9,9 +9,8 @@ export default async function PatientsPage() {
 
   // First page only. Paging, search and the letter filter all run in SQL, and
   // the owner list the create dialog needs is fetched when that dialog opens.
-  const { patients, total, pageSize, letters } = await listPatients({
-    page: 1,
-  });
+  const { patients, total, pageSize, letters, reviewCount } =
+    await listPatients({ page: 1 });
 
   return (
     <PatientsTable
@@ -19,6 +18,7 @@ export default async function PatientsPage() {
       initialTotal={total}
       pageSize={pageSize}
       letters={letters}
+      initialReviewCount={reviewCount}
       canWrite={canWrite}
     />
   );

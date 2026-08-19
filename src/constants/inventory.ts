@@ -1,13 +1,16 @@
+// The clinic's own vocabulary, taken from the Category table in the old Access
+// system rather than invented here: these are the words on the shelves. Tab
+// order follows this list, so it runs roughly biggest-shelf-first.
 export const INVENTORY_CATEGORIES = [
-  "Drugs & Medications",
-  "Vaccines",
-  "Consumables",
-  "Surgical Supplies",
-  "Food & Nutrition",
-  "Supplements",
-  "Parasite Control",
-  "Grooming Supplies",
   "Accessories",
+  "Food",
+  "Treats",
+  "Toys",
+  "Medication",
+  "Supplements",
+  "Grooming Supplies",
+  "Consumables",
+  "Parasite Control",
   "Litter",
   "Other",
 ] as const;
