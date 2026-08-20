@@ -70,5 +70,7 @@ dumps/
 prisma/seed-data/clients.json
 prisma/seed-data/patients.json
 prisma/seed-data/review-worklist.csv
+prisma/seed-data/dropped-clients.json
+prisma/seed-data/.work/
 
 prisma/seed-data/inventory.json

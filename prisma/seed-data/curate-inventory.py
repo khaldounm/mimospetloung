@@ -61,6 +61,12 @@ def fix_spelling(name):
         out = pat.sub(rep, out)
     return out
 
+# Barcodes are deliberately not imported: Products.BarCode, ProdCodeNo and
+# ProdCodeTxt are empty on all 3,692 rows, and the BarCode on invoice lines is a
+# 1-4 character internal sequence number, not an EAN-13 or UPC-A. There is no
+# barcode anywhere in the old system to carry over; staff populate the column by
+# scanning stock in.
+
 # ---------------------------------------------------------------- load
 rows = list(csv.DictReader(open(SRC)))
 def g(r, k): return (r[k] or "").strip()
@@ -122,9 +128,15 @@ for r in rows:
         stats["services"] += 1
         continue
 
-    # Products: keep what the clinic actually trades or still holds. The rest
-    # is supplier catalogue that was loaded once and never used.
-    if pid not in traded and stock == 0:
+    # Products: keep anything the clinic trades, still holds, or has priced.
+    #
+    # An earlier version dropped everything untraded with no stock, which threw
+    # away 1,830 priced products. That was wrong for the same reason it would be
+    # wrong for clients: this file covers 2026 only, so a line that sold through
+    # 2025 and is currently out of stock looks identical to catalogue padding.
+    # A price means the clinic decided what to charge for it, which is a much
+    # better signal of a real product than a sale in one particular year.
+    if pid not in traded and stock == 0 and sale <= 0:
         skipped.append({"legacyId": int(pid), "name": raw_name,
                         "reason": "never traded and no stock"})
         stats["skipped_catalogue"] += 1
