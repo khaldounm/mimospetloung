@@ -23,6 +23,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -37,6 +38,7 @@ import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
 import { apiRequest } from "@/utils/api-client";
 import {
+  formatAccountBalance,
   formatDate,
   formatDateTime,
   formatMoney,
@@ -64,6 +66,9 @@ interface Props {
   // LBP per 1 USD. The invoice's own frozen rate once issued, the current
   // clinic setting while it is still a draft.
   fxRate: number;
+  // The client's whole-account balance, which spans every invoice they have,
+  // not just this one. Null for a walk-in.
+  clientBalance: string | null;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -82,6 +87,7 @@ export default function InvoiceDetail({
   canWrite,
   canPay,
   fxRate,
+  clientBalance,
 }: Props) {
   const [invoice, setInvoice] = useState(initialInvoice);
   const [addLineOpen, setAddLineOpen] = useState(false);
@@ -98,6 +104,8 @@ export default function InvoiceDetail({
 
   const isDraft = invoice.status === "Draft";
   const onVetHold = invoice.vetHoldAt != null;
+  const accountSummary =
+    clientBalance != null ? formatAccountBalance(clientBalance) : null;
   const paid = Number(invoice.amountPaid) > 0;
   const balanceDue = Number(invoice.balance);
 
@@ -249,16 +257,34 @@ export default function InvoiceDetail({
             />
             {invoice.isOverdue && <Chip color="error" label="Overdue" />}
           </Stack>
-          <Typography color="text.secondary">
-            Client:{" "}
-            {invoice.clientId != null ? (
-              <Link href={`/clients/${invoice.clientId}`}>
-                {invoice.clientName}
-              </Link>
-            ) : (
-              invoice.clientName
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "center", flexWrap: "wrap" }}
+          >
+            <Typography color="text.secondary">
+              Client:{" "}
+              {invoice.clientId != null ? (
+                <Link href={`/clients/${invoice.clientId}`}>
+                  {invoice.clientName}
+                </Link>
+              ) : (
+                invoice.clientName
+              )}
+            </Typography>
+            {/* Whole-account balance, which is not the same number as this
+                invoice's balance: it spans every invoice the client has. */}
+            {accountSummary && (
+              <Tooltip title="Across the client's whole account, not just this invoice">
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color={accountSummary.owes ? "warning" : "default"}
+                  label={accountSummary.text}
+                />
+              </Tooltip>
             )}
-          </Typography>
+          </Stack>
           {invoice.issuedAt && (
             <Typography variant="body2" color="text.secondary">
               Issued {formatDateTime(invoice.issuedAt)}

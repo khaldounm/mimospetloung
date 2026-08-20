@@ -20,7 +20,10 @@ export const CLINIC = {
   ],
   phone: "Mobile: 81 949 367",
   email: "mimospetlounge@gmail.com",
-  // website: "https://mimospetlounge.com",
+  // Blank so it is not printed. Every consumer already skips empty entries, so
+  // this keeps the field (and its three call sites) intact rather than deleting
+  // the line and leaving the code referencing something that is gone.
+  website: "",
   // Tax / business registration number (e.g. EIN, VAT, ABN).
   taxId: "",
 } as const;
