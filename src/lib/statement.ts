@@ -139,7 +139,7 @@ export async function getStatement(
   // Last day of the period, which is what balances and aging are stated as at.
   const asAt = new Date(toExclusive.getTime() - DAY_MS);
 
-  const [suppliers, charges, payments] = await Promise.all([
+  const [suppliers, charges, payments, openingEntries] = await Promise.all([
     prisma.supplier.findMany({
       where: { deletedAt: null },
       select: { supplierId: true, name: true },
@@ -159,6 +159,14 @@ export async function getStatement(
     prisma.supplierPayment.findMany({
       where: { deletedAt: null, paidOn: { lt: toExclusive } },
       select: paymentSelect,
+    }),
+    // Balances carried in from the old Access system. Treated as an ordinary
+    // dated charge so they fall into the opening figure or onto a line by the
+    // same rule as everything else, and so `ties` stays meaningful: before
+    // these existed, the five suppliers holding one never reconciled.
+    prisma.openingBalance.findMany({
+      where: { supplierId: { not: null }, asOfDate: { lt: toExclusive } },
+      select: { supplierId: true, amount: true, asOfDate: true },
     }),
   ]);
 
@@ -235,6 +243,33 @@ export async function getStatement(
     }
   }
 
+  for (const entry of openingEntries) {
+    const supplierId = entry.supplierId;
+    if (supplierId == null || !bySupplier.has(supplierId)) continue;
+
+    // It ages like any other unpaid charge, oldest first, or the aging columns
+    // stop summing to the closing balance for exactly the suppliers that have
+    // been owed the longest.
+    chargesBySupplier
+      .get(supplierId)!
+      .push({ billedOn: entry.asOfDate, amount: entry.amount });
+
+    if (entry.asOfDate < from) {
+      add(opening, supplierId, entry.amount);
+    } else {
+      add(billed, supplierId, entry.amount);
+      pushLine(supplierId, entry.asOfDate, {
+        kind: "opening",
+        date: toDateOnly(entry.asOfDate) ?? "",
+        reference: "Opening balance",
+        description: "Balance the account was opened with",
+        charge: entry.amount.toFixed(2),
+        payment: "0.00",
+        href: null,
+      });
+    }
+  }
+
   for (const payment of payments) {
     const supplierId = payment.supplierId;
     if (!bySupplier.has(supplierId)) continue;
@@ -270,9 +305,12 @@ export async function getStatement(
       const byDate = a.date.getTime() - b.date.getTime();
       // Charges before payments on the same day: the debt has to exist before
       // it can be settled, and a statement that shows otherwise looks wrong.
+      // Brought-forward leads either of them: it is what the account already
+      // stood at before the day began.
       if (byDate !== 0) return byDate;
-      if (a.line.kind === b.line.kind) return 0;
-      return a.line.kind === "order" ? -1 : 1;
+      const rank = (k: StatementLineDTO["kind"]) =>
+        k === "opening" ? 0 : k === "order" ? 1 : 2;
+      return rank(a.line.kind) - rank(b.line.kind);
     });
 
     let running = open;

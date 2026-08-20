@@ -53,6 +53,7 @@ export_table Products            prod.csv    # products and services
 export_table CustInvoiceDetails  sales.csv   # sales lines
 export_table "Invoice Details"   purch.csv   # PURCHASE lines, not sales
 export_table BarcodeData         bcodes.csv  # the real barcodes, see below
+export_table Payments            pay.csv     # client payments, for opening balances
 
 echo "Curating"
 ( cd "$WORK" && python3 "$DIR/curate.py" && python3 "$DIR/curate-inventory.py" )

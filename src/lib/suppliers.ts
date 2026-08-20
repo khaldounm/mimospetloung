@@ -126,9 +126,15 @@ type BalanceOrderRow = Prisma.PurchaseOrderGetPayload<{
   select: typeof balanceOrderSelect;
 }>;
 
+// `opening` is the balance the account was opened with. It has to be in the
+// balance or the figure is not merely incomplete, it has the wrong sign:
+// Libanvet was paid 6,886.30 against 6,566.45 of orders and read as 319.85
+// "in credit" when an opening balance of 937.53 means 617.68 is owed.
 function toMoneyDTO(
   orders: BalanceOrderRow[],
   paid: Prisma.Decimal,
+  opening: Prisma.Decimal,
+  openingAsOf: Date | null,
 ): SupplierMoneyDTO {
   let invoiced = D(0);
   let inProgress = D(0);
@@ -148,9 +154,11 @@ function toMoneyDTO(
   }
 
   return {
+    openingBalance: opening.toFixed(2),
+    openingBalanceAsOf: openingAsOf ? toDateOnly(openingAsOf) : null,
     invoiced: invoiced.toFixed(2),
     paid: paid.toFixed(2),
-    balance: invoiced.minus(paid).toFixed(2),
+    balance: opening.plus(invoiced).minus(paid).toFixed(2),
     inProgress: inProgress.toFixed(2),
     orderCount,
     openOrderCount,
@@ -162,7 +170,8 @@ function toMoneyDTO(
 // All suppliers with item counts and their balance. Inactive suppliers sort last
 // but stay visible, since their history still matters.
 export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
-  const [suppliers, itemGroups, orders, paidGroups] = await Promise.all([
+  const [suppliers, itemGroups, orders, paidGroups, openingGroups] =
+    await Promise.all([
     prisma.supplier.findMany({
       where: { deletedAt: null },
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
@@ -181,11 +190,19 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
       where: { deletedAt: null },
       _sum: { amount: true },
     }),
+    prisma.openingBalance.findMany({
+      where: { supplierId: { not: null } },
+      select: { supplierId: true, amount: true, asOfDate: true },
+    }),
   ]);
 
   const itemMap = new Map(itemGroups.map((g) => [g.supplierId, g._count._all]));
   const paidMap = new Map(
     paidGroups.map((g) => [g.supplierId, g._sum.amount ?? D(0)]),
+  );
+  // At most one per supplier, so the last write wins harmlessly.
+  const openingMap = new Map(
+    openingGroups.map((g) => [g.supplierId, g]),
   );
 
   const ordersBySupplier = new Map<number, BalanceOrderRow[]>();
@@ -202,6 +219,8 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
       money: toMoneyDTO(
         ordersBySupplier.get(s.supplierId) ?? [],
         paidMap.get(s.supplierId) ?? D(0),
+        openingMap.get(s.supplierId)?.amount ?? D(0),
+        openingMap.get(s.supplierId)?.asOfDate ?? null,
       ),
     }),
   );
@@ -224,7 +243,7 @@ export async function getSupplier(
   });
   if (!supplier) return null;
 
-  const [itemCount, orders, paidAgg] = await Promise.all([
+  const [itemCount, orders, paidAgg, openingAgg] = await Promise.all([
     prisma.inventoryItem.count({ where: { supplierId, deletedAt: null } }),
     prisma.purchaseOrder.findMany({
       where: { supplierId, deletedAt: null },
@@ -234,11 +253,21 @@ export async function getSupplier(
       _sum: { amount: true },
       where: { supplierId, deletedAt: null },
     }),
+    prisma.openingBalance.findFirst({
+      where: { supplierId },
+      orderBy: { asOfDate: "asc" },
+      select: { amount: true, asOfDate: true },
+    }),
   ]);
 
   return toSupplierDTO(supplier, {
     itemCount,
-    money: toMoneyDTO(orders, paidAgg._sum.amount ?? D(0)),
+    money: toMoneyDTO(
+      orders,
+      paidAgg._sum.amount ?? D(0),
+      openingAgg?.amount ?? D(0),
+      openingAgg?.asOfDate ?? null,
+    ),
   });
 }
 

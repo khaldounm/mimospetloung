@@ -61,6 +61,7 @@ export default function SupplierDetail({
   const money = supplier.money;
   const balance = Number(money?.balance ?? 0);
   const inCredit = balance < 0;
+  const broughtForward = Number(money?.openingBalance ?? 0);
 
   async function deletePayment(payment: SupplierPaymentDTO) {
     if (!window.confirm(`Delete the ${formatMoney(payment.amount)} payment?`)) {
@@ -133,10 +134,24 @@ export default function SupplierDetail({
           gridTemplateColumns: {
             xs: "1fr",
             sm: "repeat(2, 1fr)",
-            md: "repeat(4, 1fr)",
+            md: broughtForward !== 0 ? "repeat(5, 1fr)" : "repeat(4, 1fr)",
           },
         }}
       >
+        {/* Only shown when there is one. An account opened at zero does not
+            need a row explaining itself. The date is whatever the balance was
+            struck on, not a year end: plenty of accounts never close on one. */}
+        {broughtForward !== 0 && (
+          <StatCard
+            label="Opening balance"
+            value={formatMoney(money?.openingBalance)}
+            hint={
+              money?.openingBalanceAsOf
+                ? `As at ${formatDate(money.openingBalanceAsOf)}`
+                : undefined
+            }
+          />
+        )}
         <StatCard
           label="Billed"
           value={formatMoney(money?.invoiced)}
@@ -151,7 +166,11 @@ export default function SupplierDetail({
           value={formatMoney(Math.abs(balance))}
           accent={inCredit ? "info" : balance > 0 ? "warning" : "success"}
           hint={
-            inCredit ? "Paid more than has been billed" : "Billed minus paid"
+            broughtForward !== 0
+              ? "Opening balance plus billed, less paid"
+              : inCredit
+                ? "Paid more than has been billed"
+                : "Billed minus paid"
           }
         />
         <StatCard
@@ -165,6 +184,10 @@ export default function SupplierDetail({
         An order counts as billed once it is Received, meaning fully delivered
         or closed short. Orders still in draft, placed or part-delivered show
         under In progress and are not owed yet.
+        {broughtForward !== 0 &&
+          " The opening balance is what the account stood at on the date it" +
+            " was struck, so it counts towards the balance without having an" +
+            " order here to point at."}
       </Typography>
 
       <Typography variant="h5" sx={{ mb: 2 }}>

@@ -25,6 +25,7 @@ import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { apiRequest } from "@/utils/api-client";
+import { formatDate, formatMoney } from "@/utils/format";
 import type { ClientDTO, PatientDTO } from "@/types/entities";
 import ClientFormDialog from "./ClientFormDialog";
 import PatientFormDialog from "@/components/patients/PatientFormDialog";
@@ -111,6 +112,31 @@ export default function ClientDetail({ client, patients, canWrite }: Props) {
           <Grid size={{ xs: 6 }}>
             <Field label="Email" value={client.email} />
           </Grid>
+          {client.accountBalance !== undefined && (
+            <Grid size={{ xs: 6 }}>
+              <Field
+                label="Account balance"
+                value={formatMoney(client.accountBalance)}
+              />
+            </Grid>
+          )}
+          {/* Shown next to the balance rather than tucked away: it is the part
+              of the figure the client did not run up here and the one they are
+              most likely to query. Already inside the balance, never added to
+              it. The source is recorded against the row for audit; staff do not
+              need it on screen. */}
+          {client.openingBalance && (
+            <Grid size={{ xs: 6 }}>
+              <Field
+                label="Opening balance"
+                value={formatMoney(client.openingBalance.amount)}
+              />
+              <Typography variant="caption" color="text.secondary">
+                As at {formatDate(client.openingBalance.asOfDate)}, included in
+                the account balance
+              </Typography>
+            </Grid>
+          )}
           {client.notes && (
             <Grid size={12}>
               <Field label="Notes" value={client.notes} />

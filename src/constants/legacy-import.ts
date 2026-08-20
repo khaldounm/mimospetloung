@@ -110,3 +110,25 @@ export const LEGACY_UNKNOWN_SERVICE_ID = -2;
 // of names, so the numbers come across as-is for the clinic to rename. Anything
 // not listed here keeps its number.
 export const LEGACY_CATEGORY_NAMES: Record<string, string> = {};
+
+// ── Opening balances ─────────────────────────────────────────────────────
+// The date the imported opening balances are stated as at. The GT_Data26 file's
+// own activity runs 2026-01-03 to 2026-08-17, so anything carried forward was
+// already true before it opens, and this is the latest date that is provably
+// true of all of it.
+//
+// It is NOT a year end and must not be described as one anywhere staff can
+// read: an account can be opened with a balance on any date, and plenty of
+// clinics never close their balances on 1 January.
+export const LEGACY_OPENING_BALANCE_DATE = "2026-01-01";
+
+// Named on every opening balance row so the figure can be traced to the exact
+// column it came from once Access is read-only and nobody remembers.
+export const LEGACY_OPENING_BALANCE_SOURCE =
+  "GT_Data Access system, Suppliers.BBack";
+export const LEGACY_OPENING_BALANCE_SOURCE_CLIENT =
+  "GT_Data Access system, CustomerWholesale.BBack";
+
+// Below this, the old system's balance columns are floating-point residue like
+// -5.4e-06 rather than money. Anything smaller is treated as zero.
+export const LEGACY_BALANCE_EPSILON = 0.01;

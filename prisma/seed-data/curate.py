@@ -214,6 +214,51 @@ def g(r, k): return (r[k] or "").strip()
 TRANSACTED = {(x["CustomerWSID"] or "").strip()
               for x in csv.DictReader(open("inv.csv"))}
 
+# ---------------------------------------------------------------- opening balances
+# CustomerWholesale.BBack is the balance brought forward from years this file
+# does not contain. 40 clients have one, $2,763.47 in total.
+#
+# It cannot be trusted blindly the way the supplier column can. For 27 clients
+# WSAccount = BBack + invoiced - paid, so the opening balance is real and still
+# outstanding. For 11 others WSAccount = invoiced - paid on its own, meaning the
+# same money was re-issued as an invoice inside this file and importing BBack
+# would bill them for it twice. Showing a client a balance they do not owe is
+# worse than showing none, so only the arithmetically clean ones are imported
+# and the rest are flagged for a human.
+EPSILON = 0.01
+
+def _money(v):
+    try: return float(v or 0)
+    except ValueError: return 0.0
+
+_invoiced, _paid = collections.Counter(), collections.Counter()
+for x in csv.DictReader(open("inv.csv")):
+    _invoiced[(x["CustomerWSID"] or "").strip()] += _money(x.get("AmountInv"))
+try:
+    for x in csv.DictReader(open("pay.csv")):
+        _paid[(x["CustomerID"] or "").strip()] += _money(x.get("PaymentAmount"))
+except FileNotFoundError:
+    print("  WARNING: pay.csv missing, no client opening balances will be set")
+
+def opening_balance(cid, bback, wsaccount):
+    """(amount or None, review note or None) for one client."""
+    if abs(bback) < EPSILON:
+        return None, None
+    activity = _invoiced[str(cid)] - _paid[str(cid)]
+    if abs(bback + activity - wsaccount) < 0.05:
+        return round(bback, 2), None
+    if abs(activity - wsaccount) < 0.05:
+        return None, (
+            f"The old system carried a {bback:.2f} balance forward for this "
+            f"client, but the account already balances without it, so it looks "
+            f"like it was re-invoiced inside 2026. Not imported: check before "
+            f"telling the client they owe it.")
+    return None, (
+        f"The old system carried a {bback:.2f} balance forward for this client "
+        f"and the account does not reconcile either way "
+        f"(invoiced {_invoiced[str(cid)]:.2f}, paid {_paid[str(cid)]:.2f}, "
+        f"balance {wsaccount:.2f}). Not imported: needs a human.")
+
 clients, patients = [], []
 dropped, stats = [], collections.Counter()
 
@@ -297,6 +342,13 @@ for r in rows:
         stats["split_uncertain"] += 1
     if g(r, "ContactFirstName") or g(r, "ContactLastName"): stats["split_from_staff"] += 1
 
+    _ob_amount, _ob_note = opening_balance(cid, _money(g(r, "BBack")), balance)
+    if _ob_amount is not None:
+        stats["opening_balance_imported"] += 1
+    elif _ob_note:
+        reviews.append(_ob_note)
+        stats["opening_balance_flagged"] += 1
+
     insured = g(r, "Insured")
     note_bits = []
     if insured and insured != "No": note_bits.append(f"Insurance: {insured}")
@@ -305,6 +357,7 @@ for r in rows:
     clients.append({
         "legacyId": cid, "salutation": salutation, "firstName": first[:100],
         "lastName": last[:100], "accountBalance": round(balance, 2) + 0.0,
+        "openingBalance": _ob_amount,
         "phone": phone, "phone2": phone2,
         "email": (g(r, "EmailAddress") or None),
         "notes": ("\n".join(note_bits) or None),

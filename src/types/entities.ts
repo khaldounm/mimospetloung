@@ -21,9 +21,23 @@ export interface ClientDTO {
   email: string | null;
   notes: string | null;
   patientCount?: number;
+  // Present only on the detail view, which is the one place the money is shown.
+  // Positive means the client owes the clinic.
+  accountBalance?: string;
+  // What they owed before the new system took over, and the date that was true
+  // as at. Already included in accountBalance, never added to it.
+  openingBalance?: OpeningBalanceDTO | null;
   // Set by the legacy .mdb import when a value needs a human to confirm it.
   needsReview: boolean;
   reviewNote: string | null;
+}
+
+// The balance an account was opened with. Immutable, and shown so an account
+// that starts partway through its own history still reconciles.
+export interface OpeningBalanceDTO {
+  amount: string;
+  asOfDate: string;
+  source: string;
 }
 
 export interface PatientDTO {
@@ -470,9 +484,15 @@ export interface RunningCostDTO {
 // progress and are deliberately not counted as owed: the supplier has not
 // finished delivering, so there is no bill yet.
 export interface SupplierMoneyDTO {
+  // The balance the account was opened with. "0.00" when there was none.
+  openingBalance: string;
+  // The date that balance was struck, which is not necessarily a year end:
+  // an account can be opened with a balance on any date. Null when there is
+  // no opening balance to date.
+  openingBalanceAsOf: string | null;
   invoiced: string; // total of Received orders
   paid: string; // total of recorded payments
-  balance: string; // invoiced minus paid, what is still owed
+  balance: string; // opening plus invoiced minus paid, what is still owed
   inProgress: string; // value of Draft / Placed / Partial orders, not yet owed
   orderCount: number; // Received orders
   openOrderCount: number; // Draft / Placed / Partial
@@ -500,7 +520,10 @@ export interface SupplierDTO {
 // stood immediately after it. Every figure on the statement traces to one of
 // these, which is what makes the report auditable.
 export interface StatementLineDTO {
-  kind: "order" | "payment";
+  // "opening" is the balance the account was opened with. It is a charge-side
+  // row dated whenever that balance was struck, and appears only when the
+  // period being viewed reaches back that far.
+  kind: "order" | "payment" | "opening";
   date: string;
   reference: string;
   description: string;

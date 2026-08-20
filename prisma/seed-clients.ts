@@ -18,6 +18,10 @@ import { join } from "node:path";
 
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  LEGACY_OPENING_BALANCE_DATE as OPENING_BALANCE_DATE,
+  LEGACY_OPENING_BALANCE_SOURCE_CLIENT as OPENING_BALANCE_SOURCE,
+} from "@/constants/legacy-import";
 
 type SeedClient = {
   legacyId: number;
@@ -25,6 +29,10 @@ type SeedClient = {
   firstName: string;
   lastName: string;
   accountBalance: number;
+  // What the client owed before this file's own history begins, when the old
+  // system's arithmetic proves it is still outstanding. Null when there was
+  // none, or when the figure could not be trusted; see curate.py.
+  openingBalance: number | null;
   phone: string | null;
   phone2: string | null;
   email: string | null;
@@ -127,6 +135,31 @@ async function main() {
       })
     ).map((c) => [c.legacyId as number, c.clientId]),
   );
+
+  // Opening balances. Written as immutable dated rows rather than folded into
+  // account_balance, which ALREADY contains them: the old system's WSAccount is
+  // BBack + invoiced - paid, so adding them again would bill the client twice.
+  // They exist so a statement shows where the figure started.
+  const opening = clients.filter((c) => c.openingBalance !== null);
+  if (opening.length) {
+    const values = opening.map(
+      (c) => Prisma.sql`(
+        ${clientIdByLegacy.get(c.legacyId) ?? null}::int,
+        ${c.openingBalance!.toFixed(2)}::numeric,
+        ${OPENING_BALANCE_DATE}::date,
+        ${OPENING_BALANCE_SOURCE}::varchar,
+        ${String(c.legacyId)}::varchar)`,
+    );
+    // DO NOTHING because the row is immutable: a re-run must never restate a
+    // figure the clinic has already put in front of someone.
+    await prisma.$executeRaw`
+      INSERT INTO opening_balances
+        (client_id, amount, as_of_date, source, source_ref)
+      SELECT * FROM (VALUES ${Prisma.join(values)}) AS v
+      WHERE v.column1 IS NOT NULL
+      ON CONFLICT (client_id, as_of_date) DO NOTHING`;
+    console.log(`  opening balances ${opening.length}`);
+  }
 
   let petsWritten = 0;
   let orphaned = 0;

@@ -22,9 +22,14 @@ export default async function ClientDetailPage({
     where: { clientId: id, deletedAt: null },
     include: {
       patients: { where: { deletedAt: null }, orderBy: { name: "asc" } },
+      // At most one: the import writes a single row per client, dated the day
+      // the new system took over.
+      openingBalances: { orderBy: { asOfDate: "asc" }, take: 1 },
     },
   });
   if (!client) notFound();
+
+  const opening = client.openingBalances[0] ?? null;
 
   const dto: ClientDTO = {
     clientId: client.clientId,
@@ -35,6 +40,14 @@ export default async function ClientDetailPage({
     notes: client.notes,
     needsReview: client.needsReview,
     reviewNote: client.reviewNote,
+    accountBalance: client.accountBalance.toFixed(2),
+    openingBalance: opening
+      ? {
+          amount: opening.amount.toFixed(2),
+          asOfDate: toDateOnly(opening.asOfDate) ?? "",
+          source: opening.source,
+        }
+      : null,
   };
 
   const patients: PatientDTO[] = client.patients.map((p) => ({

@@ -7,12 +7,15 @@
 
 import { prisma } from "@/lib/prisma";
 import {
+  LEGACY_BALANCE_EPSILON,
+  LEGACY_CATEGORY_NAMES,
+  LEGACY_DISCOUNT_SERVICE_ID,
+  LEGACY_OPENING_BALANCE_DATE,
+  LEGACY_OPENING_BALANCE_SOURCE,
   LEGACY_PACK_SIZE,
   LEGACY_SERVICE_EXCLUSIONS,
   LEGACY_SERVICE_PATTERNS,
   LEGACY_STRONG_SERVICE,
-  LEGACY_CATEGORY_NAMES,
-  LEGACY_DISCOUNT_SERVICE_ID,
   LEGACY_TITLE_PREFIX,
   LEGACY_UNKNOWN_SERVICE_ID,
   LEGACY_WALKIN_CUSTOMER_ID,
@@ -420,6 +423,43 @@ export async function transform() {
     ["name", "phone", "account_balance"],
   );
   report.push(`suppliers      ${sups.length}`);
+
+  // ── Supplier opening balances ──────────────────────────────────────────
+  // Suppliers.BBack is the balance brought forward from the years before this
+  // file. It is NOT extra money owed: Account already contains it
+  // (Account = BBack + purchases - payments, exact on 21 of 25 suppliers), so
+  // account_balance above is already right and must not be touched here. This
+  // row exists so a statement can show where the figure started instead of
+  // opening on an unexplained gap.
+  const openingRows = sups
+    .map((x: Row) => ({ legacyId: num(x.SupplierID), amount: money(x.BBack) }))
+    .filter((r) => Math.abs(r.amount) >= LEGACY_BALANCE_EPSILON);
+
+  if (openingRows.length) {
+    const params: unknown[] = [];
+    const tuples = openingRows.map((r) => {
+      params.push(
+        r.legacyId,
+        r.amount,
+        LEGACY_OPENING_BALANCE_DATE,
+        LEGACY_OPENING_BALANCE_SOURCE,
+        String(r.legacyId),
+      );
+      const n = params.length;
+      return `((SELECT supplier_id FROM suppliers WHERE legacy_id = $${n - 4}),
+                $${n - 3}::numeric, $${n - 2}::date, $${n - 1}, $${n})`;
+    });
+    // DO NOTHING, not DO UPDATE: the row is immutable and a second import must
+    // never restate a figure the clinic has already shown someone.
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO opening_balances
+         (supplier_id, amount, as_of_date, source, source_ref)
+       VALUES ${tuples.join(",")}
+       ON CONFLICT (supplier_id, as_of_date) DO NOTHING`,
+      ...params,
+    );
+  }
+  report.push(`sup. opening   ${openingRows.length}`);
 
   // ── Invoices ───────────────────────────────────────────────────────────
   const invoices = await q(`SELECT * FROM staging.custinvoices`);

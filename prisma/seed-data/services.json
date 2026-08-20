@@ -1,492 +1,492 @@
 [
-  {
-    "legacyId": 534,
-    "name": "visit",
-    "category": "Veterinary",
-    "price": 20.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 1485,
-    "name": "shower 1",
-    "category": "Grooming",
-    "price": 0.0,
-    "isActive": false,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 1486,
-    "name": "shower small breed",
-    "category": "Grooming",
-    "price": 0.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 1487,
-    "name": "shower medium breed",
-    "category": "Grooming",
-    "price": 0.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 1488,
-    "name": "shower large breed",
-    "category": "Grooming",
-    "price": 0.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 1489,
-    "name": "flea and tick treatment small breed",
-    "category": "Grooming",
-    "price": 2.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 1490,
-    "name": "flea and tick treatment medium breed",
-    "category": "Grooming",
-    "price": 4.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"flea and tick treatmnet medium breed\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 1491,
-    "name": "flea and tick treatment large breed",
-    "category": "Grooming",
-    "price": 6.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 1492,
-    "name": "hair cut",
-    "category": "Grooming",
-    "price": 0.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 1747,
-    "name": "add delivery",
-    "category": "Grooming",
-    "price": 0.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 2111,
-    "name": "detartage cat",
-    "category": "Dental",
-    "price": 60.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"detatrage cat\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2112,
-    "name": "detartage dog up to 10kg",
-    "category": "Dental",
-    "price": 60.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"detatrage dog up to 10kg\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2113,
-    "name": "detartage dog 10-20kg",
-    "category": "Dental",
-    "price": 80.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"detatrage dog 10-20kg\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2114,
-    "name": "detartage dog 20-40kg",
-    "category": "Dental",
-    "price": 100.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"detatrage dog 20-40kg\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2115,
-    "name": "detartage dog 40-60kg",
-    "category": "Dental",
-    "price": 120.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"detatrage dog 40-60kg\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2116,
-    "name": "castration female cat",
-    "category": "Surgery",
-    "price": 120.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2117,
-    "name": "castration male cat",
-    "category": "Surgery",
-    "price": 60.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2118,
-    "name": "castration female dog 5-10kg",
-    "category": "Surgery",
-    "price": 120.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2119,
-    "name": "castration female dog 10-20kg",
-    "category": "Surgery",
-    "price": 120.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2120,
-    "name": "castration female dog 20-40kg",
-    "category": "Surgery",
-    "price": 230.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2121,
-    "name": "castration male dog 5-10kg",
-    "category": "Surgery",
-    "price": 60.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"catration male dog 5-10kg\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2122,
-    "name": "castration male dog 10-20kg",
-    "category": "Surgery",
-    "price": 100.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"castraion male dog 10-20kg\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2123,
-    "name": "castration male dog 20-40kg",
-    "category": "Surgery",
-    "price": 130.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2134,
-    "name": "babesia test",
-    "category": "Diagnostics",
-    "price": 15.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2135,
-    "name": "caniv-4",
-    "category": "Diagnostics",
-    "price": 25.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2136,
-    "name": "rabies test",
-    "category": "Diagnostics",
-    "price": 20.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2137,
-    "name": "fiv/felv",
-    "category": "Diagnostics",
-    "price": 20.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2138,
-    "name": "feliD-3",
-    "category": "Diagnostics",
-    "price": 35.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2139,
-    "name": "par",
-    "category": "Diagnostics",
-    "price": 10.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2140,
-    "name": "urine analysis",
-    "category": "Diagnostics",
-    "price": 5.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2203,
-    "name": "C",
-    "category": "Diagnostics",
-    "price": 0.0,
-    "isActive": false,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "The old system recorded this only as \"C\". No price was set in the old system."
-  },
-  {
-    "legacyId": 2214,
-    "name": "CBC test",
-    "category": "Diagnostics",
-    "price": 30.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2691,
-    "name": "skyla diagnosis plus",
-    "category": "Diagnostics",
-    "price": 50.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2692,
-    "name": "skyla diabetes panel",
-    "category": "Diagnostics",
-    "price": 40.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2693,
-    "name": "skyla electrolyte panel",
-    "category": "Diagnostics",
-    "price": 40.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2878,
-    "name": "visit+drug",
-    "category": "Veterinary",
-    "price": 30.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2879,
-    "name": "treatment",
-    "category": "Veterinary",
-    "price": 35.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2883,
-    "name": "visit outside",
-    "category": "Veterinary",
-    "price": 20.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"visite outside\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 2885,
-    "name": "castration male dog 40/60kg",
-    "category": "Surgery",
-    "price": 150.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3070,
-    "name": "boarding parvo",
-    "category": "Veterinary",
-    "price": 50.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"bourding parvo\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3071,
-    "name": "euthanasia",
-    "category": "Veterinary",
-    "price": 0.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"euthansia\".",
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  },
-  {
-    "legacyId": 3401,
-    "name": "bionote rapid canine babesia AB",
-    "category": "Diagnostics",
-    "price": 15.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3402,
-    "name": "bionote rapid caniV-4",
-    "category": "Diagnostics",
-    "price": 20.0,
-    "isActive": true,
-    "description": "Recorded in the old system as \"bionte rapid caniV-4\".",
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3403,
-    "name": "bionote rapid FIV Ab/felV Ag",
-    "category": "Diagnostics",
-    "price": 15.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3462,
-    "name": "calici test",
-    "category": "Diagnostics",
-    "price": 20.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3463,
-    "name": "panleukopenia test",
-    "category": "Diagnostics",
-    "price": 20.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3464,
-    "name": "fip test",
-    "category": "Diagnostics",
-    "price": 20.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3678,
-    "name": "xray",
-    "category": "Veterinary",
-    "price": 30.0,
-    "isActive": true,
-    "description": null,
-    "needsReview": false,
-    "reviewNote": null
-  },
-  {
-    "legacyId": 3679,
-    "name": "anesthesia",
-    "category": "Veterinary",
-    "price": 0.0,
-    "isActive": false,
-    "description": null,
-    "needsReview": true,
-    "reviewNote": "No price was set in the old system."
-  }
+ {
+  "legacyId": 534,
+  "name": "visit",
+  "category": "Veterinary",
+  "price": 20.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 1485,
+  "name": "shower 1",
+  "category": "Grooming",
+  "price": 0.0,
+  "isActive": false,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 1486,
+  "name": "shower small breed",
+  "category": "Grooming",
+  "price": 0.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 1487,
+  "name": "shower medium breed",
+  "category": "Grooming",
+  "price": 0.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 1488,
+  "name": "shower large breed",
+  "category": "Grooming",
+  "price": 0.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 1489,
+  "name": "flea and tick treatment small breed",
+  "category": "Grooming",
+  "price": 2.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 1490,
+  "name": "flea and tick treatment medium breed",
+  "category": "Grooming",
+  "price": 4.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"flea and tick treatmnet medium breed\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 1491,
+  "name": "flea and tick treatment large breed",
+  "category": "Grooming",
+  "price": 6.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 1492,
+  "name": "hair cut",
+  "category": "Grooming",
+  "price": 0.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 1747,
+  "name": "add delivery",
+  "category": "Grooming",
+  "price": 0.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 2111,
+  "name": "detartage cat",
+  "category": "Dental",
+  "price": 60.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"detatrage cat\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2112,
+  "name": "detartage dog up to 10kg",
+  "category": "Dental",
+  "price": 60.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"detatrage dog up to 10kg\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2113,
+  "name": "detartage dog 10-20kg",
+  "category": "Dental",
+  "price": 80.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"detatrage dog 10-20kg\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2114,
+  "name": "detartage dog 20-40kg",
+  "category": "Dental",
+  "price": 100.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"detatrage dog 20-40kg\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2115,
+  "name": "detartage dog 40-60kg",
+  "category": "Dental",
+  "price": 120.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"detatrage dog 40-60kg\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2116,
+  "name": "castration female cat",
+  "category": "Surgery",
+  "price": 120.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2117,
+  "name": "castration male cat",
+  "category": "Surgery",
+  "price": 60.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2118,
+  "name": "castration female dog 5-10kg",
+  "category": "Surgery",
+  "price": 120.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2119,
+  "name": "castration female dog 10-20kg",
+  "category": "Surgery",
+  "price": 120.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2120,
+  "name": "castration female dog 20-40kg",
+  "category": "Surgery",
+  "price": 230.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2121,
+  "name": "castration male dog 5-10kg",
+  "category": "Surgery",
+  "price": 60.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"catration male dog 5-10kg\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2122,
+  "name": "castration male dog 10-20kg",
+  "category": "Surgery",
+  "price": 100.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"castraion male dog 10-20kg\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2123,
+  "name": "castration male dog 20-40kg",
+  "category": "Surgery",
+  "price": 130.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2134,
+  "name": "babesia test",
+  "category": "Diagnostics",
+  "price": 15.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2135,
+  "name": "caniv-4",
+  "category": "Diagnostics",
+  "price": 25.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2136,
+  "name": "rabies test",
+  "category": "Diagnostics",
+  "price": 20.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2137,
+  "name": "fiv/felv",
+  "category": "Diagnostics",
+  "price": 20.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2138,
+  "name": "feliD-3",
+  "category": "Diagnostics",
+  "price": 35.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2139,
+  "name": "par",
+  "category": "Diagnostics",
+  "price": 10.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2140,
+  "name": "urine analysis",
+  "category": "Diagnostics",
+  "price": 5.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2203,
+  "name": "C",
+  "category": "Diagnostics",
+  "price": 0.0,
+  "isActive": false,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "The old system recorded this only as \"C\". No price was set in the old system."
+ },
+ {
+  "legacyId": 2214,
+  "name": "CBC test",
+  "category": "Diagnostics",
+  "price": 30.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2691,
+  "name": "skyla diagnosis plus",
+  "category": "Diagnostics",
+  "price": 50.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2692,
+  "name": "skyla diabetes panel",
+  "category": "Diagnostics",
+  "price": 40.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2693,
+  "name": "skyla electrolyte panel",
+  "category": "Diagnostics",
+  "price": 40.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2878,
+  "name": "visit+drug",
+  "category": "Veterinary",
+  "price": 30.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2879,
+  "name": "treatment",
+  "category": "Veterinary",
+  "price": 35.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2883,
+  "name": "visit outside",
+  "category": "Veterinary",
+  "price": 20.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"visite outside\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 2885,
+  "name": "castration male dog 40/60kg",
+  "category": "Surgery",
+  "price": 150.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3070,
+  "name": "boarding parvo",
+  "category": "Veterinary",
+  "price": 50.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"bourding parvo\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3071,
+  "name": "euthanasia",
+  "category": "Veterinary",
+  "price": 0.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"euthansia\".",
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ },
+ {
+  "legacyId": 3401,
+  "name": "bionote rapid canine babesia AB",
+  "category": "Diagnostics",
+  "price": 15.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3402,
+  "name": "bionote rapid caniV-4",
+  "category": "Diagnostics",
+  "price": 20.0,
+  "isActive": true,
+  "description": "Recorded in the old system as \"bionte rapid caniV-4\".",
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3403,
+  "name": "bionote rapid FIV Ab/felV Ag",
+  "category": "Diagnostics",
+  "price": 15.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3462,
+  "name": "calici test",
+  "category": "Diagnostics",
+  "price": 20.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3463,
+  "name": "panleukopenia test",
+  "category": "Diagnostics",
+  "price": 20.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3464,
+  "name": "fip test",
+  "category": "Diagnostics",
+  "price": 20.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3678,
+  "name": "xray",
+  "category": "Veterinary",
+  "price": 30.0,
+  "isActive": true,
+  "description": null,
+  "needsReview": false,
+  "reviewNote": null
+ },
+ {
+  "legacyId": 3679,
+  "name": "anesthesia",
+  "category": "Veterinary",
+  "price": 0.0,
+  "isActive": false,
+  "description": null,
+  "needsReview": true,
+  "reviewNote": "No price was set in the old system."
+ }
 ]

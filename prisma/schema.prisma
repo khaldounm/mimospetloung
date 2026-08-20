@@ -118,11 +118,12 @@ model Client {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  patients      Patient[]
-  bookings      Booking[]
-  invoices      Invoice[]
-  payments      Payment[]
-  notifications Notification[]
+  patients        Patient[]
+  bookings        Booking[]
+  invoices        Invoice[]
+  payments        Payment[]
+  notifications   Notification[]
+  openingBalances OpeningBalance[]
 
   @@map("clients")
 }
@@ -280,9 +281,10 @@ model Supplier {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  items    InventoryItem[]
-  orders   PurchaseOrder[]
-  payments SupplierPayment[]
+  items           InventoryItem[]
+  orders          PurchaseOrder[]
+  payments        SupplierPayment[]
+  openingBalances OpeningBalance[]
 
   @@index([name], map: "idx_suppliers_active")
   @@map("suppliers")
@@ -619,6 +621,52 @@ model Payment {
   @@index([invoiceId], map: "idx_payments_invoice")
   @@index([clientId], map: "idx_payments_client")
   @@map("payments")
+}
+
+// An opening balance is what a client owed the clinic, or the clinic owed a
+// supplier, on the day the new system took over. It is a dated journal entry,
+// not a field on the party, because the only evidence behind it is an Access
+// database that is now read-only: it has to say what the figure was, when it
+// was true, and where it came from, or it is worth nothing in a dispute.
+//
+// IMMUTABLE ON PURPOSE. No updatedAt, no deletedAt, no edit path. A figure
+// that turns out to be wrong is corrected by a later, visible adjustment, never
+// by editing this row. The first number stated must stay readable.
+//
+// DOES NOT AFFECT accountBalance. The old system's Account and WSAccount
+// columns ALREADY include the brought-forward figure: Account = BBack +
+// purchases - payments, verified exact on 21 of 25 suppliers. Adding this
+// amount to the running balance would bill every one of these parties twice.
+// This row exists so a statement reconciles and an auditor can see the
+// starting point. It is display and evidence, nothing else.
+model OpeningBalance {
+  openingBalanceId Int      @id @default(autoincrement()) @map("opening_balance_id")
+  // Exactly one of these is set, enforced by a check constraint.
+  clientId         Int?     @map("client_id")
+  supplierId       Int?     @map("supplier_id")
+  // Positive means money is owed: by the client to the clinic, or by the clinic
+  // to the supplier. Same sign convention as the two accountBalance columns.
+  amount           Decimal  @db.Decimal(12, 2)
+  // The date the figure was true as at, not the date it was imported, and not
+  // a year end: an account can be opened with a balance on any date.
+  asOfDate         DateTime @map("as_of_date") @db.Date
+  // The document this came from, named precisely enough to find it again:
+  // "GT_Data26 Access export 2026-08-17, Suppliers.BBack".
+  source           String   @db.VarChar(200)
+  // The identifier the figure had in that source, so a row can be traced back
+  // to the exact record without re-deriving it.
+  sourceRef        String?  @map("source_ref") @db.VarChar(100)
+  note             String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  client   Client?   @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  supplier Supplier? @relation(fields: [supplierId], references: [supplierId], onDelete: Restrict)
+
+  // One opening balance per party per date. Makes the import idempotent and
+  // makes a duplicated figure impossible rather than merely unlikely.
+  @@unique([clientId, asOfDate], map: "uq_opening_balance_client")
+  @@unique([supplierId, asOfDate], map: "uq_opening_balance_supplier")
+  @@map("opening_balances")
 }
 
 // ============================================================
