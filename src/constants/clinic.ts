@@ -4,18 +4,23 @@ export const CLINIC = {
   // IANA timezone for the clinic. Used to render dates/times (e.g. appointment
   // reminders) in local time regardless of where the server runs (Vercel = UTC).
   timezone: "Asia/Beirut",
-  // Logo lives in /public. Dimensions keep the source 1280x389 aspect ratio.
-  logo: { src: "/mimos-logo.png", width: 170, height: 52 },
+  // Logo lives in /public. The wide lockup, not the square mark: an invoice
+  // header is a wide slot, and the square one was being drawn into it at
+  // 170x52, squashing it flat. Dimensions hold the source 1628x601 ratio.
+  //
+  // PNG rather than the .webp beside it because the PDF renderer only decodes
+  // PNG and JPEG.
+  logo: { src: "/mimos-logo-wide.png", width: 170, height: 63 },
   // One line per array entry; blank entries are skipped.
   addressLines: [
-    "qabershmoun",
+    "Qabershmoun",
     "Basetine main road",
     "Aley, Mount-Lebanon",
     "Lebanon",
   ],
   phone: "Mobile: 81 949 367",
-  email: "",
-  website: "https://mimospetlounge.com",
+  email: "mimospetlounge@gmail.com",
+  // website: "https://mimospetlounge.com",
   // Tax / business registration number (e.g. EIN, VAT, ABN).
   taxId: "",
 } as const;
