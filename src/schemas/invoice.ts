@@ -77,6 +77,13 @@ export const lineItemCreateSchema = z
     }
   });
 
+// A single scan at the counter. The barcode is resolved server-side so the
+// increment-or-create decision is made in one place, under one transaction.
+export const lineItemScanSchema = z.object({
+  barcode: z.string().trim().min(1, "A barcode is required").max(100),
+  quantity: z.coerce.number().positive().max(999_999).default(1),
+});
+
 export const lineItemUpdateSchema = z
   .object({
     description: optionalString(255),
@@ -109,5 +116,6 @@ export type InvoiceCreateInput = z.infer<typeof invoiceCreateSchema>;
 export type InvoiceUpdateInput = z.infer<typeof invoiceUpdateSchema>;
 export type InvoiceTransitionInput = z.infer<typeof invoiceTransitionSchema>;
 export type LineItemCreateInput = z.infer<typeof lineItemCreateSchema>;
+export type LineItemScanInput = z.infer<typeof lineItemScanSchema>;
 export type LineItemUpdateInput = z.infer<typeof lineItemUpdateSchema>;
 export type PaymentCreateInput = z.infer<typeof paymentCreateSchema>;

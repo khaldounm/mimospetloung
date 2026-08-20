@@ -46,6 +46,7 @@ import LineItemDialog, {
   type ServiceLineOption,
 } from "./LineItemDialog";
 import PaymentDialog from "./PaymentDialog";
+import ScanBar from "./ScanBar";
 
 interface Props {
   invoice: InvoiceDTO;
@@ -333,10 +334,19 @@ export default function InvoiceDetail({
                 startIcon={<AddIcon />}
                 onClick={() => setAddLineOpen(true)}
               >
-                Add line
+                Add service or manual line
               </Button>
             )}
           </Stack>
+          {/* Scanning is the primary way lines get onto a draft; the dialog
+              above is for services and stock that has no barcode. */}
+          {canWrite && isDraft && (
+            <ScanBar
+              invoiceId={invoice.invoiceId}
+              itemOptions={itemOptions}
+              onInvoiceUpdated={applyInvoice}
+            />
+          )}
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>

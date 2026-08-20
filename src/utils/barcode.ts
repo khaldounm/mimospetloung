@@ -50,3 +50,18 @@ export function toGtin14(code: string): string {
   if (digits.length > 14) return trimmed;
   return digits.padStart(14, "0");
 }
+
+// Every stored form a scanned code could be sitting under, for an indexed
+// lookup. inventory_items.barcode is UNIQUE, so an IN over a handful of
+// candidates uses that index, where lpad(barcode, 14, '0') = $1 would force a
+// scan of the whole table.
+export function gtinLookupCandidates(code: string): string[] {
+  const trimmed = code.trim();
+  if (!/^\d+$/.test(trimmed)) return [trimmed];
+  const stripped = trimmed.replace(/^0+/, "");
+  const forms = new Set([trimmed, stripped, toGtin14(trimmed)]);
+  // Codes minted in-app are stored as 13 digits (randomInternalEan13), so the
+  // 13-digit form of a padded scan has to be tried too.
+  if (stripped.length < 13) forms.add(stripped.padStart(13, "0"));
+  return [...forms].filter(Boolean);
+}
