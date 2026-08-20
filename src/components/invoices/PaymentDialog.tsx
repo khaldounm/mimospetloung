@@ -21,6 +21,7 @@ import {
   formatMoney,
   formatSecondaryMoney,
   roundLbpCash,
+  todayForDateInput,
 } from "@/utils/format";
 import type { InvoiceDTO } from "@/types/entities";
 
@@ -82,7 +83,8 @@ function PaymentForm({
   const [lbpCash, setLbpCash] = useState("");
   const [method, setMethod] = useState("");
   const [reference, setReference] = useState("");
-  const [paidAt, setPaidAt] = useState("");
+  // Payment is being taken now, so today is the answer nearly every time.
+  const [paidAt, setPaidAt] = useState(todayForDateInput());
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -241,7 +243,7 @@ function PaymentForm({
             value={paidAt}
             onChange={(e) => setPaidAt(e.target.value)}
             slotProps={{ inputLabel: { shrink: true } }}
-            helperText="Defaults to today if left blank"
+            helperText="Change only if this money came in on another day"
             fullWidth
           />
           <TextField

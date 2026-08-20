@@ -110,3 +110,12 @@ export function roundLbpCash(amount: number): number {
   if (!Number.isFinite(amount) || amount <= 0) return 0;
   return Math.round(amount / LBP_CASH_INCREMENT) * LBP_CASH_INCREMENT;
 }
+
+// Today as "YYYY-MM-DD" for an <input type="date">. Built from local date
+// parts, not from toISOString, which converts to UTC first and so reports
+// yesterday or tomorrow either side of midnight depending on the offset.
+export function todayForDateInput(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

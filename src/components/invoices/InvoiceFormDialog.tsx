@@ -14,6 +14,7 @@ import {
   TextField,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
+import { todayForDateInput } from "@/utils/format";
 import ClientSearchField from "@/components/ui/ClientSearchField";
 import type { ClientSearchResult } from "@/hooks/useClientSearch";
 import type { InvoiceDTO } from "@/types/entities";
@@ -61,7 +62,11 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
   // A walk-in is an anonymous counter sale: no client, so no account, no
   // statement and nobody to chase for a balance.
   const [walkIn, setWalkIn] = useState(invoice ? invoice.isWalkIn : false);
-  const [dueDate, setDueDate] = useState(invoice?.dueDate ?? "");
+  // New invoices are due the day they are raised, which is what happens at a
+  // counter. Still editable for anything being billed on terms.
+  const [dueDate, setDueDate] = useState(
+    invoice?.dueDate ?? todayForDateInput(),
+  );
   const [discountPct, setDiscountPct] = useState(invoice?.discountPct ?? "0");
   const [taxPct, setTaxPct] = useState(invoice?.taxPct ?? "0");
   const [notes, setNotes] = useState(invoice?.notes ?? "");
@@ -79,7 +84,9 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
     try {
       const body = {
         clientId: walkIn || !client ? "" : String(client.clientId),
-        dueDate,
+        // A walk-in has no account to bill later, and the server refuses a due
+        // date on one, so the default must not be sent with it.
+        dueDate: walkIn ? "" : dueDate,
         discountPct,
         taxPct,
         notes,
@@ -135,14 +142,16 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
               showBalance
             />
           )}
-          <TextField
-            label="Due date"
-            type="date"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            fullWidth
-          />
+          {!walkIn && (
+            <TextField
+              label="Due date"
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+              fullWidth
+            />
+          )}
           <Stack direction="row" spacing={2}>
             <TextField
               label="Discount %"
