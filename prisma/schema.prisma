@@ -380,6 +380,10 @@ model PurchaseOrderLine {
   legacyId         Int?     @unique @map("legacy_id")
   orderId          Int      @map("order_id")
   itemId           Int      @map("item_id")
+  // Negative means returned to the supplier. The sign lives here and never on
+  // unitCost, so quantityOrdered * unitCost nets against the balance on its own.
+  // Enforced in the migration: non-zero, and quantityReceived must share its
+  // sign without exceeding it in magnitude.
   quantityOrdered  Decimal  @map("quantity_ordered") @db.Decimal(10, 2)
   quantityReceived Decimal  @default(0) @map("quantity_received") @db.Decimal(10, 2)
   unitCost         Decimal? @map("unit_cost") @db.Decimal(12, 2)

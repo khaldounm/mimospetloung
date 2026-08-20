@@ -718,20 +718,22 @@ export async function transform() {
     const item = itemId.get(num(d.ProductID));
     // Purchase lines require an inventory item; services are not stocked.
     if (!order || !item) continue;
-    // A handful of lines carry a negative quantity: goods returned to the
-    // supplier. The schema requires a positive order quantity, so they are
-    // counted and reported rather than forced through as a purchase.
+    // A negative quantity is stock returned to the supplier. These are imported
+    // as negative lines, not dropped: dropping them silently inflated what the
+    // clinic appeared to owe, because a return that never lands never reduces
+    // the balance. Counted separately so the run still reports them.
+    //
+    // Zero is still meaningless and is the only quantity skipped.
     const qty = num(d.Quantity);
-    if (qty <= 0) {
-      returnedLines++;
-      continue;
-    }
+    if (qty === 0) continue;
+    if (qty < 0) returnedLines++;
     polRows.push([
       num(d.InvoiceDetailID),
       order,
       item,
       qty,
       qty,
+      // Cost stays positive even on a return; the sign is carried by qty above.
       Math.max(0, money(d.Price)) || null,
     ]);
     const sup = supplierId.get(poSupplier.get(num(d.InvoiceID)) ?? -1);
@@ -757,7 +759,7 @@ export async function transform() {
     ],
   );
   report.push(
-    `purchase lines  ${polRows.length} (${returnedLines} supplier returns skipped)`,
+    `purchase lines  ${polRows.length} (${returnedLines} supplier returns)`,
   );
 
   // The product table never recorded a supplier (SupplierID is 0 on every row),
