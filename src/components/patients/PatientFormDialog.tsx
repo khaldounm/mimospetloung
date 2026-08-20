@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
-  Autocomplete,
   Button,
   Dialog,
   DialogActions,
@@ -16,19 +15,15 @@ import {
   TextField,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
+import ClientSearchField from "@/components/ui/ClientSearchField";
+import type { ClientSearchResult } from "@/hooks/useClientSearch";
 import { PATIENT_SEXES } from "@/types/enums";
-import type { ClientDTO, PatientDTO } from "@/types/entities";
-
-export interface ClientOption {
-  clientId: number;
-  label: string;
-}
+import type { PatientDTO } from "@/types/entities";
 
 interface Props {
   open: boolean;
   patient?: PatientDTO | null;
   fixedClientId?: number;
-  clientOptions?: ClientOption[];
   onClose: () => void;
   onSaved: () => void;
 }
@@ -53,30 +48,12 @@ type FormProps = Omit<Props, "open">;
 
 function PatientForm({ patient, fixedClientId, onClose, onSaved }: FormProps) {
   const editing = Boolean(patient);
-  // Owners are fetched when the dialog opens rather than shipped with every
-  // page load: the list is ~1,900 rows and most visits never open this form.
-  const [clientOptions, setClientOptions] = useState<ClientOption[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const data = await apiRequest<{ clients: ClientDTO[] }>("/api/clients");
-      if (cancelled) return;
-      setClientOptions(
-        data.clients.map((c) => ({
-          clientId: c.clientId,
-          label: `${c.firstName} ${c.lastName}`,
-        })),
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const [clientId, setClientId] = useState<number | null>(
-    patient?.clientId ?? fixedClientId ?? null,
-  );
+  // The owner is searched server-side as it is typed, rather than loaded as a
+  // list: /api/clients is paged at 25 out of ~1,900 clients, so a prefetched
+  // list could only ever offer the first page of the alphabet.
+  const [owner, setOwner] = useState<ClientSearchResult | null>(null);
+  const clientId =
+    owner?.clientId ?? patient?.clientId ?? fixedClientId ?? null;
   const [name, setName] = useState(patient?.name ?? "");
   const [species, setSpecies] = useState(patient?.species ?? "");
   const [breed, setBreed] = useState(patient?.breed ?? "");
@@ -139,12 +116,11 @@ function PatientForm({ patient, fixedClientId, onClose, onSaved }: FormProps) {
           {error && <Alert severity="error">{error}</Alert>}
 
           {showPicker && (
-            <Autocomplete
-              options={clientOptions}
-              getOptionLabel={(o) => o.label}
-              value={clientOptions.find((o) => o.clientId === clientId) ?? null}
-              onChange={(_e, v) => setClientId(v?.clientId ?? null)}
-              renderInput={(p) => <TextField {...p} label="Owner" required />}
+            <ClientSearchField
+              label="Owner"
+              value={owner}
+              onChange={setOwner}
+              required
             />
           )}
 

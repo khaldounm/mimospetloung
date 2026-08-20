@@ -67,3 +67,19 @@ export function formatDate(value: string | null | undefined): string {
     day: "numeric",
   });
 }
+
+// Account balance in words rather than as a signed number. Positive means the
+// client owes the clinic and negative means they are sitting in credit, which
+// nobody reads correctly off a bare "-60.00" at a busy counter.
+export function formatAccountBalance(
+  value: string | number | null | undefined,
+): {
+  text: string;
+  owes: boolean;
+} {
+  const n = typeof value === "string" ? Number(value) : (value ?? 0);
+  if (Number.isNaN(n) || n === 0)
+    return { text: "Account settled", owes: false };
+  if (n > 0) return { text: `Owes ${formatMoney(n)}`, owes: true };
+  return { text: `In credit ${formatMoney(Math.abs(n))}`, owes: false };
+}

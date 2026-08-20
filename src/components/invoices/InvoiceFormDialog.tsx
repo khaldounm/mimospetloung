@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   Button,
@@ -8,17 +8,13 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  MenuItem,
   Stack,
   TextField,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
-import type { ClientDTO, InvoiceDTO } from "@/types/entities";
-
-export interface ClientOption {
-  clientId: number;
-  label: string;
-}
+import ClientSearchField from "@/components/ui/ClientSearchField";
+import type { ClientSearchResult } from "@/hooks/useClientSearch";
+import type { InvoiceDTO } from "@/types/entities";
 
 interface Props {
   open: boolean;
@@ -48,33 +44,17 @@ type FormProps = Omit<Props, "open">;
 
 function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
   const editing = Boolean(invoice);
-  // Clients are fetched when the dialog opens rather than shipped with every
-  // page load: the list is ~1,900 rows and most visits never open this form.
-  const [clientOptions, setClientOptions] = useState<ClientOption[]>([]);
-  const [clientsLoading, setClientsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = await apiRequest<{ clients: ClientDTO[] }>("/api/clients");
-        if (cancelled) return;
-        setClientOptions(
-          data.clients.map((c) => ({
-            clientId: c.clientId,
-            label: `${c.firstName} ${c.lastName}`,
-          })),
-        );
-      } finally {
-        if (!cancelled) setClientsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  const [clientId, setClientId] = useState(
-    invoice ? String(invoice.clientId) : "",
+  // The client is searched server-side as it is typed. It used to be a select
+  // fed by an unparameterised /api/clients call, which returns page one of 25
+  // out of ~1,900 clients, so 98% of them could not be picked at all.
+  const [client, setClient] = useState<ClientSearchResult | null>(
+    invoice
+      ? {
+          clientId: invoice.clientId,
+          label: invoice.clientName,
+          phone: invoice.clientPhone,
+        }
+      : null,
   );
   const [dueDate, setDueDate] = useState(invoice?.dueDate ?? "");
   const [discountPct, setDiscountPct] = useState(invoice?.discountPct ?? "0");
@@ -88,7 +68,13 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
     setError(null);
     setSaving(true);
     try {
-      const body = { clientId, dueDate, discountPct, taxPct, notes };
+      const body = {
+        clientId: client ? String(client.clientId) : "",
+        dueDate,
+        discountPct,
+        taxPct,
+        notes,
+      };
       const data = editing
         ? await apiRequest<{ invoice: InvoiceDTO }>(
             `/api/invoices/${invoice!.invoiceId}`,
@@ -113,22 +99,13 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
-          <TextField
-            select
-            label="Client"
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
+          <ClientSearchField
+            value={client}
+            onChange={setClient}
             required
-            fullWidth
-            disabled={clientsLoading}
-            helperText={clientsLoading ? "Loading clients..." : undefined}
-          >
-            {clientOptions.map((c) => (
-              <MenuItem key={c.clientId} value={String(c.clientId)}>
-                {c.label}
-              </MenuItem>
-            ))}
-          </TextField>
+            autoFocus
+            showBalance
+          />
           <TextField
             label="Due date"
             type="date"
