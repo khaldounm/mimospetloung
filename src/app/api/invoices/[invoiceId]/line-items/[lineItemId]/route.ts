@@ -87,7 +87,7 @@ export async function DELETE(
     const session = await requirePermission("invoices:write");
     const { invoiceId, lineItemId } = await getIds(params);
 
-    await loadDraftLine(invoiceId, lineItemId);
+    const line = await loadDraftLine(invoiceId, lineItemId);
 
     const invoice = await prisma.$transaction(async (tx) => {
       await tx.invoiceLineItem.delete({ where: { lineItemId } });
@@ -98,11 +98,22 @@ export async function DELETE(
       });
     });
 
+    // Record what the line held, not just that one went. The row is hard
+    // deleted, so this payload is the only trace of what left the invoice, and
+    // scanning makes removals routine rather than rare.
     await writeAudit(session, {
       action: "delete",
       entity: "invoice_line_item",
       entityId: lineItemId,
-      changes: { invoiceId },
+      changes: {
+        invoiceId,
+        serviceId: line.serviceId,
+        itemId: line.itemId,
+        description: line.description,
+        quantity: line.quantity.toString(),
+        unitPrice: line.unitPrice.toString(),
+        lineTotal: line.lineTotal.toString(),
+      },
     });
 
     return NextResponse.json({ invoice: toInvoiceDTO(invoice!) });
