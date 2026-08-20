@@ -32,12 +32,24 @@ export async function POST(request: Request) {
     const session = await requirePermission("invoices:write");
     const data = await parseBody(request, invoiceCreateSchema);
 
-    // Validate the client exists and is not deleted.
-    const client = await prisma.client.findFirst({
-      where: { clientId: data.clientId, deletedAt: null },
-      select: { clientId: true },
-    });
-    if (!client) throw new ApiError(400, "Client not found");
+    // No client means a walk-in, which is a valid invoice with nobody attached.
+    // When one is given it still has to exist and not be deleted.
+    if (data.clientId !== undefined) {
+      const client = await prisma.client.findFirst({
+        where: { clientId: data.clientId, deletedAt: null },
+        select: { clientId: true },
+      });
+      if (!client) throw new ApiError(400, "Client not found");
+    }
+
+    // A walk-in cannot be chased for payment later, so a due date on one is
+    // meaningless and is refused rather than silently kept.
+    if (data.clientId === undefined && data.dueDate) {
+      throw new ApiError(
+        400,
+        "A walk-in has no account to bill later, so it cannot have a due date",
+      );
+    }
 
     if (data.bookingId !== undefined) {
       const booking = await prisma.booking.findUnique({
@@ -49,7 +61,7 @@ export async function POST(request: Request) {
 
     const invoice = await prisma.invoice.create({
       data: {
-        clientId: data.clientId,
+        clientId: data.clientId ?? null,
         bookingId: data.bookingId,
         dueDate: data.dueDate,
         ...(data.discountPct !== undefined

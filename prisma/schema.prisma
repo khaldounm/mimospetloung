@@ -78,6 +78,7 @@ model User {
   purchaseOrders        PurchaseOrder[]
   supplierPayments      SupplierPayment[]
   auditLogs             AuditLog[]
+  attendingInvoices     Invoice[]              @relation("InvoiceAttendingVet")
 
   @@index([roleId], map: "idx_users_role")
   @@map("users")
@@ -544,30 +545,43 @@ model Service {
 }
 
 model Invoice {
-  invoiceId   Int       @id @default(autoincrement()) @map("invoice_id")
+  invoiceId      Int       @id @default(autoincrement()) @map("invoice_id")
   // Primary key from the old Access system. See Client.legacyId.
   // See Client.needsReview.
-  needsReview Boolean   @default(false) @map("needs_review")
-  reviewNote  String?   @map("review_note") @db.Text
-  legacyId    Int?      @unique @map("legacy_id")
-  clientId    Int       @map("client_id")
-  bookingId   Int?      @map("booking_id")
-  status      String    @default("Draft") @db.VarChar(20)
-  subtotal    Decimal   @default(0) @db.Decimal(12, 2)
-  discountPct Decimal   @default(0) @map("discount_pct") @db.Decimal(5, 2)
-  taxPct      Decimal   @default(0) @map("tax_pct") @db.Decimal(5, 2)
-  taxAmount   Decimal   @default(0) @map("tax_amount") @db.Decimal(12, 2)
-  total       Decimal   @default(0) @db.Decimal(12, 2)
-  issuedAt    DateTime? @map("issued_at") @db.Timestamptz(6)
-  dueDate     DateTime? @map("due_date") @db.Date
-  notes       String?   @db.Text
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  needsReview    Boolean   @default(false) @map("needs_review")
+  reviewNote     String?   @map("review_note") @db.Text
+  legacyId       Int?      @unique @map("legacy_id")
+  // Null for a walk-in: an anonymous counter sale belongs to no account. Never
+  // point these at a placeholder client row, or every walk-in the clinic has
+  // ever made accumulates into one meaningless running balance.
+  clientId       Int?      @map("client_id")
+  bookingId      Int?      @map("booking_id")
+  status         String    @default("Draft") @db.VarChar(20)
+  subtotal       Decimal   @default(0) @db.Decimal(12, 2)
+  discountPct    Decimal   @default(0) @map("discount_pct") @db.Decimal(5, 2)
+  taxPct         Decimal   @default(0) @map("tax_pct") @db.Decimal(5, 2)
+  taxAmount      Decimal   @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  total          Decimal   @default(0) @db.Decimal(12, 2)
+  issuedAt       DateTime? @map("issued_at") @db.Timestamptz(6)
+  dueDate        DateTime? @map("due_date") @db.Date
+  // LBP per 1 USD, frozen when the invoice leaves Draft. USD stays the ledger
+  // currency; this is what the LBP figures on the printed copy were computed
+  // at, so reprinting an old receipt shows what the customer actually handed
+  // over rather than today's rate.
+  fxRate         Decimal?  @map("fx_rate") @db.Decimal(18, 6)
+  // Set while a vet is still adding to this invoice. Reception can see it and
+  // cannot issue over it without an explicit override.
+  attendingVetId Int?      @map("attending_vet_id")
+  vetHoldAt      DateTime? @map("vet_hold_at") @db.Timestamptz(6)
+  notes          String?   @db.Text
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  client    Client            @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
-  booking   Booking?          @relation(fields: [bookingId], references: [bookingId], onDelete: SetNull)
-  lineItems InvoiceLineItem[]
-  payments  Payment[]
+  client       Client?           @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  booking      Booking?          @relation(fields: [bookingId], references: [bookingId], onDelete: SetNull)
+  attendingVet User?             @relation("InvoiceAttendingVet", fields: [attendingVetId], references: [userId], onDelete: SetNull)
+  lineItems    InvoiceLineItem[]
+  payments     Payment[]
 
   @@index([clientId], map: "idx_invoices_client")
   @@index([status], map: "idx_invoices_status")
@@ -602,24 +616,33 @@ model InvoiceLineItem {
 }
 
 model Payment {
-  paymentId   Int      @id @default(autoincrement()) @map("payment_id")
+  paymentId      Int      @id @default(autoincrement()) @map("payment_id")
   // Primary key from the old Access system. See Client.legacyId.
   // See Client.needsReview.
-  needsReview Boolean  @default(false) @map("needs_review")
-  reviewNote  String?  @map("review_note") @db.Text
-  legacyId    Int?     @unique @map("legacy_id")
+  needsReview    Boolean  @default(false) @map("needs_review")
+  reviewNote     String?  @map("review_note") @db.Text
+  legacyId       Int?     @unique @map("legacy_id")
   // A payment belongs to the client's account. Applying it to a specific
   // invoice is optional, because clients routinely settle several visits with
   // one payment and the old system booked that against a single invoice number.
-  clientId    Int      @map("client_id")
-  invoiceId   Int?     @map("invoice_id")
-  amount      Decimal  @db.Decimal(12, 2)
-  method      String?  @db.VarChar(50)
-  reference   String?  @db.VarChar(100)
-  paidAt      DateTime @default(now()) @map("paid_at") @db.Timestamptz(6)
-  notes       String?  @db.Text
+  // Null on a walk-in settlement: there is no account for it to belong to.
+  clientId       Int?     @map("client_id")
+  invoiceId      Int?     @map("invoice_id")
+  // Always the USD equivalent: USD is the ledger currency, and this is what
+  // drives the invoice balance and the client's account.
+  amount         Decimal  @db.Decimal(12, 2)
+  // What was physically handed over, in the currency it was handed over in,
+  // and the rate used. Cash arrives as a mix of USD and LBP, and a drawer that
+  // only records USD equivalents can never be counted at close.
+  currency       String   @default("USD") @db.VarChar(3)
+  amountOriginal Decimal  @map("amount_original") @db.Decimal(16, 2)
+  fxRate         Decimal? @map("fx_rate") @db.Decimal(18, 6)
+  method         String?  @db.VarChar(50)
+  reference      String?  @db.VarChar(100)
+  paidAt         DateTime @default(now()) @map("paid_at") @db.Timestamptz(6)
+  notes          String?  @db.Text
 
-  client  Client   @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  client  Client?  @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
   invoice Invoice? @relation(fields: [invoiceId], references: [invoiceId], onDelete: Restrict)
 
   @@index([invoiceId], map: "idx_payments_invoice")
@@ -779,4 +802,16 @@ model ContactMessage {
   @@index([createdAt], map: "idx_contact_messages_created")
   @@index([status], map: "idx_contact_messages_status")
   @@map("contact_messages")
+}
+
+// Small key/value store for values an Admin has to change without a deploy.
+// Deliberately not a column per setting: these are read rarely, written rarely,
+// and every one of them is a string the app parses itself.
+model Setting {
+  key       String   @id @db.VarChar(100)
+  value     String   @db.Text
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedBy Int?     @map("updated_by")
+
+  @@map("settings")
 }

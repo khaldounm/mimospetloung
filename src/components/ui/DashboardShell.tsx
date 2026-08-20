@@ -41,6 +41,7 @@ import ShoppingCartIcon from "@mui/icons-material/ShoppingCart";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
+import SettingsIcon from "@mui/icons-material/Settings";
 import { NAV_MODULES, hasPermission } from "@/lib/permissions";
 import { useColorMode } from "./ThemeRegistry";
 import { navTokens } from "./theme";
@@ -99,6 +100,7 @@ const ICONS: Record<string, React.ReactNode> = {
   Handshake: <HandshakeIcon />,
   LocalShipping: <LocalShippingIcon />,
   ShoppingCart: <ShoppingCartIcon />,
+  Settings: <SettingsIcon />,
 };
 
 interface DashboardShellProps {

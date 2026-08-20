@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { optionalString, optionalDate } from "./common";
-import { PAYMENT_METHODS } from "@/types/enums";
+import { CURRENCIES, PAYMENT_METHODS } from "@/types/enums";
 
 // Optional numeric id from a form: "" / null -> undefined, else positive int.
 const optionalId = z.preprocess(
@@ -22,7 +22,9 @@ const optionalMoney = z.preprocess(
 // --- Invoice (draft creation + draft edits) ---
 
 export const invoiceCreateSchema = z.object({
-  clientId: z.coerce.number().int().positive(),
+  // Optional: an invoice with no client is a walk-in, an anonymous counter
+  // sale that belongs to no account.
+  clientId: optionalId,
   bookingId: optionalId,
   dueDate: optionalDate,
   discountPct: optionalPct,
@@ -47,6 +49,14 @@ export const invoiceUpdateSchema = z
 // Void are reachable via the API; Partial/Paid are derived from payments.
 export const invoiceTransitionSchema = z.object({
   status: z.enum(["Issued", "Void"]),
+  // Issue despite a vet still holding the invoice. Deliberate, and audited.
+  overrideVetHold: z.coerce.boolean().optional(),
+});
+
+// Put the invoice on hold while a vet works on it, or clear the hold.
+export const vetHoldSchema = z.object({
+  hold: z.coerce.boolean(),
+  attendingVetId: optionalId,
 });
 
 // --- Line items (draft only) ---
@@ -104,8 +114,17 @@ const optionalMethod = z.preprocess(
   z.enum(PAYMENT_METHODS).optional(),
 );
 
+// One settlement, which can span currencies: cash comes over the counter as
+// some dollars and the rest in lira. Each leg is the amount APPLIED to the
+// invoice in that currency, not the cash handed over, since change is given
+// back at the counter and never reaches the ledger.
+const tenderSchema = z.object({
+  currency: z.enum(CURRENCIES),
+  amount: z.coerce.number().nonnegative().max(999_999_999_999),
+});
+
 export const paymentCreateSchema = z.object({
-  amount: z.coerce.number().positive().max(99_999_999.99),
+  tenders: z.array(tenderSchema).min(1, "Enter an amount"),
   method: optionalMethod,
   reference: optionalString(100),
   paidAt: optionalDate,
@@ -119,3 +138,4 @@ export type LineItemCreateInput = z.infer<typeof lineItemCreateSchema>;
 export type LineItemScanInput = z.infer<typeof lineItemScanSchema>;
 export type LineItemUpdateInput = z.infer<typeof lineItemUpdateSchema>;
 export type PaymentCreateInput = z.infer<typeof paymentCreateSchema>;
+export type VetHoldInput = z.infer<typeof vetHoldSchema>;

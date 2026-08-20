@@ -34,11 +34,18 @@ import PrintIcon from "@mui/icons-material/Print";
 import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
+import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
 import { apiRequest } from "@/utils/api-client";
-import { formatDate, formatDateTime, formatMoney } from "@/utils/format";
+import {
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatSecondaryMoney,
+} from "@/utils/format";
 import { printInvoiceReceipt } from "@/utils/print-receipt";
 import { downloadReceiptImage } from "@/utils/receipt-image";
 import { INVOICE_STATUS_COLOR } from "@/constants/invoice";
+import { SECONDARY_CURRENCY } from "@/constants/clinic";
 import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
 import InvoiceFormDialog from "./InvoiceFormDialog";
 import LineItemDialog, {
@@ -54,6 +61,9 @@ interface Props {
   itemOptions: ItemLineOption[];
   canWrite: boolean;
   canPay: boolean;
+  // LBP per 1 USD. The invoice's own frozen rate once issued, the current
+  // clinic setting while it is still a draft.
+  fxRate: number;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -71,6 +81,7 @@ export default function InvoiceDetail({
   itemOptions,
   canWrite,
   canPay,
+  fxRate,
 }: Props) {
   const [invoice, setInvoice] = useState(initialInvoice);
   const [addLineOpen, setAddLineOpen] = useState(false);
@@ -86,6 +97,7 @@ export default function InvoiceDetail({
   const [waBusy, setWaBusy] = useState(false);
 
   const isDraft = invoice.status === "Draft";
+  const onVetHold = invoice.vetHoldAt != null;
   const paid = Number(invoice.amountPaid) > 0;
   const balanceDue = Number(invoice.balance);
 
@@ -158,19 +170,42 @@ export default function InvoiceDetail({
     }
   }
 
-  async function transition(status: "Issued" | "Void") {
+  async function transition(
+    status: "Issued" | "Void",
+    overrideVetHold = false,
+  ) {
     setBusy(true);
     setError(null);
     try {
       const data = await apiRequest<{ invoice: InvoiceDTO }>(
         `/api/invoices/${invoice.invoiceId}`,
-        { method: "PATCH", body: { status } },
+        { method: "PATCH", body: { status, overrideVetHold } },
       );
       applyInvoice(data.invoice);
       setConfirmIssue(false);
       setConfirmVoid(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The hold is what reception sees before they close a sale the vet has not
+  // finished adding to.
+  async function setVetHold(hold: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await apiRequest<{ invoice: InvoiceDTO }>(
+        `/api/invoices/${invoice.invoiceId}/vet-hold`,
+        { method: "POST", body: { hold } },
+      );
+      applyInvoice(data.invoice);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not change the hold",
+      );
     } finally {
       setBusy(false);
     }
@@ -216,9 +251,13 @@ export default function InvoiceDetail({
           </Stack>
           <Typography color="text.secondary">
             Client:{" "}
-            <Link href={`/clients/${invoice.clientId}`}>
-              {invoice.clientName}
-            </Link>
+            {invoice.clientId != null ? (
+              <Link href={`/clients/${invoice.clientId}`}>
+                {invoice.clientName}
+              </Link>
+            ) : (
+              invoice.clientName
+            )}
           </Typography>
           {invoice.issuedAt && (
             <Typography variant="body2" color="text.secondary">
@@ -273,9 +312,24 @@ export default function InvoiceDetail({
               Edit
             </Button>
           )}
+          {canWrite && isDraft && !onVetHold && (
+            <Button
+              variant="outlined"
+              color="warning"
+              startIcon={<MedicalServicesIcon />}
+              onClick={() => void setVetHold(true)}
+              disabled={busy}
+            >
+              Hold for vet
+            </Button>
+          )}
           {canIssue && (
-            <Button variant="contained" onClick={() => setConfirmIssue(true)}>
-              Issue
+            <Button
+              variant="contained"
+              color={onVetHold ? "warning" : "primary"}
+              onClick={() => setConfirmIssue(true)}
+            >
+              {onVetHold ? "Issue anyway" : "Issue"}
             </Button>
           )}
           {canRecordPayment && (
@@ -300,6 +354,42 @@ export default function InvoiceDetail({
           )}
         </Stack>
       </Stack>
+
+      {onVetHold && (
+        <Alert
+          severity="warning"
+          icon={<MedicalServicesIcon />}
+          sx={{ mb: 2 }}
+          action={
+            canWrite ? (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => void setVetHold(false)}
+                disabled={busy}
+              >
+                Done, release it
+              </Button>
+            ) : undefined
+          }
+        >
+          {invoice.attendingVetName
+            ? `${invoice.attendingVetName} is still working on this invoice`
+            : "A vet is still working on this invoice"}
+          {invoice.vetHoldAt
+            ? ` (since ${formatDateTime(invoice.vetHoldAt)})`
+            : ""}
+          . More lines may still be coming.
+        </Alert>
+      )}
+
+      {invoice.isWalkIn && !isDraft && balanceDue > 0 && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          This is a walk-in with {formatMoney(invoice.balance)} outstanding.
+          There is no account behind it, so nobody can be billed or chased for
+          this later.
+        </Alert>
+      )}
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -416,13 +506,14 @@ export default function InvoiceDetail({
                   <TableCell>Date</TableCell>
                   <TableCell>Method</TableCell>
                   <TableCell>Reference</TableCell>
+                  <TableCell align="right">Tendered</TableCell>
                   <TableCell align="right">Amount</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {invoice.payments.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} align="center">
+                    <TableCell colSpan={5} align="center">
                       <Typography color="text.secondary" sx={{ py: 2 }}>
                         No payments recorded.
                       </Typography>
@@ -434,6 +525,16 @@ export default function InvoiceDetail({
                       <TableCell>{formatDateTime(p.paidAt)}</TableCell>
                       <TableCell>{p.method ?? "-"}</TableCell>
                       <TableCell>{p.reference ?? "-"}</TableCell>
+                      {/* What was physically handed over, in the currency it
+                          came in. The Amount column is always its USD value,
+                          which is what settled the invoice. */}
+                      <TableCell align="right">
+                        {p.currency === "USD"
+                          ? formatMoney(p.amountOriginal)
+                          : `${SECONDARY_CURRENCY.symbol} ${Number(
+                              p.amountOriginal,
+                            ).toLocaleString("en-US")}`}
+                      </TableCell>
                       <TableCell align="right">
                         {formatMoney(p.amount)}
                       </TableCell>
@@ -467,6 +568,13 @@ export default function InvoiceDetail({
                   {formatMoney(invoice.total)}
                 </Typography>
               </Stack>
+              {/* USD is the ledger currency; the lira figure is a reading of
+                  it at the invoice's rate, never a stored total. */}
+              <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
+                <Typography variant="body2" color="text.secondary">
+                  {formatSecondaryMoney(invoice.total, fxRate)}
+                </Typography>
+              </Stack>
               <Row label="Paid" value={formatMoney(invoice.amountPaid)} />
               <Stack direction="row" sx={{ justifyContent: "space-between" }}>
                 <Typography sx={{ fontWeight: "bold" }}>Balance</Typography>
@@ -474,6 +582,15 @@ export default function InvoiceDetail({
                   {formatMoney(invoice.balance)}
                 </Typography>
               </Stack>
+              <Stack direction="row" sx={{ justifyContent: "flex-end" }}>
+                <Typography variant="body2" color="text.secondary">
+                  {formatSecondaryMoney(invoice.balance, fxRate)}
+                </Typography>
+              </Stack>
+              <Row
+                label="Rate used"
+                value={`${fxRate.toLocaleString("en-US")} / $1`}
+              />
               {invoice.dueDate && (
                 <Row label="Due date" value={formatDate(invoice.dueDate)} />
               )}
@@ -517,6 +634,7 @@ export default function InvoiceDetail({
         open={paymentOpen}
         invoiceId={invoice.invoiceId}
         balance={invoice.balance}
+        fxRate={fxRate}
         onClose={() => setPaymentOpen(false)}
         onSaved={applyInvoice}
       />
@@ -528,6 +646,12 @@ export default function InvoiceDetail({
             Issuing freezes the totals and line items. Any inventory lines will
             decrement stock. This cannot be undone except by voiding.
           </DialogContentText>
+          {onVetHold && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              {invoice.attendingVetName ?? "A vet"} still has this invoice on
+              hold. Issuing now goes over that, and the override is recorded.
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmIssue(false)} disabled={busy}>
@@ -535,10 +659,11 @@ export default function InvoiceDetail({
           </Button>
           <Button
             variant="contained"
-            onClick={() => void transition("Issued")}
+            onClick={() => void transition("Issued", onVetHold)}
             disabled={busy}
+            color={onVetHold ? "warning" : "primary"}
           >
-            {busy ? "Issuing…" : "Issue"}
+            {busy ? "Issuing…" : onVetHold ? "Issue anyway" : "Issue"}
           </Button>
         </DialogActions>
       </Dialog>

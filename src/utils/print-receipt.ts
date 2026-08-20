@@ -1,6 +1,6 @@
-import { CLINIC } from "@/constants/clinic";
+import { CLINIC, SECONDARY_CURRENCY } from "@/constants/clinic";
 import { RECEIPT_WIDTH_MM } from "@/constants/invoice";
-import { formatMoney } from "@/utils/format";
+import { formatMoney, formatSecondaryMoney } from "@/utils/format";
 import type { InvoiceDTO } from "@/types/entities";
 
 // Escapes a value for safe interpolation into the receipt HTML.
@@ -135,6 +135,17 @@ function receiptHtml(invoice: InvoiceDTO): string {
   }
   ${hasTax ? totalsRow(`Tax (${invoice.taxPct}%)`, formatMoney(invoice.taxAmount)) : ""}
   ${totalsRow("TOTAL", formatMoney(invoice.total), true)}
+  ${
+    /* Lira at the rate frozen when the invoice was issued, so a reprint shows
+       what the customer actually handed over. Drafts have no rate yet. */
+    invoice.fxRate
+      ? totalsRow(
+          `TOTAL ${SECONDARY_CURRENCY.code}`,
+          formatSecondaryMoney(invoice.total, Number(invoice.fxRate)),
+          true,
+        )
+      : ""
+  }
   ${totalsRow("Paid", formatMoney(invoice.amountPaid))}
   ${totalsRow("Balance due", formatMoney(invoice.balance), true)}
 

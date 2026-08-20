@@ -20,11 +20,29 @@ export const CLINIC = {
   taxId: "",
 } as const;
 
-// ISO 4217 currency code + symbol used on invoices.
+// ISO 4217 currency code + symbol used on invoices. USD is the ledger
+// currency: every stored amount, balance and total is in it.
 export const CURRENCY = {
   code: "USD",
   symbol: "$",
 } as const;
+
+// Shown alongside USD so a customer paying in lira can read the invoice, and
+// tendered at the counter. Never stored as a total; always derived from a USD
+// amount and a rate. LBP has no circulating minor unit, so it is whole numbers
+// only.
+export const SECONDARY_CURRENCY = {
+  code: "LBP",
+  symbol: "LL",
+} as const;
+
+// Smallest note in circulation. Change owed in lira is rounded to a multiple of
+// this, because anything finer cannot physically be handed back.
+export const LBP_CASH_INCREMENT = 5_000;
+
+// Starting point only, seeded into the settings table by the migration that
+// added it. The live value is Admin-editable; see @/lib/settings.
+export const DEFAULT_FX_USD_LBP = 89_500;
 
 // Default payment terms / footer note printed at the bottom of the invoice.
 export const INVOICE_TERMS =

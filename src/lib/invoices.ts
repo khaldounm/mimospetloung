@@ -13,6 +13,10 @@ import type {
   ServiceDTO,
 } from "@/types/entities";
 import type { InvoiceStatus, PaymentMethod } from "@/types/enums";
+import { CURRENCY } from "@/constants/clinic";
+
+// What an invoice with no client is called everywhere it is shown.
+export const WALK_IN_NAME = "Walk-in";
 
 const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
 const HUNDRED = D(100);
@@ -51,6 +55,9 @@ type PaymentRow = {
   // to a specific invoice.
   invoiceId: number | null;
   amount: Prisma.Decimal;
+  currency: string;
+  amountOriginal: Prisma.Decimal;
+  fxRate: Prisma.Decimal | null;
   method: string | null;
   reference: string | null;
   paidAt: Date;
@@ -61,7 +68,7 @@ type InvoiceRow = {
   needsReview: boolean;
   reviewNote: string | null;
   invoiceId: number;
-  clientId: number;
+  clientId: number | null;
   bookingId: number | null;
   status: string;
   subtotal: Prisma.Decimal;
@@ -71,9 +78,13 @@ type InvoiceRow = {
   total: Prisma.Decimal;
   issuedAt: Date | null;
   dueDate: Date | null;
+  fxRate: Prisma.Decimal | null;
+  vetHoldAt: Date | null;
+  attendingVetId: number | null;
   notes: string | null;
   createdAt: Date;
-  client: { firstName: string; lastName: string; phone: string | null };
+  client: { firstName: string; lastName: string; phone: string | null } | null;
+  attendingVet: { firstName: string; lastName: string } | null;
   lineItems: LineItemRow[];
   payments: PaymentRow[];
 };
@@ -84,13 +95,14 @@ type InvoiceListRow = {
   total: Prisma.Decimal;
   issuedAt: Date | null;
   dueDate: Date | null;
-  client: { firstName: string; lastName: string };
+  client: { firstName: string; lastName: string } | null;
   payments: { amount: Prisma.Decimal }[];
 };
 
 // Includes that produce the rows above.
 export const invoiceInclude = {
   client: { select: { firstName: true, lastName: true, phone: true } },
+  attendingVet: { select: { firstName: true, lastName: true } },
   lineItems: { orderBy: { lineItemId: "asc" } },
   payments: { orderBy: { paidAt: "asc" } },
 } as const;
@@ -172,6 +184,9 @@ export function toPaymentDTO(p: PaymentRow): PaymentDTO {
     paymentId: p.paymentId,
     invoiceId: p.invoiceId,
     amount: p.amount.toFixed(2),
+    currency: p.currency,
+    amountOriginal: p.amountOriginal.toFixed(2),
+    fxRate: p.fxRate ? p.fxRate.toString() : null,
     method: (p.method as PaymentMethod | null) ?? null,
     reference: p.reference,
     paidAt: p.paidAt.toISOString(),
@@ -186,8 +201,13 @@ export function toInvoiceDTO(i: InvoiceRow): InvoiceDTO {
     invoiceId: i.invoiceId,
     number: formatInvoiceNumber(i.invoiceId),
     clientId: i.clientId,
-    clientName: `${i.client.firstName} ${i.client.lastName}`,
-    clientPhone: i.client.phone,
+    // An invoice with no client is a walk-in. Named here rather than at every
+    // call site so the PDF, the receipt and the list all say the same thing.
+    clientName: i.client
+      ? `${i.client.firstName} ${i.client.lastName}`
+      : WALK_IN_NAME,
+    clientPhone: i.client?.phone ?? null,
+    isWalkIn: i.clientId == null,
     bookingId: i.bookingId,
     status: i.status as InvoiceStatus,
     subtotal: i.subtotal.toFixed(2),
@@ -199,6 +219,12 @@ export function toInvoiceDTO(i: InvoiceRow): InvoiceDTO {
     balance: balance.toFixed(2),
     issuedAt: i.issuedAt ? i.issuedAt.toISOString() : null,
     dueDate: toDateOnly(i.dueDate),
+    fxRate: i.fxRate ? i.fxRate.toString() : null,
+    vetHoldAt: i.vetHoldAt ? i.vetHoldAt.toISOString() : null,
+    attendingVetId: i.attendingVetId,
+    attendingVetName: i.attendingVet
+      ? `${i.attendingVet.firstName} ${i.attendingVet.lastName}`
+      : null,
     notes: i.notes,
     createdAt: i.createdAt.toISOString(),
     needsReview: i.needsReview,
@@ -241,8 +267,9 @@ type ListRow = {
   amount_paid: Prisma.Decimal;
   issued_at: Date | null;
   due_date: Date | null;
-  first_name: string;
-  last_name: string;
+  // Null on a walk-in, which has no client row to join to.
+  first_name: string | null;
+  last_name: string | null;
   total_count: bigint;
 };
 
@@ -274,7 +301,9 @@ export async function listInvoices(
            COALESCE(p.paid, 0) AS amount_paid,
            COUNT(*) OVER () AS total_count
     FROM invoices i
-    JOIN clients c ON c.client_id = i.client_id
+    -- LEFT JOIN, not JOIN: a walk-in invoice has no client row, and an inner
+    -- join would silently drop every anonymous sale out of the list.
+    LEFT JOIN clients c ON c.client_id = i.client_id
     LEFT JOIN LATERAL (
       SELECT SUM(amount) AS paid FROM payments WHERE invoice_id = i.invoice_id
     ) p ON TRUE
@@ -282,7 +311,8 @@ export async function listInvoices(
       AND (${clientId}::int IS NULL OR i.client_id = ${clientId})
       AND (
         ${search}::text IS NULL
-        OR lower(c.first_name || ' ' || c.last_name) LIKE ${search}
+        OR lower(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, ''))
+             LIKE ${search}
         OR (${searchId || null}::text IS NOT NULL
             AND i.invoice_id::text = ${searchId || null})
       )
@@ -297,7 +327,10 @@ export async function listInvoices(
       return {
         invoiceId: r.invoice_id,
         number: formatInvoiceNumber(r.invoice_id),
-        clientName: `${r.first_name} ${r.last_name}`,
+        clientName:
+          r.first_name == null && r.last_name == null
+            ? WALK_IN_NAME
+            : `${r.first_name} ${r.last_name}`,
         status: r.status as InvoiceStatus,
         total: total.toFixed(2),
         amountPaid: paid.toFixed(2),
@@ -319,7 +352,9 @@ export function toInvoiceListItemDTO(i: InvoiceListRow): InvoiceListItemDTO {
   return {
     invoiceId: i.invoiceId,
     number: formatInvoiceNumber(i.invoiceId),
-    clientName: `${i.client.firstName} ${i.client.lastName}`,
+    clientName: i.client
+      ? `${i.client.firstName} ${i.client.lastName}`
+      : WALK_IN_NAME,
     status: i.status as InvoiceStatus,
     total: i.total.toFixed(2),
     amountPaid: amountPaid.toFixed(2),
@@ -376,6 +411,12 @@ export async function recomputeInvoiceTotals(
 export async function issueInvoice(
   invoiceId: number,
   performedBy: number | null,
+  // LBP per 1 USD at the moment of issue, frozen onto the invoice.
+  fxRate: number,
+  // Issuing over a vet hold is deliberate and has to be asked for. The hold is
+  // not an absolute block: if the vet forgets to clear it the customer is stood
+  // at the counter, so a manager can go over it and the override is audited.
+  overrideVetHold = false,
 ) {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -403,6 +444,12 @@ export async function issueInvoice(
       }
       if (invoice.lineItems.length === 0) {
         throw new ApiError(400, "Add at least one line item before issuing");
+      }
+      if (invoice.vetHoldAt != null && !overrideVetHold) {
+        throw new ApiError(
+          409,
+          "A vet is still working on this invoice. Clear the hold, or issue it anyway if you have the authority.",
+        );
       }
 
       for (const line of invoice.lineItems) {
@@ -468,9 +515,27 @@ export async function issueInvoice(
 
       await recomputeInvoiceTotals(tx, invoiceId);
 
+      // Raise what the client owes. Without this the account balance only ever
+      // fell (payments decrement it), so an unpaid invoice never showed as due
+      // and paying one pushed the client into phantom credit. A walk-in has no
+      // account for it to land on.
+      if (invoice.clientId != null) {
+        await tx.client.update({
+          where: { clientId: invoice.clientId },
+          data: { accountBalance: { increment: invoice.total } },
+        });
+      }
+
       return tx.invoice.update({
         where: { invoiceId },
-        data: { status: "Issued", issuedAt: new Date() },
+        data: {
+          status: "Issued",
+          issuedAt: new Date(),
+          // Freeze the rate the printed LBP figures were computed at, so
+          // reprinting this invoice later shows what the customer actually
+          // handed over rather than today's rate.
+          fxRate,
+        },
         include: invoiceInclude,
       });
     });
@@ -566,6 +631,15 @@ export async function voidInvoice(
       }
     }
 
+    // Voiding an issued invoice takes back what issuing added. Drafts never
+    // accrued, and an invoice with payments cannot reach here at all.
+    if (invoice.status !== "Draft" && invoice.clientId != null) {
+      await tx.client.update({
+        where: { clientId: invoice.clientId },
+        data: { accountBalance: { decrement: invoice.total } },
+      });
+    }
+
     return tx.invoice.update({
       where: { invoiceId },
       data: { status: "Void" },
@@ -576,10 +650,19 @@ export async function voidInvoice(
 
 // Record a payment and derive the new status. Blocks overpayment and payments
 // on non-issued invoices.
+export interface Tender {
+  currency: string;
+  // The amount applied to the invoice, in that currency. Not the cash handed
+  // over: change is given back at the counter and never reaches the ledger.
+  amount: number;
+}
+
 export async function recordPayment(
   invoiceId: number,
   data: {
-    amount: number;
+    tenders: Tender[];
+    // LBP per 1 USD, used to convert the lira legs.
+    fxRate: number;
     method?: PaymentMethod;
     reference?: string;
     paidAt?: Date;
@@ -601,7 +684,37 @@ export async function recordPayment(
 
     const alreadyPaid = sumPaid(invoice.payments);
     const balance = invoice.total.minus(alreadyPaid);
-    const amount = D(data.amount).toDecimalPlaces(2);
+
+    // Cash arrives as a mix: some dollars, the rest in lira. Each currency is
+    // stored as its own row carrying what was handed over and the rate used, so
+    // the drawer can be counted at close, while `amount` stays the USD
+    // equivalent that settles the invoice.
+    const fxRate = D(data.fxRate);
+    if (fxRate.lte(0)) throw new ApiError(400, "Invalid exchange rate");
+
+    const legs = data.tenders
+      .filter((t) => t.amount > 0)
+      .map((t) => {
+        const original = D(t.amount).toDecimalPlaces(2);
+        const usd =
+          t.currency === CURRENCY.code
+            ? original
+            : original.dividedBy(fxRate).toDecimalPlaces(2);
+        return { currency: t.currency, original, usd };
+      });
+    if (legs.length === 0) throw new ApiError(400, "Enter an amount");
+
+    let amount = legs.reduce((sum, l) => sum.plus(l.usd), D(0));
+
+    // Converting lira to dollars rounds, so a settlement meant to clear the
+    // balance exactly can land a cent over it. Absorb that on the last leg
+    // rather than rejecting a payment the counter got right.
+    const overshoot = amount.minus(balance);
+    if (overshoot.gt(0) && overshoot.lte(D("0.01"))) {
+      const last = legs[legs.length - 1]!;
+      last.usd = last.usd.minus(overshoot);
+      amount = balance;
+    }
     if (amount.gt(balance)) {
       throw new ApiError(
         400,
@@ -609,19 +722,29 @@ export async function recordPayment(
       );
     }
 
-    const payment = await tx.payment.create({
-      data: {
-        // A payment always belongs to the client's account; the invoice link
-        // records which visit it was taken against.
-        clientId: invoice.clientId,
-        invoiceId,
-        amount,
-        method: data.method ?? null,
-        reference: data.reference,
-        paidAt: data.paidAt ?? new Date(),
-        notes: data.notes,
-      },
-    });
+    const paidAt = data.paidAt ?? new Date();
+    const payments = [];
+    for (const leg of legs) {
+      payments.push(
+        await tx.payment.create({
+          data: {
+            // A payment belongs to the client's account; the invoice link
+            // records which visit it was taken against. Null for a walk-in,
+            // which has no account.
+            clientId: invoice.clientId,
+            invoiceId,
+            amount: leg.usd,
+            currency: leg.currency,
+            amountOriginal: leg.original,
+            fxRate: leg.currency === CURRENCY.code ? null : fxRate,
+            method: data.method ?? null,
+            reference: data.reference,
+            paidAt,
+            notes: data.notes,
+          },
+        }),
+      );
+    }
 
     const newPaid = alreadyPaid.plus(amount);
     const status: InvoiceStatus = newPaid.gte(invoice.total)
@@ -632,15 +755,17 @@ export async function recordPayment(
     // Keep the client's running account balance in step: taking money in
     // reduces what they owe. The balance can go negative, which is the client
     // sitting in credit.
-    await tx.client.update({
-      where: { clientId: invoice.clientId },
-      data: { accountBalance: { decrement: amount } },
-    });
+    if (invoice.clientId != null) {
+      await tx.client.update({
+        where: { clientId: invoice.clientId },
+        data: { accountBalance: { decrement: amount } },
+      });
+    }
 
     const updated = await tx.invoice.findUnique({
       where: { invoiceId },
       include: invoiceInclude,
     });
-    return { invoice: updated!, payment };
+    return { invoice: updated!, payments };
   });
 }

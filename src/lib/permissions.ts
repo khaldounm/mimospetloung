@@ -127,6 +127,12 @@ export const NAV_MODULES: NavModule[] = [
     icon: "History",
     permission: "audit:read",
   },
+  {
+    href: "/settings",
+    label: "Settings",
+    icon: "Settings",
+    permission: "users:write",
+  },
 ];
 
 // Maps a request path prefix to the permission required to access it.
@@ -159,6 +165,10 @@ const ROUTE_RULES: { prefix: string; permission: string }[] = [
   // which is what makes the page and its API unreachable when the flag is off.
   { prefix: "/messages", permission: "messages:read" },
   { prefix: "/api/messages", permission: "messages:read" },
+  // Clinic settings (the exchange rate) are administrative, so they ride on
+  // the same permission as user management rather than adding a new one.
+  { prefix: "/settings", permission: "users:write" },
+  { prefix: "/api/settings", permission: "users:write" },
   { prefix: "/users", permission: "users:read" },
   { prefix: "/api/users", permission: "users:read" },
   { prefix: "/audit", permission: "audit:read" },

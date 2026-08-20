@@ -8,8 +8,13 @@ import {
   Text,
   View,
 } from "@react-pdf/renderer";
-import { CLINIC, INVOICE_TERMS } from "@/constants/clinic";
-import { formatDate, formatDateTime, formatMoney } from "@/utils/format";
+import { CLINIC, INVOICE_TERMS, SECONDARY_CURRENCY } from "@/constants/clinic";
+import {
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatSecondaryMoney,
+} from "@/utils/format";
 import type { InvoiceDTO } from "@/types/entities";
 
 const COLORS = {
@@ -150,6 +155,7 @@ export default function InvoicePdfDocument({
   // (a root-relative path) only resolves in the client.
   logoSrc?: string;
 }) {
+  const fxRate = invoice.fxRate ? Number(invoice.fxRate) : null;
   const discountAmount =
     (Number(invoice.subtotal) * Number(invoice.discountPct)) / 100;
   const hasDiscount = Number(invoice.discountPct) > 0;
@@ -228,7 +234,9 @@ export default function InvoicePdfDocument({
             <View style={styles.billTo}>
               <Text style={styles.sectionLabel}>Bill to</Text>
               <Text style={styles.bold}>{invoice.clientName}</Text>
-              <Text style={styles.muted}>Client #{invoice.clientId}</Text>
+              {invoice.clientId != null ? (
+                <Text style={styles.muted}>Client #{invoice.clientId}</Text>
+              ) : null}
             </View>
           </View>
         </View>
@@ -279,6 +287,19 @@ export default function InvoicePdfDocument({
                 {formatMoney(invoice.total)}
               </Text>
             </View>
+            {/* The lira figure is shown at the rate frozen when this invoice
+                was issued, so a reprint matches what was handed over. Drafts
+                have no rate yet and print in dollars only. */}
+            {fxRate != null ? (
+              <View style={styles.totalsRow}>
+                <Text style={styles.muted}>
+                  {SECONDARY_CURRENCY.code} at {fxRate.toLocaleString("en-US")}
+                </Text>
+                <Text style={styles.muted}>
+                  {formatSecondaryMoney(invoice.total, fxRate)}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.totalsRow}>
               <Text style={styles.muted}>Amount paid</Text>
               <Text>{formatMoney(invoice.amountPaid)}</Text>
@@ -287,6 +308,14 @@ export default function InvoicePdfDocument({
               <Text>Balance due</Text>
               <Text>{formatMoney(invoice.balance)}</Text>
             </View>
+            {fxRate != null && Number(invoice.balance) > 0 ? (
+              <View style={styles.totalsRow}>
+                <Text style={styles.muted}>{SECONDARY_CURRENCY.code}</Text>
+                <Text style={styles.muted}>
+                  {formatSecondaryMoney(invoice.balance, fxRate)}
+                </Text>
+              </View>
+            ) : null}
           </View>
         </View>
 

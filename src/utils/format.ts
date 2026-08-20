@@ -1,4 +1,8 @@
-import { CURRENCY } from "@/constants/clinic";
+import {
+  CURRENCY,
+  LBP_CASH_INCREMENT,
+  SECONDARY_CURRENCY,
+} from "@/constants/clinic";
 
 // Date-only column (@db.Date) -> "YYYY-MM-DD". Prisma returns these as a Date at
 // UTC midnight, so slicing the ISO string avoids timezone drift.
@@ -82,4 +86,27 @@ export function formatAccountBalance(
     return { text: "Account settled", owes: false };
   if (n > 0) return { text: `Owes ${formatMoney(n)}`, owes: true };
   return { text: `In credit ${formatMoney(Math.abs(n))}`, owes: false };
+}
+
+// A USD amount shown in lira, e.g. "LL 8,950,000". LBP has no circulating
+// minor unit, so it is always whole numbers. Derived, never stored: the ledger
+// is USD and this is a reading of it at a given rate.
+export function formatSecondaryMoney(
+  value: string | number | null | undefined,
+  fxRate: number,
+): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const n = typeof value === "string" ? Number(value) : value;
+  if (Number.isNaN(n) || !Number.isFinite(fxRate) || fxRate <= 0) return "-";
+  const lbp = Math.round(n * fxRate);
+  return `${SECONDARY_CURRENCY.symbol} ${lbp.toLocaleString("en-US")}`;
+}
+
+// Lira change rounded to something that can physically be handed back: the
+// smallest note in circulation is 5,000, so anything finer is a number on a
+// screen and nothing else. Rounded to the nearest, not down, and the exact
+// figure is shown next to it so the rounding is never hidden.
+export function roundLbpCash(amount: number): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return Math.round(amount / LBP_CASH_INCREMENT) * LBP_CASH_INCREMENT;
 }

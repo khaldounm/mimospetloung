@@ -4,6 +4,8 @@ import { useState } from "react";
 import {
   Alert,
   Button,
+  FormControlLabel,
+  Switch,
   Dialog,
   DialogActions,
   DialogContent,
@@ -48,7 +50,7 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
   // fed by an unparameterised /api/clients call, which returns page one of 25
   // out of ~1,900 clients, so 98% of them could not be picked at all.
   const [client, setClient] = useState<ClientSearchResult | null>(
-    invoice
+    invoice && invoice.clientId != null
       ? {
           clientId: invoice.clientId,
           label: invoice.clientName,
@@ -56,6 +58,9 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
         }
       : null,
   );
+  // A walk-in is an anonymous counter sale: no client, so no account, no
+  // statement and nobody to chase for a balance.
+  const [walkIn, setWalkIn] = useState(invoice ? invoice.isWalkIn : false);
   const [dueDate, setDueDate] = useState(invoice?.dueDate ?? "");
   const [discountPct, setDiscountPct] = useState(invoice?.discountPct ?? "0");
   const [taxPct, setTaxPct] = useState(invoice?.taxPct ?? "0");
@@ -66,10 +71,14 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!walkIn && !client) {
+      setError("Pick a client, or mark this as a walk-in.");
+      return;
+    }
     setSaving(true);
     try {
       const body = {
-        clientId: client ? String(client.clientId) : "",
+        clientId: walkIn || !client ? "" : String(client.clientId),
         dueDate,
         discountPct,
         taxPct,
@@ -99,13 +108,33 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
-          <ClientSearchField
-            value={client}
-            onChange={setClient}
-            required
-            autoFocus
-            showBalance
+          <FormControlLabel
+            control={
+              <Switch
+                checked={walkIn}
+                onChange={(e) => {
+                  setWalkIn(e.target.checked);
+                  if (e.target.checked) setClient(null);
+                }}
+              />
+            }
+            label="Walk-in (no client)"
           />
+          {walkIn ? (
+            <Alert severity="info">
+              This sale is not attached to any account, so it cannot be put on a
+              statement or chased later. Take payment before the customer
+              leaves.
+            </Alert>
+          ) : (
+            <ClientSearchField
+              value={client}
+              onChange={setClient}
+              required
+              autoFocus
+              showBalance
+            />
+          )}
           <TextField
             label="Due date"
             type="date"

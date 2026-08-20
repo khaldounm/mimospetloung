@@ -13,6 +13,7 @@ import {
   invoiceUpdateSchema,
 } from "@/schemas/invoice";
 import { writeAudit } from "@/lib/audit";
+import { getFxRate } from "@/lib/settings";
 
 async function getInvoiceId(params: Promise<{ invoiceId: string }>) {
   const { invoiceId } = await params;
@@ -64,13 +65,21 @@ export async function PATCH(
       const performedBy = session.user.userId;
       const invoice =
         parsed.data.status === "Issued"
-          ? await issueInvoice(invoiceId, performedBy)
+          ? await issueInvoice(
+              invoiceId,
+              performedBy,
+              await getFxRate(),
+              parsed.data.overrideVetHold ?? false,
+            )
           : await voidInvoice(invoiceId, performedBy);
       await writeAudit(session, {
         action: parsed.data.status === "Issued" ? "issue" : "void",
         entity: "invoice",
         entityId: invoiceId,
-        changes: { status: invoice.status },
+        changes: {
+          status: invoice.status,
+          ...(parsed.data.overrideVetHold ? { overrodeVetHold: true } : {}),
+        },
       });
       return NextResponse.json({ invoice: toInvoiceDTO(invoice) });
     }

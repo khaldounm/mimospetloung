@@ -56,6 +56,11 @@ export const INVOICE_STATUSES = [
 ] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 
+// Currencies that can be tendered. USD is the ledger currency; LBP is display
+// and cash only, always converted at the invoice's frozen rate.
+export const CURRENCIES = ["USD", "LBP"] as const;
+export type Currency = (typeof CURRENCIES)[number];
+
 export const PAYMENT_METHODS = [
   "Cash",
   "Card",

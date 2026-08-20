@@ -37,6 +37,7 @@ export const AUDIT_ENTITIES = [
   "purchase_order",
   "purchase_order_line",
   "contact_message",
+  "setting",
 ] as const;
 export type AuditEntity = (typeof AUDIT_ENTITIES)[number];
 
@@ -64,6 +65,7 @@ export const AUDIT_ENTITY_LABELS: Record<AuditEntity, string> = {
   purchase_order: "Purchase order",
   purchase_order_line: "Purchase order line",
   contact_message: "Website message",
+  setting: "Clinic setting",
 };
 
 // MUI Chip colors per action for the viewer.

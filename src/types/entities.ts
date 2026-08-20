@@ -177,7 +177,13 @@ export interface InvoiceLineItemDTO {
 export interface PaymentDTO {
   paymentId: number;
   invoiceId: number | null;
+  // Always the USD equivalent, which is what settles the invoice.
   amount: string;
+  // What was physically handed over and in which currency. For a USD payment
+  // these are the same figure and fxRate is null.
+  currency: string;
+  amountOriginal: string;
+  fxRate: string | null;
   method: PaymentMethod | null;
   reference: string | null;
   paidAt: string;
@@ -188,9 +194,13 @@ export interface PaymentDTO {
 export interface InvoiceDTO {
   invoiceId: number;
   number: string;
-  clientId: number;
+  // Null on a walk-in: an anonymous counter sale belongs to no account.
+  clientId: number | null;
+  // "Walk-in" when there is no client, so callers never have to special-case
+  // the display name.
   clientName: string;
   clientPhone: string | null;
+  isWalkIn: boolean;
   bookingId: number | null;
   status: InvoiceStatus;
   subtotal: string;
@@ -202,6 +212,14 @@ export interface InvoiceDTO {
   balance: string;
   issuedAt: string | null;
   dueDate: string | null;
+  // LBP per 1 USD, frozen when the invoice was issued. Null on a draft, which
+  // uses the current rate until it is issued.
+  fxRate: string | null;
+  // Set while a vet is still working on this invoice. Reception can see it and
+  // issuing over it takes an explicit override.
+  vetHoldAt: string | null;
+  attendingVetId: number | null;
+  attendingVetName: string | null;
   notes: string | null;
   createdAt: string;
   isOverdue: boolean;

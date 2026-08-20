@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { recordPayment, toInvoiceDTO, toPaymentDTO } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
+import { getFxRate } from "@/lib/settings";
 import { paymentCreateSchema } from "@/schemas/invoice";
 
 async function getInvoiceId(params: Promise<{ invoiceId: string }>) {
@@ -45,23 +46,41 @@ export async function POST(
     const invoiceId = await getInvoiceId(params);
     const data = await parseBody(request, paymentCreateSchema);
 
-    const { invoice, payment } = await recordPayment(invoiceId, {
-      amount: data.amount,
+    // The rate is read here, not sent by the browser: a client-supplied rate
+    // would let a bad or stale page decide what a lira is worth.
+    const fxRate = await getFxRate();
+
+    const { invoice, payments } = await recordPayment(invoiceId, {
+      tenders: data.tenders,
+      fxRate,
       method: data.method,
       reference: data.reference,
       paidAt: data.paidAt,
       notes: data.notes,
     });
 
-    await writeAudit(session, {
-      action: "payment",
-      entity: "payment",
-      entityId: payment.paymentId,
-      changes: { invoiceId, amount: data.amount, method: data.method },
-    });
+    // One audit row per currency leg, matching the payment rows themselves.
+    for (const payment of payments) {
+      await writeAudit(session, {
+        action: "payment",
+        entity: "payment",
+        entityId: payment.paymentId,
+        changes: {
+          invoiceId,
+          amount: payment.amount.toString(),
+          currency: payment.currency,
+          amountOriginal: payment.amountOriginal.toString(),
+          fxRate: payment.fxRate?.toString() ?? null,
+          method: data.method,
+        },
+      });
+    }
 
     return NextResponse.json(
-      { invoice: toInvoiceDTO(invoice), payment: toPaymentDTO(payment) },
+      {
+        invoice: toInvoiceDTO(invoice),
+        payments: payments.map(toPaymentDTO),
+      },
       { status: 201 },
     );
   });
