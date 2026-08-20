@@ -53,12 +53,7 @@ export default function ClientsTable({
   const [dialogOpen, setDialogOpen] = useState(false);
   const firstRender = useRef(true);
 
-  async function load(
-    q: string,
-    l: string | null,
-    p: number,
-    review: boolean,
-  ) {
+  async function load(q: string, l: string | null, p: number, review: boolean) {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
     if (l) params.set("letter", l);
@@ -84,10 +79,7 @@ export default function ClientsTable({
       firstRender.current = false;
       return;
     }
-    const t = setTimeout(
-      () => void load(query, letter, page, reviewOnly),
-      300,
-    );
+    const t = setTimeout(() => void load(query, letter, page, reviewOnly), 300);
     return () => clearTimeout(t);
   }, [query, letter, page, reviewOnly]);
 

@@ -49,7 +49,9 @@ export default async function InventorySegmentPage({
   );
   if (!category) notFound();
 
-  const requested = canViewSuppliers ? (await searchParams).supplier : undefined;
+  const requested = canViewSuppliers
+    ? (await searchParams).supplier
+    : undefined;
 
   const [page, suppliers] = await Promise.all([
     listInventory({ category, supplier: requested, page: 1 }),

@@ -68,7 +68,9 @@ async function main() {
     const flagged = clients.filter((c) => c.needsReview).length;
     const petsFlagged = patients.filter((p) => p.needsReview).length;
     console.log(`  already imported: ${existing} clients`);
-    console.log(`  flagged for review: ${flagged} clients, ${petsFlagged} pets`);
+    console.log(
+      `  flagged for review: ${flagged} clients, ${petsFlagged} pets`,
+    );
     return;
   }
 
@@ -202,7 +204,9 @@ async function main() {
   }
 
   if (removable.length > 0) {
-    await prisma.patient.deleteMany({ where: { patientId: { in: removable } } });
+    await prisma.patient.deleteMany({
+      where: { patientId: { in: removable } },
+    });
     console.log(
       `  removed ${removable.length} pets a previous import invented`,
     );

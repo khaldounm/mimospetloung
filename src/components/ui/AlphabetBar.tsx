@@ -122,10 +122,7 @@ export default function AlphabetBar({
         return empty ? (
           button
         ) : (
-          <Tooltip
-            key={letter}
-            title={`${count} ${count === 1 ? one : noun}`}
-          >
+          <Tooltip key={letter} title={`${count} ${count === 1 ? one : noun}`}>
             {button}
           </Tooltip>
         );

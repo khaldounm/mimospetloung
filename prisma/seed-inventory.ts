@@ -26,6 +26,7 @@ type SeedItem = {
   unit: string | null;
   currentStock: number;
   reorderLevel: number;
+  barcode: string | null;
   salePrice: number | null;
   lastCost: number | null;
   notes: string | null;
@@ -57,23 +58,59 @@ async function main() {
   const items = load<SeedItem>("inventory.json");
   const services = load<SeedService>("services.json");
 
+  // inventory_items.barcode is UNIQUE. The curated codes do not collide with
+  // each other (verified), but a staff member may already have scanned one of
+  // them onto a different item in this app, and that scan is worth more than
+  // the 2026 export. Drop ours rather than let a whole chunk fail on the
+  // constraint, and say which ones so the conflict is visible.
+  const wanted = items.map((i) => i.barcode).filter((b): b is string => !!b);
+  if (wanted.length) {
+    const taken = await prisma.$queryRaw<
+      { barcode: string; legacy_id: number | null }[]
+    >`
+      SELECT barcode, legacy_id FROM inventory_items
+      WHERE barcode = ANY(${wanted}::varchar[])`;
+    const clash = new Map(taken.map((t) => [t.barcode, t.legacy_id]));
+    let dropped = 0;
+    for (const it of items) {
+      if (!it.barcode) continue;
+      const holder = clash.get(it.barcode);
+      if (holder !== undefined && holder !== it.legacyId) {
+        console.log(
+          `  barcode ${it.barcode} is already on item ${holder}, ` +
+            `not moving it to ${it.legacyId} (${it.name})`,
+        );
+        it.barcode = null;
+        dropped++;
+      }
+    }
+    if (dropped)
+      console.log(`  ${dropped} barcodes left with their current item`);
+  }
+
   console.log(
     `${items.length} inventory items and ${services.length} services to seed` +
       (checkOnly ? " (check only, nothing will be written)" : ""),
   );
 
   if (checkOnly) {
-    const [existingItems, existingServices, clinicServices] = await Promise.all([
-      prisma.inventoryItem.count({ where: { legacyId: { not: null } } }),
-      prisma.service.count({ where: { legacyId: { not: null } } }),
-      prisma.service.count({ where: { legacyId: null } }),
-    ]);
-    console.log(`  already imported: ${existingItems} items, ` +
-      `${existingServices} services`);
+    const [existingItems, existingServices, clinicServices] = await Promise.all(
+      [
+        prisma.inventoryItem.count({ where: { legacyId: { not: null } } }),
+        prisma.service.count({ where: { legacyId: { not: null } } }),
+        prisma.service.count({ where: { legacyId: null } }),
+      ],
+    );
+    console.log(
+      `  already imported: ${existingItems} items, ` +
+        `${existingServices} services`,
+    );
     console.log(`  the clinic's own services (untouched): ${clinicServices}`);
-    console.log(`  flagged for review: ` +
-      `${items.filter((i) => i.needsReview).length} items, ` +
-      `${services.filter((s) => s.needsReview).length} services`);
+    console.log(
+      `  flagged for review: ` +
+        `${items.filter((i) => i.needsReview).length} items, ` +
+        `${services.filter((s) => s.needsReview).length} services`,
+    );
     return;
   }
 
@@ -88,7 +125,8 @@ async function main() {
       (it) => Prisma.sql`(
         ${it.legacyId}::int, ${it.name}::varchar, ${it.category}::varchar,
         ${it.unit}::varchar, ${it.currentStock.toFixed(2)}::numeric,
-        ${it.reorderLevel}::int, ${dec(it.salePrice)}::numeric,
+        ${it.reorderLevel}::int, ${it.barcode}::varchar,
+        ${dec(it.salePrice)}::numeric,
         ${dec(it.lastCost)}::numeric, ${it.notes}::text,
         ${it.needsReview}::boolean, ${it.reviewNote}::text, now(), now())`,
     );
@@ -98,7 +136,7 @@ async function main() {
     await prisma.$executeRaw`
       INSERT INTO inventory_items (
         legacy_id, name, category, unit, current_stock, reorder_level,
-        sale_price, last_cost, notes, needs_review, review_note,
+        barcode, sale_price, last_cost, notes, needs_review, review_note,
         created_at, updated_at)
       VALUES ${Prisma.join(values)}
       ON CONFLICT (legacy_id) DO UPDATE SET
@@ -106,6 +144,7 @@ async function main() {
         category      = EXCLUDED.category,
         unit          = EXCLUDED.unit,
         current_stock = EXCLUDED.current_stock,
+        barcode       = COALESCE(inventory_items.barcode, EXCLUDED.barcode),
         sale_price    = EXCLUDED.sale_price,
         last_cost     = EXCLUDED.last_cost,
         notes         = EXCLUDED.notes,

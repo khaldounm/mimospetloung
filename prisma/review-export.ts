@@ -26,7 +26,11 @@ type Row = {
   question: string;
 };
 
-function classify(note: string): { priority: number; kind: string; question: string } {
+function classify(note: string): {
+  priority: number;
+  kind: string;
+  question: string;
+} {
   if (note.includes("same person recorded more than once"))
     return {
       priority: 1,
@@ -40,7 +44,11 @@ function classify(note: string): { priority: number; kind: string; question: str
       question: "Which spelling is correct?",
     };
   if (note.includes("needs a real name") || note.includes("had no name"))
-    return { priority: 3, kind: "Missing name", question: "Who is this client?" };
+    return {
+      priority: 3,
+      kind: "Missing name",
+      question: "Who is this client?",
+    };
   if (note.includes("confirm this is two pets"))
     return {
       priority: 4,
@@ -113,16 +121,7 @@ function csv(rows: Row[]): string {
   const esc = (v: string | number | null) =>
     `"${String(v ?? "").replace(/"/g, '""')}"`;
   const body = rows.map((r) =>
-    [
-      r.priority,
-      r.kind,
-      r.record,
-      r.legacyId,
-      r.name,
-      r.detail,
-      r.question,
-      "",
-    ]
+    [r.priority, r.kind, r.record, r.legacyId, r.name, r.detail, r.question, ""]
       .map(esc)
       .join(","),
   );
@@ -213,7 +212,13 @@ async function main() {
 
   const svcs = await prisma.service.findMany({
     where: { needsReview: true },
-    select: { legacyId: true, name: true, category: true, price: true, reviewNote: true },
+    select: {
+      legacyId: true,
+      name: true,
+      category: true,
+      price: true,
+      reviewNote: true,
+    },
     orderBy: { name: "asc" },
   });
   for (const sv of svcs) {
@@ -230,7 +235,9 @@ async function main() {
     });
   }
 
-  rows.sort((a, b) => a.priority - b.priority || (a.legacyId ?? 0) - (b.legacyId ?? 0));
+  rows.sort(
+    (a, b) => a.priority - b.priority || (a.legacyId ?? 0) - (b.legacyId ?? 0),
+  );
 
   const out = join(import.meta.dirname, "seed-data", "review-worklist.csv");
   writeFileSync(out, csv(rows), "utf8");

@@ -31,6 +31,10 @@ mkdir -p "$WORK/out"
 # Table -> file. "Invoice Details" has a space in its name and is PURCHASES,
 # while CustInvoiceDetails is sales; mixing them up silently inverts the
 # traded-product set, so both are named explicitly here.
+#
+# BarcodeData is a one-to-many side table (the Barcode subform on the Products
+# screen), NOT Products.BarCode, which is empty on every row. Leaving it out of
+# this list is why the first three imports shipped with no barcodes at all.
 export_table() {
   local table="$1" out="$2"
   echo "  $table -> $out"
@@ -48,6 +52,7 @@ export_table CustInvoices        inv.csv     # sales invoices (who transacted)
 export_table Products            prod.csv    # products and services
 export_table CustInvoiceDetails  sales.csv   # sales lines
 export_table "Invoice Details"   purch.csv   # PURCHASE lines, not sales
+export_table BarcodeData         bcodes.csv  # the real barcodes, see below
 
 echo "Curating"
 ( cd "$WORK" && python3 "$DIR/curate.py" && python3 "$DIR/curate-inventory.py" )

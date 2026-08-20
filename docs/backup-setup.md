@@ -10,15 +10,15 @@ have to be done by hand.
 
 ## Current state
 
-| Thing | Status |
-|---|---|
+| Thing                             | Status                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `.github/workflows/db-backup.yml` | Written, verified against live Supabase (614 KB, 28 table-data entries). **Untracked, not pushed** |
-| `rclone` | Not installed |
-| `gpg` | Not installed |
-| Google Drive remote / token | Never configured |
-| The six repository secrets | None set |
-| Workflow runs | Zero, not even a manual one |
-| gpg encrypt/decrypt round trip | Never tested |
+| `rclone`                          | Not installed                                                                                      |
+| `gpg`                             | Not installed                                                                                      |
+| Google Drive remote / token       | Never configured                                                                                   |
+| The six repository secrets        | None set                                                                                           |
+| Workflow runs                     | Zero, not even a manual one                                                                        |
+| gpg encrypt/decrypt round trip    | Never tested                                                                                       |
 
 ## Step 1: Install the local tools
 
@@ -77,20 +77,20 @@ rclone config
 
 Answers:
 
-| Prompt | Answer |
-|---|---|
-| New remote | `n` |
-| name | `gdrive` |
-| storage | `drive` |
-| client_id | paste from step 3 |
-| client_secret | paste from step 3 |
-| scope | `1` (full drive access) |
-| root_folder_id | blank |
-| service_account_file | blank |
-| Edit advanced config | `n` |
-| Use auto config | `y` (opens a browser to authorize) |
-| Configure as team drive | `n` |
-| Confirm | `y`, then `q` to quit |
+| Prompt                  | Answer                             |
+| ----------------------- | ---------------------------------- |
+| New remote              | `n`                                |
+| name                    | `gdrive`                           |
+| storage                 | `drive`                            |
+| client_id               | paste from step 3                  |
+| client_secret           | paste from step 3                  |
+| scope                   | `1` (full drive access)            |
+| root_folder_id          | blank                              |
+| service_account_file    | blank                              |
+| Edit advanced config    | `n`                                |
+| Use auto config         | `y` (opens a browser to authorize) |
+| Configure as team drive | `n`                                |
+| Confirm                 | `y`, then `q` to quit              |
 
 Test it and pull out the three values:
 
@@ -125,14 +125,14 @@ git add .github/workflows/db-backup.yml && git commit -m "chore: nightly databas
 GitHub > repo > Settings > Secrets and variables > Actions > New repository
 secret, six times:
 
-| Secret | Value |
-|---|---|
-| `SUPABASE_DB_URL` | the **direct** URL, port **5432**, from the commented `DIRECT_URL` line in `.env`. Not the 6543 pooler: `pg_dump` cannot use it |
-| `BACKUP_PASSPHRASE` | from step 5 |
-| `GDRIVE_CLIENT_ID` | step 3 |
-| `GDRIVE_CLIENT_SECRET` | step 3 |
-| `GDRIVE_TOKEN` | the full `{...}` JSON from step 4 |
-| `GDRIVE_FOLDER_ID` | step 2 |
+| Secret                 | Value                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `SUPABASE_DB_URL`      | the **direct** URL, port **5432**, from the commented `DIRECT_URL` line in `.env`. Not the 6543 pooler: `pg_dump` cannot use it |
+| `BACKUP_PASSPHRASE`    | from step 5                                                                                                                     |
+| `GDRIVE_CLIENT_ID`     | step 3                                                                                                                          |
+| `GDRIVE_CLIENT_SECRET` | step 3                                                                                                                          |
+| `GDRIVE_TOKEN`         | the full `{...}` JSON from step 4                                                                                               |
+| `GDRIVE_FOLDER_ID`     | step 2                                                                                                                          |
 
 ## Step 8: Run it by hand
 

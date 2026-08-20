@@ -61,11 +61,54 @@ def fix_spelling(name):
         out = pat.sub(rep, out)
     return out
 
-# Barcodes are deliberately not imported: Products.BarCode, ProdCodeNo and
-# ProdCodeTxt are empty on all 3,692 rows, and the BarCode on invoice lines is a
-# 1-4 character internal sequence number, not an EAN-13 or UPC-A. There is no
-# barcode anywhere in the old system to carry over; staff populate the column by
-# scanning stock in.
+# ---------------------------------------------------------------- barcodes
+# Three imports shipped with no barcodes because this comment used to say there
+# were none. That was wrong. Products.BarCode, ProdCodeNo and ProdCodeTxt ARE
+# empty on all 3,692 rows, and the BarCode on invoice lines is a stale internal
+# sequence number (846 of its values are not even valid ProductIDs). But the
+# real codes live in a one-to-many side table, BarcodeData, which is what the
+# Barcode subform on the Products screen is bound to. 3,625 codes, 3,430
+# products, no duplicates, no orphans.
+#
+# Stored zero-padded to GTIN-14, NOT as scanned. A UPC-A written "087219130735"
+# and the same product read off a carton as "00087219130735" are the same
+# article, and only the padded form matches both. Normalise every scan to 14
+# before looking it up. Verified: 3,170 codes, zero collisions either way.
+#
+# Kept: numeric, 12 to 14 digits (UPC-A, EAN-13, ITF-14).
+# Dropped: 243 staff shelf codes ("d1", "pb2", "LE-DOG-20210125"). They are not
+# scannable and would only pollute a unique column. The old Products form has
+# its own BarCode lookup box, so if staff type these to find items it will
+# surface fast, and re-including them is a one-line change here.
+#
+# One code per item, the lowest Bid, i.e. the first one scanned. 77 items carry
+# more than one; the extras are genuine variants and are flagged for review
+# rather than silently dropped. The end state for those is a product_barcodes
+# table carrying pack size, because the 14-digit ITF-14s are CASE codes and one
+# column cannot say "this code means 12 units". That is additive and this seed
+# regenerates from the .mdb, so nothing is lost by deferring it.
+BARCODES = "bcodes.csv"
+
+def gtin14(code):
+    """Canonical GTIN-14. Returns None for anything not scannable."""
+    c = (code or "").strip()
+    return c.zfill(14) if c.isdigit() and 12 <= len(c) <= 14 else None
+
+barcodes, shelf_codes = {}, collections.defaultdict(list)
+try:
+    _bc = list(csv.DictReader(open(BARCODES)))
+except FileNotFoundError:
+    _bc = []
+    print("  WARNING: bcodes.csv missing, importing without barcodes")
+for _r in sorted(_bc, key=lambda r: int(r["Bid"] or 0)):
+    _pid, _raw = (_r.get("Prodid") or "").strip(), (_r.get("BarcodeText") or "").strip()
+    if not _pid or not _raw:
+        continue
+    _g = gtin14(_raw)
+    if _g is None:
+        shelf_codes[_pid].append(_raw)
+    else:
+        barcodes.setdefault(_pid, []).append(_g)
 
 # ---------------------------------------------------------------- load
 rows = list(csv.DictReader(open(SRC)))
@@ -152,6 +195,18 @@ for r in rows:
         reviews.append("No sale price was set in the old system.")
         stats["no_sale_price"] += 1
 
+    codes = barcodes.get(pid, [])
+    if len(codes) > 1:
+        reviews.append(
+            f"The old system held {len(codes)} barcodes for this item; "
+            f"{codes[0]} was imported and {', '.join(codes[1:])} were not.")
+        stats["multi_barcode"] += 1
+    elif not codes and pid in shelf_codes:
+        reviews.append(
+            f"The old system had no scannable barcode for this item, only the "
+            f"shelf code {', '.join(shelf_codes[pid])}. Scan it in.")
+        stats["shelf_code_only"] += 1
+
     items.append({
         "legacyId": int(pid),
         "name": name[:255],
@@ -161,12 +216,14 @@ for r in rows:
         "reorderLevel": 0,
         "salePrice": round(sale, 2) if sale > 0 else None,
         "lastCost": round(cost, 2) if cost > 0 else None,
+        "barcode": codes[0] if codes else None,
         "notes": f'Recorded in the old system as "{raw_name}".'
                  if renamed else None,
         "needsReview": bool(reviews),
         "reviewNote": " ".join(reviews) or None,
     })
     stats["items"] += 1
+    if codes: stats["with_barcode"] += 1
     if pid not in traded: stats["items_untraded_but_stocked"] += 1
 
 json.dump(items, open(OUT + "inventory.json", "w"), indent=1, ensure_ascii=False)

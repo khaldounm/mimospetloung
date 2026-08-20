@@ -23,7 +23,9 @@ export default async function InventoryPage({
   // ?supplier= arrives from the item counts on the suppliers page. Resolved
   // here rather than with useSearchParams so the first paint is already
   // filtered and the client needs no Suspense boundary.
-  const requested = canViewSuppliers ? (await searchParams).supplier : undefined;
+  const requested = canViewSuppliers
+    ? (await searchParams).supplier
+    : undefined;
 
   // No category in the path means every category, still one page at a time.
   const [page, categories, suppliers] = await Promise.all([

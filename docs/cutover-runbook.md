@@ -19,12 +19,13 @@ decisions can be overwritten by a later import. There is no second run.
 
 ## Before the day
 
-| Task | Why |
-|---|---|
-| Confirm `mdbtools` is installed (`brew install mdbtools`) | The refresh script shells out to `mdb-export`. |
-| Confirm the nightly backup workflow is green | It is the only way back if the restore goes wrong. |
-| Decide who answers the review worklist | The CSV is useless without someone who knows the clients. |
-| Re-run the five local steps below once, as a rehearsal | Proves the scripts work on your machine before the day you are under time pressure. |
+| Task                                                      | Why                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Confirm `mdbtools` is installed (`brew install mdbtools`) | The refresh script shells out to `mdb-export`.                                                                                                                                                                                                                   |
+| Get the `.mdb` export **on the day**, not in advance      | Staff are still scanning barcodes and adding products into Access. Between 2026-08-17 and 2026-08-20 alone, 7 products were added. Anything they typed after your export is simply lost, and it is a one-way switch, so there is no second import to pick it up. |
+| Confirm the nightly backup workflow is green              | It is the only way back if the restore goes wrong.                                                                                                                                                                                                               |
+| Decide who answers the review worklist                    | The CSV is useless without someone who knows the clients.                                                                                                                                                                                                        |
+| Re-run the five local steps below once, as a rehearsal    | Proves the scripts work on your machine before the day you are under time pressure.                                                                                                                                                                              |
 
 **Known open question:** invoice ids and client ids are proven not to collide
 across year files, but `Products` and `Suppliers` are **unverified**. If the
@@ -50,7 +51,7 @@ pnpm seed:inventory
 pnpm review:export
 ```
 
-- `refresh-from-mdb.sh` exports the five tables the curation reads, runs both
+- `refresh-from-mdb.sh` exports the six tables the curation reads, runs both
   curation scripts, and writes the JSON into `prisma/seed-data/`. It reports a
   row count per file at the end.
 - `seed:clients` and `seed:inventory` upsert on `legacyId` and reconcile: rows a
@@ -63,6 +64,14 @@ pnpm review:export
 **Check the numbers before going further.** If clients or inventory jumped by
 an order of magnitude, or a pile of unfamiliar categories appeared, stop and
 find out why. The scripts will happily import nonsense.
+
+As of the 2026-08-17 file the expected shape is roughly 1,875 clients, 1,397
+pets, 3,564 inventory items and 49 services, with `with_barcode` around 3,170.
+Those will all drift up a little, because staff are still entering data into
+Access. A `with_barcode` count that drops sharply is the one to be suspicious
+of: it means the `BarcodeData` export failed and the script would otherwise
+import silently without barcodes, which is exactly how the first three imports
+shipped with none.
 
 ### 2. Back up production
 
@@ -148,7 +157,9 @@ Three cases, and only these:
 
 1. **The file's shape changed.** A renamed table, a new column, a category id
    that has never appeared. The curation either crashes, which is fine and
-   loud, or silently mis-files things, which is not.
+   loud, or silently mis-files things, which is not. The one known soft
+   failure is `BarcodeData`: if that table is missing the script warns and
+   carries on without barcodes rather than stopping.
 2. **More than one year file.** See the open question above about `Products`
    and `Suppliers` ids.
 3. **The counts look wrong** after step 1.
