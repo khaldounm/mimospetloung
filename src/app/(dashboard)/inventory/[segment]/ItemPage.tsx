@@ -26,8 +26,10 @@ export default async function InventoryItemPage({ id }: { id: number }) {
 
   return (
     <InventoryDetail
-      item={toInventoryItemDTO(item)}
-      initialTransactions={item.transactions.map(toInventoryTransactionDTO)}
+      item={toInventoryItemDTO(item, canViewSuppliers)}
+      initialTransactions={item.transactions.map((t) =>
+        toInventoryTransactionDTO(t, canViewSuppliers),
+      )}
       canWrite={canWrite}
       canViewSuppliers={canViewSuppliers}
       canCreateSuppliers={canCreateSuppliers}

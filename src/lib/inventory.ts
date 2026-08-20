@@ -55,7 +55,21 @@ function isExpired(expiryDate: Date | null): boolean {
   return expiryDate.getTime() < today.getTime();
 }
 
-export function toInventoryItemDTO(i: ItemRow): InventoryItemDTO {
+// `canSeeCost` is REQUIRED, not optional with a friendly default, and that is
+// deliberate. Cost is the one field on an item the owner does not want clinical
+// staff to have: sale price is visible to everyone, so anyone holding the cost
+// can work out the clinic's margin. Hiding it in the component is not enough,
+// because the figure still ships in the JSON and is one devtools panel away.
+// Making the flag mandatory means every call site has to answer the question
+// and a new one cannot leak it by forgetting an argument.
+//
+// The gate is `orders:read`, which only Admin holds. That is the same line the
+// rest of the app already draws: purchasing permissions are separate from
+// inventory:* precisely so clinical staff see stock without seeing what it cost.
+export function toInventoryItemDTO(
+  i: ItemRow,
+  canSeeCost: boolean,
+): InventoryItemDTO {
   const currentStock = i.currentStock.toNumber();
   return {
     itemId: i.itemId,
@@ -66,7 +80,7 @@ export function toInventoryItemDTO(i: ItemRow): InventoryItemDTO {
     currentStock,
     reorderLevel: i.reorderLevel,
     salePrice: i.salePrice ? i.salePrice.toString() : null,
-    lastCost: i.lastCost ? i.lastCost.toString() : null,
+    lastCost: canSeeCost && i.lastCost ? i.lastCost.toString() : null,
     partnerId: i.partnerId,
     partnerName: i.partner?.name ?? null,
     partnerSharePct: i.partnerSharePct ? i.partnerSharePct.toString() : null,
@@ -82,15 +96,18 @@ export function toInventoryItemDTO(i: ItemRow): InventoryItemDTO {
   };
 }
 
+// Same rule as toInventoryItemDTO: a Received movement carries the supplier's
+// unit cost, which is the same leak by another route.
 export function toInventoryTransactionDTO(
   t: TransactionRow,
+  canSeeCost: boolean,
 ): InventoryTransactionDTO {
   return {
     transactionId: t.transactionId,
     itemId: t.itemId,
     type: t.type as InventoryTxType,
     quantity: t.quantity.toNumber(),
-    unitCost: t.unitCost ? t.unitCost.toString() : null,
+    unitCost: canSeeCost && t.unitCost ? t.unitCost.toString() : null,
     salePrice: t.salePrice ? t.salePrice.toString() : null,
     referenceType: t.referenceType,
     referenceId: t.referenceId,
@@ -327,6 +344,7 @@ function inventoryWhere(
 
 export async function listInventory(
   query: InventoryListQuery = {},
+  canSeeCost = false,
 ): Promise<InventoryListPage> {
   const pageSize = Math.min(
     query.pageSize ?? INVENTORY_PAGE_SIZE,
@@ -352,7 +370,12 @@ export async function listInventory(
     prisma.inventoryItem.count({ where }),
   ]);
 
-  return { items: rows.map(toInventoryItemDTO), total, page, pageSize };
+  return {
+    items: rows.map((r) => toInventoryItemDTO(r, canSeeCost)),
+    total,
+    page,
+    pageSize,
+  };
 }
 
 /**

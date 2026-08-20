@@ -29,7 +29,7 @@ export default async function InventoryPage({
 
   // No category in the path means every category, still one page at a time.
   const [page, categories, suppliers] = await Promise.all([
-    listInventory({ supplier: requested, page: 1 }),
+    listInventory({ supplier: requested, page: 1 }, canViewSuppliers),
     getInventoryCategories(),
     canViewSuppliers ? getActiveSuppliers() : Promise.resolve([]),
   ]);

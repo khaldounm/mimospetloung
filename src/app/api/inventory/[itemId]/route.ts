@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
+import { canSeeCost } from "@/lib/permissions";
 import {
   isUniqueConstraintError,
   toInventoryItemDTO,
@@ -21,7 +22,7 @@ export async function GET(
   { params }: { params: Promise<{ itemId: string }> },
 ) {
   return handle(async () => {
-    await requirePermission("inventory:read");
+    const session = await requirePermission("inventory:read");
     const itemId = await getItemId(params);
 
     const item = await prisma.inventoryItem.findFirst({
@@ -40,8 +41,10 @@ export async function GET(
     if (!item) throw new ApiError(404, "Inventory item not found");
 
     return NextResponse.json({
-      item: toInventoryItemDTO(item),
-      transactions: item.transactions.map(toInventoryTransactionDTO),
+      item: toInventoryItemDTO(item, canSeeCost(session.user)),
+      transactions: item.transactions.map((t) =>
+        toInventoryTransactionDTO(t, canSeeCost(session.user)),
+      ),
     });
   });
 }
@@ -97,7 +100,9 @@ export async function PATCH(
         entityId: itemId,
         changes: data,
       });
-      return NextResponse.json({ item: toInventoryItemDTO(item) });
+      return NextResponse.json({
+        item: toInventoryItemDTO(item, canSeeCost(session.user)),
+      });
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new ApiError(409, "That barcode is already in use.");

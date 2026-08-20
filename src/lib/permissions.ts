@@ -20,6 +20,15 @@ export function hasPermission(
   return Boolean(user?.permissions?.includes(permission));
 }
 
+// Cost visibility has one gate across the whole app: `orders:read`, which only
+// Admin holds. Named rather than repeated so the answer to "who may see what an
+// item cost" lives in one place and moving it is one edit.
+export const COST_PERMISSION = "orders:read";
+
+export function canSeeCost(user: PermissionHolder | null | undefined): boolean {
+  return hasPermission(user, COST_PERMISSION);
+}
+
 export function hasAnyPermission(
   user: PermissionHolder | null | undefined,
   permissions: string[],

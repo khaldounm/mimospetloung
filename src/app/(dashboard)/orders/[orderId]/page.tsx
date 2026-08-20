@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { hasPermission } from "@/lib/permissions";
+import { canSeeCost, hasPermission } from "@/lib/permissions";
 import { toInventoryItemDTO } from "@/lib/inventory";
 import { getOrderDetail } from "@/lib/purchase-orders";
 import { getActiveSuppliers } from "@/lib/suppliers";
@@ -40,7 +40,9 @@ export default async function OrderPage({
   return (
     <OrderDetail
       initialOrder={order}
-      items={items.map(toInventoryItemDTO)}
+      // Purchasing legitimately needs cost, and canSeeCost is the same
+      // orders:read gate this page already sits behind.
+      items={items.map((i) => toInventoryItemDTO(i, canSeeCost(session?.user)))}
       suppliers={suppliers}
       canWrite={canWrite}
       canReceive={canReceive}

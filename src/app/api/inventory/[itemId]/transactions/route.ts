@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
+import { canSeeCost } from "@/lib/permissions";
 import {
   applyStockMovement,
   toInventoryItemDTO,
@@ -21,7 +22,7 @@ export async function GET(
   { params }: { params: Promise<{ itemId: string }> },
 ) {
   return handle(async () => {
-    await requirePermission("inventory:read");
+    const session = await requirePermission("inventory:read");
     const itemId = await getItemId(params);
 
     const item = await prisma.inventoryItem.findFirst({
@@ -37,7 +38,9 @@ export async function GET(
     });
 
     return NextResponse.json({
-      transactions: transactions.map(toInventoryTransactionDTO),
+      transactions: transactions.map((t) =>
+        toInventoryTransactionDTO(t, canSeeCost(session.user)),
+      ),
     });
   });
 }
@@ -76,8 +79,11 @@ export async function POST(
 
     return NextResponse.json(
       {
-        item: toInventoryItemDTO(item),
-        transaction: toInventoryTransactionDTO(transaction),
+        item: toInventoryItemDTO(item, canSeeCost(session.user)),
+        transaction: toInventoryTransactionDTO(
+          transaction,
+          canSeeCost(session.user),
+        ),
       },
       { status: 201 },
     );

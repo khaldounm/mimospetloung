@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { hasPermission } from "@/lib/permissions";
+import { canSeeCost, hasPermission } from "@/lib/permissions";
 import { invoiceInclude, toInvoiceDTO, toServiceDTO } from "@/lib/invoices";
 import { toInventoryItemDTO } from "@/lib/inventory";
 import InvoiceDetail from "@/components/invoices/InvoiceDetail";
@@ -44,7 +44,7 @@ export default async function InvoiceDetailPage({
     .map((s) => ({ serviceId: s.serviceId, name: s.name, price: s.price }));
 
   const itemOptions: ItemLineOption[] = items
-    .map(toInventoryItemDTO)
+    .map((i) => toInventoryItemDTO(i, canSeeCost(session?.user)))
     .map((i) => ({
       itemId: i.itemId,
       name: i.name,

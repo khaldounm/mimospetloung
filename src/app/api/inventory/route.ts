@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
+import { canSeeCost } from "@/lib/permissions";
 import {
   isUniqueConstraintError,
   listInventory,
@@ -11,20 +12,23 @@ import { inventoryItemCreateSchema } from "@/schemas/inventory";
 
 export async function GET(request: Request) {
   return handle(async () => {
-    await requirePermission("inventory:read");
+    const session = await requirePermission("inventory:read");
 
     const sp = new URL(request.url).searchParams;
     const pageRaw = sp.get("page")?.trim();
 
     // Paged and filtered in SQL. The category comes from the route on the page
     // itself, and is echoed here so a refetch after a search stays inside it.
-    const page = await listInventory({
-      category: sp.get("category")?.trim() || undefined,
-      q: sp.get("q")?.trim() || undefined,
-      lowStock: sp.get("lowStock") === "true",
-      supplier: sp.get("supplier")?.trim() || undefined,
-      page: pageRaw ? Number(pageRaw) : 1,
-    });
+    const page = await listInventory(
+      {
+        category: sp.get("category")?.trim() || undefined,
+        q: sp.get("q")?.trim() || undefined,
+        lowStock: sp.get("lowStock") === "true",
+        supplier: sp.get("supplier")?.trim() || undefined,
+        page: pageRaw ? Number(pageRaw) : 1,
+      },
+      canSeeCost(session.user),
+    );
 
     return NextResponse.json(page);
   });
@@ -87,7 +91,7 @@ export async function POST(request: Request) {
         changes: data,
       });
       return NextResponse.json(
-        { item: toInventoryItemDTO(item) },
+        { item: toInventoryItemDTO(item, canSeeCost(session.user)) },
         { status: 201 },
       );
     } catch (err) {

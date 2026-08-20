@@ -172,38 +172,36 @@ function toMoneyDTO(
 export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
   const [suppliers, itemGroups, orders, paidGroups, openingGroups] =
     await Promise.all([
-    prisma.supplier.findMany({
-      where: { deletedAt: null },
-      orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    }),
-    prisma.inventoryItem.groupBy({
-      by: ["supplierId"],
-      where: { supplierId: { not: null }, deletedAt: null },
-      _count: { _all: true },
-    }),
-    prisma.purchaseOrder.findMany({
-      where: { deletedAt: null, supplierId: { not: null } },
-      select: balanceOrderSelect,
-    }),
-    prisma.supplierPayment.groupBy({
-      by: ["supplierId"],
-      where: { deletedAt: null },
-      _sum: { amount: true },
-    }),
-    prisma.openingBalance.findMany({
-      where: { supplierId: { not: null } },
-      select: { supplierId: true, amount: true, asOfDate: true },
-    }),
-  ]);
+      prisma.supplier.findMany({
+        where: { deletedAt: null },
+        orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      }),
+      prisma.inventoryItem.groupBy({
+        by: ["supplierId"],
+        where: { supplierId: { not: null }, deletedAt: null },
+        _count: { _all: true },
+      }),
+      prisma.purchaseOrder.findMany({
+        where: { deletedAt: null, supplierId: { not: null } },
+        select: balanceOrderSelect,
+      }),
+      prisma.supplierPayment.groupBy({
+        by: ["supplierId"],
+        where: { deletedAt: null },
+        _sum: { amount: true },
+      }),
+      prisma.openingBalance.findMany({
+        where: { supplierId: { not: null } },
+        select: { supplierId: true, amount: true, asOfDate: true },
+      }),
+    ]);
 
   const itemMap = new Map(itemGroups.map((g) => [g.supplierId, g._count._all]));
   const paidMap = new Map(
     paidGroups.map((g) => [g.supplierId, g._sum.amount ?? D(0)]),
   );
   // At most one per supplier, so the last write wins harmlessly.
-  const openingMap = new Map(
-    openingGroups.map((g) => [g.supplierId, g]),
-  );
+  const openingMap = new Map(openingGroups.map((g) => [g.supplierId, g]));
 
   const ordersBySupplier = new Map<number, BalanceOrderRow[]>();
   for (const order of orders) {

@@ -54,7 +54,7 @@ export default async function InventorySegmentPage({
     : undefined;
 
   const [page, suppliers] = await Promise.all([
-    listInventory({ category, supplier: requested, page: 1 }),
+    listInventory({ category, supplier: requested, page: 1 }, canViewSuppliers),
     canViewSuppliers ? getActiveSuppliers() : Promise.resolve([]),
   ]);
 
