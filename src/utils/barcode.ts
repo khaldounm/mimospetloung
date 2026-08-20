@@ -30,3 +30,23 @@ export function isValidEan13(code: string): boolean {
   if (!/^\d{13}$/.test(code)) return false;
   return ean13CheckDigit(code.slice(0, 12)) === code.charCodeAt(12) - 48;
 }
+
+// Canonical GTIN-14 form of a scanned or stored code, for comparison only.
+//
+// The same product is written differently depending on where the code came
+// from: the 2026-08 legacy import stored every code as GTIN-14 ("08711231104093"),
+// a scanner reading that product's physical EAN-13 label emits 13 digits
+// ("8711231104093"), a UPC-A label emits 12, and codes minted in-app by
+// randomInternalEan13 are 13. They are all the same GTIN with different
+// zero-padding, so a raw string compare misses. Normalizing both sides to 14
+// digits makes every representation meet in the middle.
+//
+// Non-numeric codes are returned trimmed and otherwise untouched, so anything
+// that is not a GTIN still compares exactly.
+export function toGtin14(code: string): string {
+  const trimmed = code.trim();
+  if (!/^\d+$/.test(trimmed)) return trimmed;
+  const digits = trimmed.replace(/^0+/, "");
+  if (digits.length > 14) return trimmed;
+  return digits.padStart(14, "0");
+}

@@ -21,6 +21,7 @@ import {
 import ClearIcon from "@mui/icons-material/Clear";
 import QrCodeScannerIcon from "@mui/icons-material/QrCodeScanner";
 import { apiRequest } from "@/utils/api-client";
+import { toGtin14 } from "@/utils/barcode";
 import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
 
 export interface ServiceLineOption {
@@ -122,12 +123,16 @@ function LineItemForm({
 
   // Resolve a scanned/typed barcode to an inventory item. Lookup is local
   // against the already-loaded options, keyed on the item's unique barcode.
+  // Both sides are normalized to GTIN-14 first: imported codes are stored
+  // 14-digit while a scanner reads the same product's EAN-13 label as 13, so
+  // comparing the raw strings misses. See toGtin14.
   function scanBarcode(code: string) {
     const trimmed = code.trim();
     setScanError(null);
     if (!trimmed) return;
+    const scanned = toGtin14(trimmed);
     const item = itemOptions.find(
-      (o) => o.barcode != null && o.barcode === trimmed,
+      (o) => o.barcode != null && toGtin14(o.barcode) === scanned,
     );
     if (!item) {
       setScanError(`No inventory item matches barcode "${trimmed}".`);
