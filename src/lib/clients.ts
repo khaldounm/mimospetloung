@@ -1,3 +1,4 @@
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { ClientDTO } from "@/types/entities";
 
@@ -62,6 +63,9 @@ export interface ClientListPage {
    * chip shows it, so it must stay the same whatever else is filtered.
    */
   reviewCount: number;
+  /** How many clients owe the clinic, and how many sit in credit, in total. */
+  inDebtCount: number;
+  inCreditCount: number;
 }
 
 export interface ClientListQuery {
@@ -71,6 +75,12 @@ export interface ClientListQuery {
   pageSize?: number;
   /** Show only records the migration flagged for a human to confirm. */
   needsReview?: boolean;
+  /**
+   * Show only clients whose account is not settled: "debt" for those who owe
+   * the clinic, "credit" for those sitting in credit. A plain comparison on the
+   * stored balance, not a sum over invoices.
+   */
+  balance?: "debt" | "credit";
 }
 
 export const CLIENT_PAGE_SIZE = 25;
@@ -85,6 +95,7 @@ type ClientListRow = {
   notes: string | null;
   needs_review: boolean;
   review_note: string | null;
+  account_balance: Prisma.Decimal;
   patient_count: bigint;
   total_count: bigint;
 };
@@ -105,11 +116,17 @@ export async function listClients(
   const search = query.q?.trim() ? `%${query.q.trim().toLowerCase()}%` : null;
   // Passed as a nullable boolean so one prepared statement serves both cases.
   const reviewOnly = query.needsReview ? true : null;
+  // Passed as a nullable string for the same reason as reviewOnly: one prepared
+  // statement covers unfiltered, debt and credit.
+  const balance =
+    query.balance === "debt" || query.balance === "credit"
+      ? query.balance
+      : null;
 
-  const [rows, letters, reviewCount] = await Promise.all([
+  const [rows, letters, reviewCount, balanceCounts] = await Promise.all([
     prisma.$queryRaw<ClientListRow[]>`
       SELECT c.client_id, c.first_name, c.last_name, c.phone, c.email, c.notes,
-             c.needs_review, c.review_note,
+             c.needs_review, c.review_note, c.account_balance,
              (SELECT count(*) FROM patients p
                WHERE p.client_id = c.client_id
                  AND p.deleted_at IS NULL) AS patient_count,
@@ -117,6 +134,11 @@ export async function listClients(
       FROM clients c
       WHERE c.deleted_at IS NULL
         AND (${reviewOnly}::boolean IS NULL OR c.needs_review = TRUE)
+        AND (
+          ${balance}::text IS NULL
+          OR (${balance} = 'debt' AND c.account_balance > 0)
+          OR (${balance} = 'credit' AND c.account_balance < 0)
+        )
         AND (
           ${letter}::text IS NULL
           OR upper(left(coalesce(nullif(c.last_name, ''), c.first_name), 1))
@@ -148,6 +170,13 @@ export async function listClients(
       GROUP BY 1
       ORDER BY 1`,
     prisma.client.count({ where: { deletedAt: null, needsReview: true } }),
+    // Totals for the filter chips. Counted over the whole table rather than the
+    // page, so the chip reads the same whatever else is filtered, exactly as
+    // reviewCount does.
+    prisma.$queryRaw<{ in_debt: bigint; in_credit: bigint }[]>`
+      SELECT count(*) FILTER (WHERE account_balance > 0) AS in_debt,
+             count(*) FILTER (WHERE account_balance < 0) AS in_credit
+      FROM clients WHERE deleted_at IS NULL`,
   ]);
 
   return {
@@ -160,6 +189,7 @@ export async function listClients(
       notes: r.notes,
       needsReview: r.needs_review,
       reviewNote: r.review_note,
+      accountBalance: r.account_balance.toFixed(2),
       patientCount: Number(r.patient_count),
     })),
     total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
@@ -167,5 +197,7 @@ export async function listClients(
     pageSize,
     letters: letters.map((l) => ({ letter: l.letter, count: Number(l.count) })),
     reviewCount,
+    inDebtCount: Number(balanceCounts[0]?.in_debt ?? 0),
+    inCreditCount: Number(balanceCounts[0]?.in_credit ?? 0),
   };
 }

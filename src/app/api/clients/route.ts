@@ -19,6 +19,12 @@ export async function GET(request: Request) {
       letter: sp.get("letter")?.trim() || undefined,
       page: pageRaw ? Number(pageRaw) : 1,
       needsReview: sp.get("review") === "1",
+      balance:
+        sp.get("balance") === "debt"
+          ? "debt"
+          : sp.get("balance") === "credit"
+            ? "credit"
+            : undefined,
     });
 
     return NextResponse.json(page);

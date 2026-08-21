@@ -8,9 +8,15 @@ export default async function ClientsPage() {
   const canWrite = hasPermission(session?.user, "patients:write");
 
   // First page only. Paging, search and the letter filter all run in SQL.
-  const { clients, total, pageSize, letters, reviewCount } = await listClients({
-    page: 1,
-  });
+  const {
+    clients,
+    total,
+    pageSize,
+    letters,
+    reviewCount,
+    inDebtCount,
+    inCreditCount,
+  } = await listClients({ page: 1 });
 
   return (
     <ClientsTable
@@ -19,6 +25,8 @@ export default async function ClientsPage() {
       pageSize={pageSize}
       letters={letters}
       initialReviewCount={reviewCount}
+      initialInDebtCount={inDebtCount}
+      initialInCreditCount={inCreditCount}
       canWrite={canWrite}
     />
   );
