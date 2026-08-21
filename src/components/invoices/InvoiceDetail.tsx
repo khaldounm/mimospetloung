@@ -37,6 +37,7 @@ import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
 import { apiRequest } from "@/utils/api-client";
+import { formatLineQuantity } from "@/utils/inventory";
 import {
   formatAccountBalance,
   formatDate,
@@ -490,7 +491,9 @@ export default function InvoiceDetail({
                   invoice.lineItems.map((l) => (
                     <TableRow key={l.lineItemId} hover>
                       <TableCell>{l.description}</TableCell>
-                      <TableCell align="right">{l.quantity}</TableCell>
+                      <TableCell align="right">
+                        {formatLineQuantity(l)}
+                      </TableCell>
                       <TableCell align="right">
                         {formatMoney(l.unitPrice)}
                       </TableCell>

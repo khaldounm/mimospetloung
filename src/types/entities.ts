@@ -130,7 +130,17 @@ export interface InventoryItemDTO {
   // and independent of the partner fields.
   supplierId: number | null;
   supplierName: string | null;
+  // For a tracked item this is the soonest expiry still on the shelf, taken
+  // from its batches. For everything else it is the item's own date.
   expiryDate: string | null;
+  // Perishable: captures a lot and expiry at delivery and picks
+  // first-expiring-first on sale.
+  tracksExpiry: boolean;
+  // Loose selling: how a broken-open pack is asked for and priced. All three
+  // are set together or all null, and null means the item is only sold whole.
+  looseUnit: string | null;
+  loosePerUnit: string | null;
+  loosePrice: string | null;
   notes: string | null;
   isLowStock: boolean;
   isExpired: boolean;
@@ -172,6 +182,11 @@ export interface InvoiceLineItemDTO {
   quantity: string;
   unitPrice: string;
   lineTotal: string;
+  // Set when the line was sold loose. What the customer asked for ("2" and
+  // "kg"), for display only: quantity above is still packs and is what moved
+  // the stock.
+  looseQty: string | null;
+  looseUnit: string | null;
 }
 
 export interface PaymentDTO {
@@ -616,6 +631,14 @@ export interface PurchaseOrderLineDTO {
   quantityOutstanding: string; // ordered minus received, 0 once the line is complete
   unitCost: string | null;
   lineTotal: string; // quantityOrdered * unitCost, 0 when no cost is set yet
+  // Set when the line was keyed in loose units ("200 kg" rather than 10 bags).
+  // Display only: quantityOrdered above is still the stocking unit.
+  looseQty: string | null;
+  looseUnit: string | null;
+  // Whether this item wants a lot and expiry captured when it is received.
+  tracksExpiry: boolean;
+  // Matched against a scanned carton so the scan fills the right line.
+  barcode: string | null;
   notes: string | null;
 }
 

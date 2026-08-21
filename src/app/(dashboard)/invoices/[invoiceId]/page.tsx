@@ -70,6 +70,9 @@ export default async function InvoiceDetailPage({
       salePrice: i.salePrice,
       currentStock: i.currentStock,
       unit: i.unit,
+      looseUnit: i.looseUnit,
+      loosePerUnit: i.loosePerUnit,
+      loosePrice: i.loosePrice,
     }));
 
   return (

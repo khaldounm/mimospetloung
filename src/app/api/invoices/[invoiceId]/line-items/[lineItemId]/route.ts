@@ -4,6 +4,7 @@ import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import {
   invoiceInclude,
   recomputeInvoiceTotals,
+  resolveLine,
   toInvoiceDTO,
 } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
@@ -26,7 +27,12 @@ async function getIds(
 async function loadDraftLine(invoiceId: number, lineItemId: number) {
   const line = await prisma.invoiceLineItem.findUnique({
     where: { lineItemId },
-    include: { invoice: { select: { invoiceId: true, status: true } } },
+    include: {
+      invoice: { select: { invoiceId: true, status: true } },
+      item: {
+        select: { looseUnit: true, loosePerUnit: true, loosePrice: true },
+      },
+    },
   });
   if (!line || line.invoiceId !== invoiceId) {
     throw new ApiError(404, "Line item not found");
@@ -46,7 +52,15 @@ export async function PATCH(
     const { invoiceId, lineItemId } = await getIds(params);
     const data = await parseBody(request, lineItemUpdateSchema);
 
-    await loadDraftLine(invoiceId, lineItemId);
+    const existing = await loadDraftLine(invoiceId, lineItemId);
+
+    // A loose edit re-derives the pack quantity and the price together, so
+    // changing "2 kg" to "3 kg" cannot leave a stale price behind. Editing a
+    // pack quantity, or anything else, leaves the loose record untouched.
+    const resolved =
+      data.looseQty !== undefined
+        ? resolveLine(existing.item, { looseQty: data.looseQty })
+        : null;
 
     const invoice = await prisma.$transaction(async (tx) => {
       await tx.invoiceLineItem.update({
@@ -55,10 +69,21 @@ export async function PATCH(
           ...(data.description !== undefined
             ? { description: data.description }
             : {}),
-          ...(data.quantity !== undefined ? { quantity: data.quantity } : {}),
-          ...(data.unitPrice !== undefined
-            ? { unitPrice: data.unitPrice }
-            : {}),
+          ...(resolved
+            ? {
+                quantity: resolved.quantity,
+                unitPrice: resolved.unitPrice,
+                looseQty: resolved.looseQty,
+                looseUnit: resolved.looseUnit,
+              }
+            : {
+                ...(data.quantity !== undefined
+                  ? { quantity: data.quantity }
+                  : {}),
+                ...(data.unitPrice !== undefined
+                  ? { unitPrice: data.unitPrice }
+                  : {}),
+              }),
         },
       });
       await recomputeInvoiceTotals(tx, invoiceId);

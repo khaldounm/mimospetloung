@@ -12,6 +12,8 @@ import {
   InputAdornment,
   MenuItem,
   Stack,
+  FormControlLabel,
+  Switch,
   TextField,
   Tooltip,
 } from "@mui/material";
@@ -102,6 +104,22 @@ function InventoryItemForm({
   const [suppliers, setSuppliers] = useState<SupplierDTO[]>([]);
   const [supplierDialogOpen, setSupplierDialogOpen] = useState(false);
   const [expiryDate, setExpiryDate] = useState(item?.expiryDate ?? "");
+  // Loose selling. Switched on per item, so most of the catalogue never sees
+  // these fields at all.
+  const [tracksExpiry, setTracksExpiry] = useState(item?.tracksExpiry ?? false);
+  const [sellsLoose, setSellsLoose] = useState(item?.looseUnit != null);
+  const [looseUnit, setLooseUnit] = useState(item?.looseUnit ?? "");
+  const [loosePerUnit, setLoosePerUnit] = useState(item?.loosePerUnit ?? "");
+  const [loosePrice, setLoosePrice] = useState(item?.loosePrice ?? "");
+
+  // What the pack price works out at per loose unit, shown so staff can see the
+  // markup they are setting rather than guessing at it.
+  const looseComparison = (() => {
+    const price = Number(salePrice);
+    const per = Number(loosePerUnit);
+    if (!(price > 0) || !(per > 0)) return null;
+    return `$${(price / per).toFixed(2)} per ${looseUnit || "unit"}`;
+  })();
   const [notes, setNotes] = useState(item?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -209,6 +227,12 @@ function InventoryItemForm({
         // form never clears a supplier they were not shown.
         ...(canViewSuppliers ? { supplierId } : {}),
         expiryDate,
+        tracksExpiry,
+        // All three or none: the server and the database both reject a half
+        // configured item, so clearing the switch clears the trio.
+        looseUnit: sellsLoose ? looseUnit : null,
+        loosePerUnit: sellsLoose ? loosePerUnit : null,
+        loosePrice: sellsLoose ? loosePrice : null,
         notes,
         // Opening stock only seeds a new item; edits move stock via movements.
         ...(editing ? {} : { openingStock }),
@@ -402,14 +426,91 @@ function InventoryItemForm({
                 profit above. Set a Last cost so the split is accurate.
               </Alert>
             )}
-            <TextField
-              label="Expiry date"
-              type="date"
-              value={expiryDate}
-              onChange={(e) => setExpiryDate(e.target.value)}
-              slotProps={{ inputLabel: { shrink: true } }}
-              fullWidth
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={tracksExpiry}
+                  onChange={(e) => setTracksExpiry(e.target.checked)}
+                />
+              }
+              label="Perishable, track expiry per delivery"
             />
+            {tracksExpiry ? (
+              <Alert severity="info" sx={{ py: 0 }}>
+                Each delivery records its own lot and expiry, and sales take the
+                soonest-expiring stock first. Whatever is on the shelf now
+                counts as one undated batch until it sells through.
+              </Alert>
+            ) : (
+              <TextField
+                label="Expiry date"
+                type="date"
+                value={expiryDate}
+                onChange={(e) => setExpiryDate(e.target.value)}
+                slotProps={{ inputLabel: { shrink: true } }}
+                fullWidth
+              />
+            )}
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={sellsLoose}
+                  onChange={(e) => setSellsLoose(e.target.checked)}
+                />
+              }
+              label="Also sold loose, by weight or volume"
+            />
+            {sellsLoose && (
+              <>
+                <Stack direction="row" spacing={2}>
+                  <TextField
+                    label="Loose unit"
+                    value={looseUnit}
+                    onChange={(e) => setLooseUnit(e.target.value)}
+                    placeholder="kg"
+                    helperText="What customers ask for"
+                    required
+                    fullWidth
+                  />
+                  <TextField
+                    label="Per pack"
+                    type="number"
+                    value={loosePerUnit}
+                    onChange={(e) => setLoosePerUnit(e.target.value)}
+                    placeholder="20"
+                    helperText={
+                      looseUnit
+                        ? `${looseUnit} in one ${unit || "pack"}`
+                        : "How many in one pack"
+                    }
+                    slotProps={{ htmlInput: { min: 0, step: "0.001" } }}
+                    required
+                    fullWidth
+                  />
+                  <TextField
+                    label="Loose price"
+                    type="number"
+                    value={loosePrice}
+                    onChange={(e) => setLoosePrice(e.target.value)}
+                    helperText={
+                      looseUnit ? `Price per ${looseUnit}` : "Per unit"
+                    }
+                    slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
+                    required
+                    fullWidth
+                  />
+                </Stack>
+                <Alert severity="info" sx={{ py: 0 }}>
+                  Stock stays counted in packs. Loose price is its own figure
+                  and is normally higher than the pack price divided
+                  {looseComparison
+                    ? `, which here would be ${looseComparison}`
+                    : ""}
+                  .
+                </Alert>
+              </>
+            )}
             <TextField
               label="Notes"
               value={notes}

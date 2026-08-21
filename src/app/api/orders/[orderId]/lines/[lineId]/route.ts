@@ -7,7 +7,11 @@ import {
   parseId,
   requirePermission,
 } from "@/lib/api";
-import { getOrderDetail, isEditable } from "@/lib/purchase-orders";
+import {
+  getOrderDetail,
+  isEditable,
+  resolvePurchaseLine,
+} from "@/lib/purchase-orders";
 import { writeAudit } from "@/lib/audit";
 import { purchaseOrderLineUpdateSchema } from "@/schemas/purchase-order";
 
@@ -21,7 +25,12 @@ async function loadEditableLine(params: Params["params"]) {
 
   const line = await prisma.purchaseOrderLine.findFirst({
     where: { lineId, orderId },
-    include: { order: { select: { status: true, deletedAt: true } } },
+    include: {
+      order: { select: { status: true, deletedAt: true } },
+      item: {
+        select: { looseUnit: true, loosePerUnit: true, loosePrice: true },
+      },
+    },
   });
   if (!line || line.order.deletedAt) {
     throw new ApiError(404, "Order line not found");
@@ -32,22 +41,51 @@ async function loadEditableLine(params: Params["params"]) {
       `This order is ${line.order.status.toLowerCase()} and can no longer be edited.`,
     );
   }
-  return { orderId, lineId };
+  return { orderId, lineId, item: line.item };
 }
 
 export async function PATCH(request: Request, { params }: Params) {
   return handle(async () => {
     const session = await requirePermission("orders:write");
-    const { orderId, lineId } = await loadEditableLine(params);
+    const { orderId, lineId, item } = await loadEditableLine(params);
     const data = await parseBody(request, purchaseOrderLineUpdateSchema);
+
+    // Editing in loose units re-derives the ordered quantity and the per-pack
+    // cost together, so a per-kilo price can never be left sitting on a line
+    // measured in bags.
+    const resolved =
+      data.looseQty !== undefined
+        ? resolvePurchaseLine(item, {
+            looseQty: data.looseQty,
+            unitCost: data.unitCost,
+          })
+        : null;
 
     await prisma.purchaseOrderLine.update({
       where: { lineId },
       data: {
-        ...(data.quantityOrdered !== undefined
-          ? { quantityOrdered: data.quantityOrdered }
-          : {}),
-        ...(data.unitCost !== undefined ? { unitCost: data.unitCost } : {}),
+        ...(resolved
+          ? {
+              quantityOrdered: resolved.quantity,
+              looseQty: resolved.looseQty,
+              looseUnit: resolved.looseUnit,
+              ...(resolved.unitCost !== undefined
+                ? { unitCost: resolved.unitCost }
+                : {}),
+            }
+          : {
+              ...(data.quantityOrdered !== undefined
+                ? {
+                    quantityOrdered: data.quantityOrdered,
+                    // Switching back to packs drops a stale loose record.
+                    looseQty: null,
+                    looseUnit: null,
+                  }
+                : {}),
+              ...(data.unitCost !== undefined
+                ? { unitCost: data.unitCost }
+                : {}),
+            }),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
       },
     });

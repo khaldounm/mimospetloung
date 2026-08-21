@@ -1,7 +1,8 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
-import { isStockCheckViolation } from "@/lib/inventory";
+import { applyStockMovementTx, isStockCheckViolation } from "@/lib/inventory";
+import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
 import { computePartnerPayable, effectiveSharePct } from "@/lib/partners";
 import { toDateOnly } from "@/utils/format";
 import { INVOICE_STATUSES } from "@/types/enums";
@@ -47,6 +48,8 @@ type LineItemRow = {
   quantity: Prisma.Decimal;
   unitPrice: Prisma.Decimal;
   lineTotal: Prisma.Decimal;
+  looseQty: Prisma.Decimal | null;
+  looseUnit: string | null;
 };
 
 type PaymentRow = {
@@ -176,6 +179,8 @@ export function toLineItemDTO(l: LineItemRow): InvoiceLineItemDTO {
     quantity: l.quantity.toString(),
     unitPrice: l.unitPrice.toFixed(2),
     lineTotal: l.lineTotal.toFixed(2),
+    looseQty: l.looseQty ? l.looseQty.toString() : null,
+    looseUnit: l.looseUnit,
   };
 }
 
@@ -405,6 +410,74 @@ export async function recomputeInvoiceTotals(
   });
 }
 
+// ---- Loose line resolution ----
+
+export interface LooseCapableItem {
+  looseUnit: string | null;
+  loosePerUnit: Prisma.Decimal | null;
+  loosePrice: Prisma.Decimal | null;
+}
+
+export interface ResolvedLine {
+  quantity: number;
+  unitPrice: number | undefined;
+  looseQty: number | null;
+  looseUnit: string | null;
+}
+
+/**
+ * Turn what was typed into what the line stores.
+ *
+ * A loose amount ("2 kg") is converted here rather than in the browser, so the
+ * pack quantity that moves stock and the price that bills the customer are both
+ * derived from the item's own configuration, in one place, and a caller cannot
+ * post a quantity and a price that disagree with each other.
+ *
+ * A plain pack quantity passes straight through, which is every line that is
+ * not sold loose.
+ */
+export function resolveLine(
+  item: LooseCapableItem | null,
+  input: { quantity?: number; looseQty?: number; unitPrice?: number },
+): ResolvedLine {
+  if (input.looseQty === undefined) {
+    if (input.quantity === undefined) {
+      throw new ApiError(400, "A quantity is required");
+    }
+    return {
+      quantity: input.quantity,
+      unitPrice: input.unitPrice,
+      looseQty: null,
+      looseUnit: null,
+    };
+  }
+
+  const config = item ? looseConfigOf(item) : null;
+  if (!config) {
+    throw new ApiError(
+      400,
+      "This item is not set up to be sold loose. Set its loose unit, pack size and loose price first.",
+    );
+  }
+
+  const line = looseLine(input.looseQty, config);
+  if (!line) {
+    throw new ApiError(
+      400,
+      `The smallest amount that can be sold loose is ${minLooseQuantity(config)} ${config.unit}.`,
+    );
+  }
+
+  return {
+    quantity: line.quantity,
+    // Derived, never the caller's: the price has to be the one that makes the
+    // line total match what the customer was quoted for this amount.
+    unitPrice: line.unitPrice,
+    looseQty: input.looseQty,
+    looseUnit: config.unit,
+  };
+}
+
 // Issue a draft: freeze totals, decrement stock for inventory lines (recorded as
 // 'Sold' movements referencing this invoice), and lock the invoice. All atomic,
 // so an oversell rolls the whole issue back.
@@ -488,28 +561,23 @@ export async function issueInvoice(
           );
         }
 
-        await tx.inventoryTransaction.create({
-          data: {
-            itemId: line.itemId,
-            performedBy,
-            type: "Sold",
-            quantity: -qty,
-            // Freeze the item's cost at the moment of sale so COGS (and profit)
-            // stay accurate even if the purchase cost changes later.
-            unitCost: item?.lastCost ?? null,
-            // Freeze what it sold for too, so revenue and margin read from the
-            // movement rather than needing a join back to this invoice.
-            salePrice: line.unitPrice,
-            partnerId,
-            partnerPayable,
-            referenceType: "invoice",
-            referenceId: invoiceId,
-            notes: `Sold on ${formatInvoiceNumber(invoiceId)}`,
-          },
-        });
-        await tx.inventoryItem.update({
-          where: { itemId: line.itemId },
-          data: { currentStock: { decrement: qty } },
+        await applyStockMovementTx(tx, {
+          itemId: line.itemId,
+          type: "Sold",
+          quantity: qty,
+          // Freeze the item's cost at the moment of sale so COGS (and profit)
+          // stay accurate even if the purchase cost changes later.
+          unitCost: item?.lastCost?.toNumber(),
+          // Freeze what it sold for too, so revenue and margin read from the
+          // movement rather than needing a join back to this invoice.
+          salePrice: line.unitPrice,
+          partnerId,
+          partnerPayable,
+          referenceType: "invoice",
+          referenceId: invoiceId,
+          notes: `Sold on ${formatInvoiceNumber(invoiceId)}`,
+          performedBy,
+          allowDeletedItem: true,
         });
       }
 
@@ -584,6 +652,7 @@ export async function voidInvoice(
         },
         orderBy: { transactionId: "asc" },
         select: {
+          transactionId: true,
           itemId: true,
           partnerId: true,
           partnerPayable: true,
@@ -602,31 +671,29 @@ export async function voidInvoice(
         if (line.itemId == null) continue;
         const qty = line.quantity.toNumber();
         const sold = soldByItem.get(line.itemId)?.shift();
-        await tx.inventoryTransaction.create({
-          data: {
-            itemId: line.itemId,
-            performedBy,
-            type: "Adjusted",
-            quantity: qty,
-            // Carry the frozen cost and sale price from the original Sold
-            // movement (positive quantity here) so analytics can net this sale's
-            // COGS and revenue back out, mirroring how the negated
-            // partnerPayable cancels the accrual.
-            unitCost: sold?.unitCost ?? null,
-            salePrice: sold?.salePrice ?? null,
-            partnerId: sold?.partnerId ?? null,
-            partnerPayable:
-              sold?.partnerPayable != null
-                ? sold.partnerPayable.negated()
-                : null,
-            referenceType: "invoice",
-            referenceId: invoiceId,
-            notes: `Restock from voided ${formatInvoiceNumber(invoiceId)}`,
-          },
-        });
-        await tx.inventoryItem.update({
-          where: { itemId: line.itemId },
-          data: { currentStock: { increment: qty } },
+        await applyStockMovementTx(tx, {
+          itemId: line.itemId,
+          // Adjusted takes the sign as given, so a positive quantity puts the
+          // stock back.
+          type: "Adjusted",
+          quantity: qty,
+          // Carry the frozen cost and sale price from the original Sold
+          // movement (positive quantity here) so analytics can net this sale's
+          // COGS and revenue back out, mirroring how the negated
+          // partnerPayable cancels the accrual.
+          unitCost: sold?.unitCost?.toNumber(),
+          salePrice: sold?.salePrice,
+          partnerId: sold?.partnerId,
+          partnerPayable: sold?.partnerPayable?.negated(),
+          referenceType: "invoice",
+          referenceId: invoiceId,
+          notes: `Restock from voided ${formatInvoiceNumber(invoiceId)}`,
+          performedBy,
+          allowDeletedItem: true,
+          // Put a perishable line back into the exact lots the sale drew from,
+          // rather than creating a fresh undated batch that would then be
+          // picked ahead of stock with a known expiry.
+          reverseOf: sold?.transactionId,
         });
       }
     }

@@ -31,6 +31,14 @@ type ItemRow = {
   partner?: { name: string } | null;
   supplier?: { name: string } | null;
   expiryDate: Date | null;
+  tracksExpiry: boolean;
+  // Soonest KNOWN expiry among the item's open batches, when the caller asked
+  // for it. Absent on queries that did not join batches, which then fall back
+  // to the item's own date.
+  batches?: { expiryDate: Date | null }[];
+  looseUnit: string | null;
+  loosePerUnit: Prisma.Decimal | null;
+  loosePrice: Prisma.Decimal | null;
   notes: string | null;
 };
 
@@ -47,6 +55,26 @@ type TransactionRow = {
   performedAt: Date;
   performer: { firstName: string; lastName: string } | null;
 };
+
+// Which date the item should be judged on. A tracked item's expiry belongs to
+// its batches, and the one that matters is the soonest still on the shelf. The
+// item's own column stays authoritative for everything not batched, so nothing
+// that was already working had to change.
+//
+// Batches with no recorded expiry are skipped rather than treated as expiring:
+// unknown is not the same as imminent, and they are already picked first.
+function effectiveExpiry(i: {
+  expiryDate: Date | null;
+  tracksExpiry: boolean;
+  batches?: { expiryDate: Date | null }[];
+}): Date | null {
+  if (!i.tracksExpiry || i.batches === undefined) return i.expiryDate;
+  const dated = i.batches
+    .map((b) => b.expiryDate)
+    .filter((d): d is Date => d != null)
+    .sort((a, b) => a.getTime() - b.getTime());
+  return dated[0] ?? null;
+}
 
 function isExpired(expiryDate: Date | null): boolean {
   if (!expiryDate) return false;
@@ -86,13 +114,17 @@ export function toInventoryItemDTO(
     partnerSharePct: i.partnerSharePct ? i.partnerSharePct.toString() : null,
     supplierId: i.supplierId,
     supplierName: i.supplier?.name ?? null,
-    expiryDate: toDateOnly(i.expiryDate),
+    expiryDate: toDateOnly(effectiveExpiry(i)),
+    tracksExpiry: i.tracksExpiry,
+    looseUnit: i.looseUnit,
+    loosePerUnit: i.loosePerUnit ? i.loosePerUnit.toString() : null,
+    loosePrice: i.loosePrice ? i.loosePrice.toString() : null,
     notes: i.notes,
     needsReview: i.needsReview,
     reviewNote: i.reviewNote,
     // Only nag about reorder when a level is actually configured.
     isLowStock: i.reorderLevel > 0 && currentStock <= i.reorderLevel,
-    isExpired: isExpired(i.expiryDate),
+    isExpired: isExpired(effectiveExpiry(i)),
   };
 }
 
@@ -155,15 +187,157 @@ const txInclude = {
   performer: { select: { firstName: true, lastName: true } },
 } as const;
 
+// Joined wherever an item DTO is built, so the expiry shown is the soonest one
+// actually on the shelf. Only dated, open batches matter, and only the first,
+// so this is one indexed row per item rather than a second query.
+export const itemExpiryInclude = {
+  batches: {
+    where: { quantity: { gt: 0 }, expiryDate: { not: null } },
+    orderBy: { expiryDate: "asc" },
+    take: 1,
+    select: { expiryDate: true },
+  },
+} as const;
+
 export interface StockMovementParams {
   itemId: number;
   type: InventoryTxType;
   quantity: number;
   unitCost?: number;
+  // Frozen sale price and consignment accrual, set by the invoice paths. With
+  // these here, revenue, cost and what a partner is owed are all readable from
+  // the movement alone, with no join back to the invoice.
+  salePrice?: Prisma.Decimal | number | null;
+  partnerId?: number | null;
+  partnerPayable?: Prisma.Decimal | number | null;
   referenceType?: string;
   referenceId?: number;
   notes?: string;
   performedBy: number | null;
+  // An invoice line outlives a soft-deleted item: a draft raised before the
+  // delete still has to issue and void cleanly, and blocking it here would
+  // strand the invoice. Only those callers opt in, so everyone else keeps the
+  // existence check.
+  allowDeletedItem?: boolean;
+  // Batch details for a delivery of a perishable item. Ignored on items that do
+  // not track expiry.
+  lotNumber?: string | null;
+  expiryDate?: Date | null;
+  purchaseLineId?: number | null;
+  // Put stock back into the exact batches an earlier movement took it from,
+  // instead of opening a new one. Voiding an invoice uses this so a returned
+  // scoop goes back to the lot it came out of rather than becoming undated
+  // stock that then picks first.
+  reverseOf?: number | null;
+}
+
+// FEFO: soonest expiry first, and a null expiry sorts before any date because
+// undated stock is the oldest stock on the shelf. Ties break on the oldest
+// delivery. Written as raw SQL for the row lock: two invoices issued at the
+// same moment would otherwise both read the same batch and both decrement it.
+async function lockBatchesForPicking(
+  tx: Prisma.TransactionClient,
+  itemId: number,
+): Promise<{ batch_id: number; quantity: Prisma.Decimal }[]> {
+  return tx.$queryRaw`
+    SELECT batch_id, quantity
+      FROM inventory_batches
+     WHERE item_id = ${itemId}
+       AND quantity > 0
+     ORDER BY expiry_date ASC NULLS FIRST, received_at ASC, batch_id ASC
+     FOR UPDATE
+  `;
+}
+
+// Move a tracked item's batches to match a movement that has already been
+// applied to current_stock, so the rollup and the batch rows stay equal.
+async function applyBatchDelta(
+  tx: Prisma.TransactionClient,
+  params: {
+    itemId: number;
+    delta: Prisma.Decimal;
+    transactionId: number;
+    lotNumber?: string | null;
+    expiryDate?: Date | null;
+    purchaseLineId?: number | null;
+    reverseOf?: number | null;
+  },
+): Promise<void> {
+  const { itemId, delta, transactionId } = params;
+  if (delta.isZero()) return;
+
+  const allocate = async (batchId: number, quantity: Prisma.Decimal) => {
+    await tx.inventoryBatchMovement.create({
+      data: { transactionId, batchId, quantity },
+    });
+    await tx.inventoryBatch.update({
+      where: { batchId },
+      data: { quantity: { increment: quantity } },
+    });
+  };
+
+  if (delta.isNegative()) {
+    let remaining = delta.abs();
+    for (const row of await lockBatchesForPicking(tx, itemId)) {
+      if (remaining.lessThanOrEqualTo(0)) break;
+      const take = Prisma.Decimal.min(remaining, row.quantity);
+      await allocate(row.batch_id, take.negated());
+      remaining = remaining.minus(take);
+    }
+    if (remaining.greaterThan(0)) {
+      // current_stock said there was enough but the batches do not add up. That
+      // is a rollup that has drifted, and continuing would hide it.
+      throw new ApiError(
+        409,
+        "Batch records for this item do not match its stock level. Count the item and adjust before selling it.",
+      );
+    }
+    return;
+  }
+
+  // Putting stock back: return it to the batches it came from, so a voided sale
+  // restores the original lots rather than inventing an undated one.
+  if (params.reverseOf != null) {
+    const original = await tx.inventoryBatchMovement.findMany({
+      where: { transactionId: params.reverseOf },
+    });
+    if (original.length > 0) {
+      for (const m of original) {
+        await allocate(m.batchId, m.quantity.negated());
+      }
+      return;
+    }
+  }
+
+  // A real lot number identifies stock, so a repeat delivery of it joins the
+  // batch already on the shelf. Undated stock gets its own row instead, which
+  // keeps the opening batch from swallowing every later delivery.
+  const existing =
+    params.lotNumber != null
+      ? await tx.inventoryBatch.findFirst({
+          where: {
+            itemId,
+            lotNumber: params.lotNumber,
+            expiryDate: params.expiryDate ?? null,
+          },
+        })
+      : null;
+
+  if (existing) {
+    await allocate(existing.batchId, delta);
+    return;
+  }
+
+  const created = await tx.inventoryBatch.create({
+    data: {
+      itemId,
+      lotNumber: params.lotNumber ?? null,
+      expiryDate: params.expiryDate ?? null,
+      purchaseLineId: params.purchaseLineId ?? null,
+      quantity: 0,
+    },
+  });
+  await allocate(created.batchId, delta);
 }
 
 // Record one stock movement and apply it to current_stock, inside a transaction
@@ -177,8 +351,11 @@ export async function applyStockMovementTx(
   const delta = signedDelta(params.type, params.quantity);
 
   const item = await tx.inventoryItem.findFirst({
-    where: { itemId: params.itemId, deletedAt: null },
-    select: { itemId: true, lastCost: true },
+    where: {
+      itemId: params.itemId,
+      ...(params.allowDeletedItem ? {} : { deletedAt: null }),
+    },
+    select: { itemId: true, lastCost: true, tracksExpiry: true },
   });
   if (!item) throw new ApiError(404, "Inventory item not found");
 
@@ -204,6 +381,9 @@ export async function applyStockMovementTx(
       type: params.type,
       quantity: delta,
       unitCost,
+      salePrice: params.salePrice ?? undefined,
+      partnerId: params.partnerId ?? undefined,
+      partnerPayable: params.partnerPayable ?? undefined,
       referenceType: params.referenceType,
       referenceId: params.referenceId,
       notes: params.notes,
@@ -221,6 +401,21 @@ export async function applyStockMovementTx(
         : {}),
     },
   });
+
+  // Batches are the truth for a tracked item and current_stock above is the
+  // cached rollup of them, so this runs inside the same transaction: either
+  // both move or neither does.
+  if (item.tracksExpiry) {
+    await applyBatchDelta(tx, {
+      itemId: params.itemId,
+      delta: new Prisma.Decimal(delta),
+      transactionId: transaction.transactionId,
+      lotNumber: params.lotNumber,
+      expiryDate: params.expiryDate,
+      purchaseLineId: params.purchaseLineId,
+      reverseOf: params.reverseOf,
+    });
+  }
 
   return { item: updated, transaction };
 }
@@ -362,6 +557,7 @@ export async function listInventory(
       include: {
         partner: { select: { name: true } },
         supplier: { select: { name: true } },
+        ...itemExpiryInclude,
       },
       orderBy: [{ name: "asc" }, { itemId: "asc" }],
       take: pageSize,

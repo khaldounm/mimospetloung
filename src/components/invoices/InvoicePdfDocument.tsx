@@ -15,6 +15,7 @@ import {
   formatMoney,
   formatSecondaryMoney,
 } from "@/utils/format";
+import { formatLineQuantity } from "@/utils/inventory";
 import type { InvoiceDTO } from "@/types/entities";
 
 const COLORS = {
@@ -252,7 +253,7 @@ export default function InvoicePdfDocument({
           {invoice.lineItems.map((l) => (
             <View key={l.lineItemId} style={styles.tableRow}>
               <Text style={styles.colDesc}>{l.description}</Text>
-              <Text style={styles.colQty}>{l.quantity}</Text>
+              <Text style={styles.colQty}>{formatLineQuantity(l)}</Text>
               <Text style={styles.colUnit}>{formatMoney(l.unitPrice)}</Text>
               <Text style={styles.colTotal}>{formatMoney(l.lineTotal)}</Text>
             </View>

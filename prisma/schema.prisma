@@ -385,9 +385,14 @@ model PurchaseOrderLine {
   // unitCost, so quantityOrdered * unitCost nets against the balance on its own.
   // Enforced in the migration: non-zero, and quantityReceived must share its
   // sign without exceeding it in magnitude.
-  quantityOrdered  Decimal  @map("quantity_ordered") @db.Decimal(10, 2)
-  quantityReceived Decimal  @default(0) @map("quantity_received") @db.Decimal(10, 2)
+  quantityOrdered  Decimal  @map("quantity_ordered") @db.Decimal(10, 3)
+  quantityReceived Decimal  @default(0) @map("quantity_received") @db.Decimal(10, 3)
   unitCost         Decimal? @map("unit_cost") @db.Decimal(12, 2)
+  // What was typed when the line was entered loose (200 kg rather than 10 bags).
+  // Record only: quantityOrdered is still the stocking unit and is what every
+  // calculation reads, so nothing downstream has to know which way it was keyed.
+  looseQty         Decimal? @map("loose_qty") @db.Decimal(10, 3)
+  looseUnit        String?  @map("loose_unit") @db.VarChar(20)
   notes            String?  @db.Text
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -416,7 +421,24 @@ model InventoryItem {
   category        String?   @db.VarChar(100)
   barcode         String?   @unique @db.VarChar(100)
   unit            String?   @db.VarChar(50)
-  currentStock    Decimal   @default(0) @map("current_stock") @db.Decimal(10, 2)
+  currentStock    Decimal   @default(0) @map("current_stock") @db.Decimal(10, 3)
+  // Loose selling: a pack that gets broken open and sold by weight or volume
+  // (a 20kg sack scooped by the kilo, a vial drawn by the ml). Stock stays in
+  // packs; these only describe how a part-pack is asked for and priced.
+  //
+  // loosePrice is an INDEPENDENT price, never salePrice / loosePerUnit: loose
+  // sells at a markup. The legacy data is unambiguous, a $15.60 vial was billed
+  // at $24 to $32 when drawn in fractions.
+  //
+  // All three are set together or all left null, enforced by a CHECK. An item
+  // with them null behaves exactly as it always has.
+  // Perishable. Only tracked items capture a lot and expiry at goods receipt
+  // and pick first-expiring-first on sale, so nobody is asked for a lot number
+  // on a nylon harness. Untracked items keep expiryDate below as a plain field.
+  tracksExpiry    Boolean   @default(false) @map("tracks_expiry")
+  looseUnit       String?   @map("loose_unit") @db.VarChar(20)
+  loosePerUnit    Decimal?  @map("loose_per_unit") @db.Decimal(10, 3)
+  loosePrice      Decimal?  @map("loose_price") @db.Decimal(12, 2)
   reorderLevel    Int       @default(0) @map("reorder_level")
   salePrice       Decimal?  @map("sale_price") @db.Decimal(12, 2)
   lastCost        Decimal?  @map("last_cost") @db.Decimal(12, 2)
@@ -439,6 +461,8 @@ model InventoryItem {
   transactions InventoryTransaction[]
   lineItems    InvoiceLineItem[]
   orderLines   PurchaseOrderLine[]
+  batches      InventoryBatch[]
+  barcodes     InventoryBarcode[]
 
   @@index([partnerId], map: "idx_inventory_items_partner")
   @@index([supplierId], map: "idx_inventory_items_supplier")
@@ -446,25 +470,26 @@ model InventoryItem {
 }
 
 model InventoryTransaction {
-  transactionId  Int      @id @default(autoincrement()) @map("transaction_id")
-  itemId         Int      @map("item_id")
-  performedBy    Int?     @map("performed_by")
-  type           String   @db.VarChar(20)
-  quantity       Decimal  @db.Decimal(10, 2)
-  unitCost       Decimal? @map("unit_cost") @db.Decimal(12, 2)
+  transactionId  Int                      @id @default(autoincrement()) @map("transaction_id")
+  itemId         Int                      @map("item_id")
+  performedBy    Int?                     @map("performed_by")
+  type           String                   @db.VarChar(20)
+  quantity       Decimal                  @db.Decimal(10, 3)
+  unitCost       Decimal?                 @map("unit_cost") @db.Decimal(12, 2)
   // Frozen sale price per unit on a Sold movement (and carried onto its void
   // reversal), mirroring unitCost. With both frozen here, revenue, cost and
   // profit are all readable from this table alone, with no join back to the
   // invoice and no risk of an item's later reassignment rewriting history.
-  salePrice      Decimal? @map("sale_price") @db.Decimal(12, 2)
-  referenceType  String?  @map("reference_type") @db.VarChar(50)
-  referenceId    Int?     @map("reference_id")
+  salePrice      Decimal?                 @map("sale_price") @db.Decimal(12, 2)
+  referenceType  String?                  @map("reference_type") @db.VarChar(50)
+  referenceId    Int?                     @map("reference_id")
   // Consignment: on a Sold movement of a partner item, the frozen amount owed to
   // the partner (cost back + share of profit). Negated on a void reversal.
-  partnerId      Int?     @map("partner_id")
-  partnerPayable Decimal? @map("partner_payable") @db.Decimal(12, 2)
-  notes          String?  @db.Text
-  performedAt    DateTime @default(now()) @map("performed_at") @db.Timestamptz(6)
+  partnerId      Int?                     @map("partner_id")
+  partnerPayable Decimal?                 @map("partner_payable") @db.Decimal(12, 2)
+  notes          String?                  @db.Text
+  performedAt    DateTime                 @default(now()) @map("performed_at") @db.Timestamptz(6)
+  batchMovements InventoryBatchMovement[]
 
   item      InventoryItem @relation(fields: [itemId], references: [itemId], onDelete: Restrict)
   performer User?         @relation(fields: [performedBy], references: [userId], onDelete: SetNull)
@@ -482,6 +507,82 @@ model InventoryTransaction {
 // When such an item sells, the clinic owes the partner their cost back plus an
 // agreed share of the profit. Soft-deleted so historical balances stay
 // reproducible; DB CHECK keeps default_share_pct in 0..100.
+// One delivery of a perishable item: what arrived, under which lot, expiring
+// when. For a tracked item this is the truth about stock, and
+// InventoryItem.currentStock is a cached rollup of the open batches.
+//
+// A batch with a null expiry is stock that was on the shelf before batching
+// began, or a delivery whose carton carried no date. It sorts FIRST on picking:
+// it genuinely is the oldest stock, so consuming it first is both correct and
+// the fastest way to drain the unknown pool.
+// Additional codes for an item, beyond the primary one on InventoryItem.
+// barcode. This is where a CASE code lives.
+//
+// A single barcode column cannot say "this code means twelve of them", so
+// scanning a carton at goods receipt books one unit instead of twelve. The 22
+// ITF-14s imported from the old system are exactly that: case codes on outer
+// cartons. packSize is how many stocking units one scan of this code means.
+model InventoryBarcode {
+  barcodeId Int      @id @default(autoincrement()) @map("barcode_id")
+  itemId    Int      @map("item_id")
+  // Stored as GTIN-14 so every representation of the same code compares equal.
+  gtin      String   @unique @db.VarChar(20)
+  // Units per scan. 1 for an alternate unit code, N for a carton.
+  packSize  Decimal  @default(1) @map("pack_size") @db.Decimal(10, 3)
+  label     String?  @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  item InventoryItem @relation(fields: [itemId], references: [itemId], onDelete: Cascade)
+
+  @@index([itemId], map: "idx_inventory_barcodes_item")
+  @@map("inventory_barcodes")
+}
+
+model InventoryBatch {
+  batchId        Int       @id @default(autoincrement()) @map("batch_id")
+  itemId         Int       @map("item_id")
+  lotNumber      String?   @map("lot_number") @db.VarChar(100)
+  expiryDate     DateTime? @map("expiry_date") @db.Date
+  // Remaining, in the item's stocking unit. Never negative.
+  quantity       Decimal   @db.Decimal(10, 3)
+  receivedAt     DateTime  @default(now()) @map("received_at") @db.Timestamptz(6)
+  // The delivery this came from, when it came from an order at all. Null on the
+  // opening batch written at cutover and on manual adjustments.
+  purchaseLineId Int?      @map("purchase_line_id")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  item      InventoryItem            @relation(fields: [itemId], references: [itemId], onDelete: Cascade)
+  movements InventoryBatchMovement[]
+
+  // The picking order, as an index so FEFO does not sort the table.
+  @@index([itemId, expiryDate, receivedAt], map: "idx_batches_item_fefo")
+  @@map("inventory_batches")
+}
+
+// Which batches one stock movement drew from, or added to. A single sale can
+// span two lots when the first runs out mid-line, so this is a join rather than
+// a column on the movement.
+//
+// It also keeps every existing pairing intact: a sale still writes exactly one
+// InventoryTransaction per invoice line, so voiding an invoice can still match
+// movements to lines, and it reverses the exact batches the sale consumed
+// rather than guessing.
+model InventoryBatchMovement {
+  id            Int     @id @default(autoincrement())
+  transactionId Int     @map("transaction_id")
+  batchId       Int     @map("batch_id")
+  // Signed, matching the movement: negative took stock out of this batch.
+  quantity      Decimal @db.Decimal(10, 3)
+
+  transaction InventoryTransaction @relation(fields: [transactionId], references: [transactionId], onDelete: Cascade)
+  batch       InventoryBatch       @relation(fields: [batchId], references: [batchId], onDelete: Cascade)
+
+  @@index([transactionId], map: "idx_batch_movements_transaction")
+  @@index([batchId], map: "idx_batch_movements_batch")
+  @@map("inventory_batch_movements")
+}
+
 model Partner {
   partnerId       Int       @id @default(autoincrement()) @map("partner_id")
   name            String    @db.VarChar(120)
@@ -592,20 +693,26 @@ model Invoice {
 }
 
 model InvoiceLineItem {
-  lineItemId  Int     @id @default(autoincrement()) @map("line_item_id")
+  lineItemId  Int      @id @default(autoincrement()) @map("line_item_id")
   // Primary key from the old Access system. See Client.legacyId.
   // See Client.needsReview.
-  needsReview Boolean @default(false) @map("needs_review")
-  reviewNote  String? @map("review_note") @db.Text
-  legacyId    Int?    @unique @map("legacy_id")
-  invoiceId   Int     @map("invoice_id")
-  serviceId   Int?    @map("service_id")
-  itemId      Int?    @map("item_id")
-  description String  @db.VarChar(255)
-  quantity    Decimal @default(1) @db.Decimal(10, 2)
-  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  needsReview Boolean  @default(false) @map("needs_review")
+  reviewNote  String?  @map("review_note") @db.Text
+  legacyId    Int?     @unique @map("legacy_id")
+  invoiceId   Int      @map("invoice_id")
+  serviceId   Int?     @map("service_id")
+  itemId      Int?     @map("item_id")
+  description String   @db.VarChar(255)
+  quantity    Decimal  @default(1) @db.Decimal(10, 3)
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(12, 2)
+  // What the customer actually asked for on a loose line (2 kg rather than 0.1
+  // of a bag), so the printed invoice reads the way the sale happened. Record
+  // only: quantity above stays in stocking units, which is why stock, COGS and
+  // partner payouts needed no changes for loose selling.
+  looseQty    Decimal? @map("loose_qty") @db.Decimal(10, 3)
+  looseUnit   String?  @map("loose_unit") @db.VarChar(20)
   // GENERATED ALWAYS AS (quantity * unit_price) STORED — computed by Postgres.
-  lineTotal   Decimal @default(dbgenerated()) @map("line_total") @db.Decimal(12, 2)
+  lineTotal   Decimal  @default(dbgenerated()) @map("line_total") @db.Decimal(12, 2)
 
   invoice Invoice        @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
   service Service?       @relation(fields: [serviceId], references: [serviceId], onDelete: SetNull)

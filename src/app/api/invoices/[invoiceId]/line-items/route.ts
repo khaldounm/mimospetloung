@@ -4,6 +4,7 @@ import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import {
   invoiceInclude,
   recomputeInvoiceTotals,
+  resolveLine,
   toInvoiceDTO,
 } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
@@ -37,6 +38,9 @@ export async function POST(
     // Snapshot the label + price from the source, allowing caller overrides.
     let description = data.description;
     let unitPrice = data.unitPrice;
+    // Filled from the item when the line is sold loose, so the pack quantity
+    // and the price are derived from the item's own configuration.
+    let resolved = resolveLine(null, { quantity: data.quantity ?? 1 });
 
     if (data.serviceId !== undefined) {
       const service = await prisma.service.findUnique({
@@ -49,12 +53,20 @@ export async function POST(
     } else if (data.itemId !== undefined) {
       const item = await prisma.inventoryItem.findFirst({
         where: { itemId: data.itemId, deletedAt: null },
-        select: { name: true, salePrice: true },
+        select: {
+          name: true,
+          salePrice: true,
+          looseUnit: true,
+          loosePerUnit: true,
+          loosePrice: true,
+        },
       });
       if (!item) throw new ApiError(400, "Inventory item not found");
       description = description ?? item.name;
+      resolved = resolveLine(item, data);
       unitPrice =
-        unitPrice ?? (item.salePrice ? item.salePrice.toNumber() : undefined);
+        resolved.unitPrice ??
+        (item.salePrice ? item.salePrice.toNumber() : undefined);
     }
 
     if (unitPrice === undefined) {
@@ -71,8 +83,10 @@ export async function POST(
           serviceId: data.serviceId,
           itemId: data.itemId,
           description,
-          quantity: data.quantity,
+          quantity: resolved.quantity,
           unitPrice,
+          looseQty: resolved.looseQty,
+          looseUnit: resolved.looseUnit,
         },
       });
       await recomputeInvoiceTotals(tx, invoiceId);
@@ -87,7 +101,15 @@ export async function POST(
       action: "create",
       entity: "invoice_line_item",
       entityId: lineItemId,
-      changes: { invoiceId, description, quantity: data.quantity, unitPrice },
+      changes: {
+        invoiceId,
+        description,
+        quantity: resolved.quantity,
+        unitPrice,
+        ...(resolved.looseQty != null
+          ? { looseQty: resolved.looseQty, looseUnit: resolved.looseUnit }
+          : {}),
+      },
     });
 
     return NextResponse.json(

@@ -2,7 +2,11 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
-import { toInventoryItemDTO, toInventoryTransactionDTO } from "@/lib/inventory";
+import {
+  itemExpiryInclude,
+  toInventoryItemDTO,
+  toInventoryTransactionDTO,
+} from "@/lib/inventory";
 import InventoryDetail from "@/components/inventory/InventoryDetail";
 
 export default async function InventoryItemPage({ id }: { id: number }) {
@@ -16,6 +20,7 @@ export default async function InventoryItemPage({ id }: { id: number }) {
     include: {
       partner: { select: { name: true } },
       supplier: { select: { name: true } },
+      ...itemExpiryInclude,
       transactions: {
         orderBy: { performedAt: "desc" },
         include: { performer: { select: { firstName: true, lastName: true } } },

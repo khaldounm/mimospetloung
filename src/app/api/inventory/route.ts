@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { canSeeCost } from "@/lib/permissions";
 import {
+  applyStockMovementTx,
   isUniqueConstraintError,
   listInventory,
   toInventoryItemDTO,
@@ -59,26 +60,25 @@ export async function POST(request: Request) {
             partnerSharePct: data.partnerSharePct ?? null,
             supplierId: data.supplierId ?? null,
             expiryDate: data.expiryDate,
+            tracksExpiry: data.tracksExpiry ?? false,
+            looseUnit: data.looseUnit ?? null,
+            loosePerUnit: data.loosePerUnit ?? null,
+            loosePrice: data.loosePrice ?? null,
             notes: data.notes,
           },
         });
 
         if (openingStock > 0) {
-          await tx.inventoryTransaction.create({
-            data: {
-              itemId: created.itemId,
-              performedBy: session.user.userId,
-              type: "Received",
-              quantity: openingStock,
-              unitCost: data.lastCost,
-              referenceType: "opening",
-              notes: "Opening stock",
-            },
+          const { item: stocked } = await applyStockMovementTx(tx, {
+            itemId: created.itemId,
+            type: "Received",
+            quantity: openingStock,
+            unitCost: data.lastCost ?? undefined,
+            referenceType: "opening",
+            notes: "Opening stock",
+            performedBy: session.user.userId,
           });
-          return tx.inventoryItem.update({
-            where: { itemId: created.itemId },
-            data: { currentStock: { increment: openingStock } },
-          });
+          return stocked;
         }
 
         return created;

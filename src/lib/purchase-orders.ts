@@ -6,6 +6,12 @@ import {
   rethrowStockMovementError,
 } from "@/lib/inventory";
 import { toDateOnly } from "@/utils/format";
+import {
+  looseConfigOf,
+  looseToPacks,
+  minLooseQuantity,
+  roundMoney,
+} from "@/utils/inventory";
 import type { PurchaseOrderDTO, PurchaseOrderLineDTO } from "@/types/entities";
 import type { PurchaseOrderStatus } from "@/types/enums";
 
@@ -40,6 +46,10 @@ export const orderInclude = {
           unit: true,
           currentStock: true,
           reorderLevel: true,
+          // So the receive dialog knows which lines want a lot and expiry, and
+          // which line a scanned carton belongs to.
+          tracksExpiry: true,
+          barcode: true,
         },
       },
     },
@@ -75,6 +85,10 @@ export function toPurchaseOrderLineDTO(l: LineRow): PurchaseOrderLineDTO {
       : D(0)
     ).toString(),
     unitCost: l.unitCost ? l.unitCost.toString() : null,
+    looseQty: l.looseQty ? l.looseQty.toString() : null,
+    looseUnit: l.looseUnit,
+    tracksExpiry: l.item.tracksExpiry,
+    barcode: l.item.barcode,
     lineTotal: lineTotal.toFixed(2),
     notes: l.notes,
   };
@@ -279,6 +293,80 @@ export async function placeOrder(orderId: number, orderedOn?: Date) {
   });
 }
 
+// ---- Loose purchase lines ----
+
+export interface LooseCapableItem {
+  looseUnit: string | null;
+  loosePerUnit: Prisma.Decimal | null;
+  loosePrice: Prisma.Decimal | null;
+}
+
+export interface ResolvedPurchaseLine {
+  quantity: number;
+  unitCost: number | undefined;
+  looseQty: number | null;
+  looseUnit: string | null;
+}
+
+/**
+ * Turn a purchase line keyed in loose units into what the line stores.
+ *
+ * Suppliers quote a 20kg sack either way, "$35 a bag" or "$1.75 a kilo", so
+ * both the ordering and the receiving end accept either. The conversion runs
+ * here, on the server and before any validation, because the outstanding check
+ * compares a delivery straight against quantityOrdered and the two have to be
+ * in the same unit by then.
+ *
+ * Cost converts, and it converts PRO RATA, which is the opposite of the selling
+ * side. A sale price for loose stock is an independent markup; a purchase cost
+ * genuinely is the pack cost divided, so $1.75/kg on a 20kg bag is $35.00 a
+ * bag. Accepting a kilo quantity while leaving a per-kilo cost would land the
+ * item's lastCost twenty times low and quietly poison margin and every future
+ * partner payout.
+ */
+export function resolvePurchaseLine(
+  item: LooseCapableItem | null,
+  input: { quantity?: number; looseQty?: number; unitCost?: number },
+): ResolvedPurchaseLine {
+  if (input.looseQty === undefined) {
+    if (input.quantity === undefined) {
+      throw new ApiError(400, "A quantity is required");
+    }
+    return {
+      quantity: input.quantity,
+      unitCost: input.unitCost,
+      looseQty: null,
+      looseUnit: null,
+    };
+  }
+
+  const config = item ? looseConfigOf(item) : null;
+  if (!config) {
+    throw new ApiError(
+      400,
+      "This item is not set up to be bought or sold loose. Set its loose unit, pack size and loose price first.",
+    );
+  }
+
+  const quantity = looseToPacks(input.looseQty, config);
+  if (quantity == null) {
+    throw new ApiError(
+      400,
+      `The smallest amount that can be ordered loose is ${minLooseQuantity(config)} ${config.unit}.`,
+    );
+  }
+
+  return {
+    quantity,
+    unitCost:
+      input.unitCost !== undefined
+        ? roundMoney(input.unitCost * config.perUnit)
+        : undefined,
+    looseQty: input.looseQty,
+    looseUnit: config.unit,
+  };
+}
+
 // Books in one delivery, which may be all of the order or part of it. Writes a
 // Received movement per line delivered, refreshes those items' last cost, and
 // lands the order in Partial or Received depending on what is still outstanding.
@@ -291,15 +379,43 @@ export async function placeOrder(orderId: number, orderedOn?: Date) {
 // Receiving straight from Draft is allowed. Stock often turns up before anyone
 // remembers to mark the order as placed, and refusing would only teach staff to
 // click through a meaningless step.
+//
+// Each line may carry the cost the supplier actually invoiced. An order is
+// raised from the item's last known cost, which is an estimate: the real figure
+// only arrives with the delivery note. Without a way to correct it here the
+// estimate was booked as fact and then written back as the item's last cost,
+// seeding the next order with the same stale number, and the supplier balance
+// (built from quantityOrdered * unitCost) was billed at a guess.
 export async function receiveOrder(
   orderId: number,
-  received: { lineId: number; quantity: number }[],
+  received: {
+    lineId: number;
+    quantity: number;
+    unitCost?: number;
+    looseQty?: number;
+    // Off the carton, for perishables. One GS1 DataMatrix scan fills both.
+    lotNumber?: string | null;
+    expiryDate?: Date | null;
+  }[],
   performedBy: number | null,
   receivedOn?: Date,
 ) {
   const order = await prisma.purchaseOrder.findFirst({
     where: { orderId, deletedAt: null },
-    include: { lines: { include: { item: { select: { name: true } } } } },
+    include: {
+      lines: {
+        include: {
+          item: {
+            select: {
+              name: true,
+              looseUnit: true,
+              loosePerUnit: true,
+              loosePrice: true,
+            },
+          },
+        },
+      },
+    },
   });
   if (!order) throw new ApiError(404, "Purchase order not found");
   if (!isReceivable(order.status)) {
@@ -322,6 +438,13 @@ export async function receiveOrder(
   const deliveries: {
     line: (typeof order.lines)[number];
     quantity: Prisma.Decimal;
+    // What this delivery cost, frozen onto its own movement.
+    unitCost: Prisma.Decimal;
+    // What the line should now read, blended across every delivery so far.
+    lineCost: Prisma.Decimal;
+    // Batch details for a perishable delivery. Ignored on untracked items.
+    lotNumber?: string | null;
+    expiryDate?: Date | null;
   }[] = [];
 
   for (const entry of received) {
@@ -329,7 +452,17 @@ export async function receiveOrder(
     if (!line) {
       throw new ApiError(404, `Line ${entry.lineId} is not on this order`);
     }
-    const quantity = D(entry.quantity);
+    // A delivery note written in kilos becomes bags here, before the
+    // outstanding check below compares it against the ordered quantity. Both
+    // have to be in the stocking unit by that point or the comparison is
+    // meaningless. The per-kilo cost converts to a per-bag cost with it.
+    const resolved = resolvePurchaseLine(line.item, {
+      quantity: entry.quantity,
+      looseQty: entry.looseQty,
+      unitCost: entry.unitCost,
+    });
+
+    const quantity = D(resolved.quantity);
     if (quantity.lessThanOrEqualTo(0)) continue;
 
     const outstanding = line.quantityOrdered.minus(line.quantityReceived);
@@ -341,14 +474,42 @@ export async function receiveOrder(
     }
     // Cost is what makes the delivery worth anything downstream: it becomes the
     // item's last cost, which the profit report charges as COGS when the stock
-    // sells. Only the lines actually arriving need one.
-    if (line.unitCost == null) {
+    // sells. Only the lines actually arriving need one. The dialog pre-fills
+    // the line's figure, so leaving it alone behaves exactly as before.
+    const unitCost =
+      resolved.unitCost !== undefined ? D(resolved.unitCost) : line.unitCost;
+    if (unitCost == null) {
       throw new ApiError(
         409,
-        `Set a unit cost on ${line.item.name} before receiving it. It becomes the item's cost price.`,
+        `Enter a unit cost for ${line.item.name}. It becomes the item's cost price and is what the profit report charges when that stock sells.`,
       );
     }
-    deliveries.push({ line, quantity });
+
+    // A part-delivered line can arrive at two different prices, and the line
+    // holds only one. Weighting what is already in against what is arriving
+    // keeps quantityOrdered * unitCost equal to what was actually paid, which
+    // is what both the order total and the supplier balance are built from.
+    // Letting the newest price simply overwrite would retroactively reprice a
+    // delivery that settled months ago. The per-delivery cost is frozen on its
+    // own movement, so COGS and margin are untouched by this blend.
+    const alreadyIn = line.quantityReceived;
+    const lineCost =
+      alreadyIn.greaterThan(0) && line.unitCost != null
+        ? alreadyIn
+            .times(line.unitCost)
+            .plus(quantity.times(unitCost))
+            .dividedBy(alreadyIn.plus(quantity))
+            .toDecimalPlaces(2)
+        : unitCost;
+
+    deliveries.push({
+      line,
+      quantity,
+      unitCost,
+      lineCost,
+      lotNumber: entry.lotNumber,
+      expiryDate: entry.expiryDate,
+    });
   }
 
   if (deliveries.length === 0) {
@@ -359,19 +520,38 @@ export async function receiveOrder(
 
   try {
     return await prisma.$transaction(async (tx) => {
-      for (const { line, quantity } of deliveries) {
+      for (const {
+        line,
+        quantity,
+        unitCost,
+        lineCost,
+        lotNumber,
+        expiryDate,
+      } of deliveries) {
+        // The movement takes this delivery's own cost, which also refreshes the
+        // item's last cost. That is deliberately the newest real price rather
+        // than the blend below: last cost means "what it cost most recently",
+        // and it is what seeds the next reorder.
         await applyStockMovementTx(tx, {
           itemId: line.itemId,
           type: "Received",
           quantity: quantity.toNumber(),
-          unitCost: line.unitCost?.toNumber(),
+          unitCost: unitCost.toNumber(),
           referenceType: "purchase_order",
           referenceId: orderId,
           performedBy,
+          // Opens a batch for a perishable item, so this delivery's expiry is
+          // tracked separately from whatever is already on the shelf.
+          lotNumber,
+          expiryDate,
+          purchaseLineId: line.lineId,
         });
         await tx.purchaseOrderLine.update({
           where: { lineId: line.lineId },
-          data: { quantityReceived: { increment: quantity } },
+          data: {
+            quantityReceived: { increment: quantity },
+            unitCost: lineCost,
+          },
         });
       }
 

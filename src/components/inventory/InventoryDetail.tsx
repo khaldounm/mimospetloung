@@ -179,6 +179,14 @@ export default function InventoryDetail({
           <Grid size={{ xs: 6, sm: 3 }}>
             <Field label="Unit" value={item.unit} />
           </Grid>
+          {item.looseUnit && (
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Field
+                label="Sold loose"
+                value={`$${item.loosePrice} per ${item.looseUnit}, ${item.loosePerUnit} per pack`}
+              />
+            </Grid>
+          )}
           <Grid size={{ xs: 6, sm: 3 }}>
             <Field label="Barcode" value={item.barcode} />
           </Grid>

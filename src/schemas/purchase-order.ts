@@ -11,6 +11,14 @@ const quantity = z.preprocess(
     .max(1_000_000),
 );
 
+// Amount keyed in the item's loose unit (200 for "200 kg"). The server converts
+// it to a pack quantity and a per-pack cost, so the browser never decides how
+// many bags 200 kg is.
+const optionalLooseQty = z.preprocess(
+  (v) => (v === "" || v === null ? undefined : v),
+  z.coerce.number().positive().max(1_000_000).optional(),
+);
+
 // Non-negative unit cost. Blank -> undefined (cost not known yet).
 const optionalCost = z.preprocess(
   (v) => (v === "" || v === null ? undefined : v),
@@ -68,16 +76,30 @@ export const purchaseOrderUpdateSchema = z
     message: "No fields to update",
   });
 
-export const purchaseOrderLineCreateSchema = z.object({
-  itemId: z.coerce.number().int().positive(),
-  quantityOrdered: quantity,
-  unitCost: optionalCost,
-  notes: optionalString(5000),
-});
+// quantityOrdered becomes optional when a loose amount is sent instead, since
+// the server derives one from the other.
+const optionalQuantity = z.preprocess(
+  (v) => (v === "" || v === null ? undefined : v),
+  z.coerce.number().positive().max(1_000_000).optional(),
+);
+
+export const purchaseOrderLineCreateSchema = z
+  .object({
+    itemId: z.coerce.number().int().positive(),
+    quantityOrdered: optionalQuantity,
+    looseQty: optionalLooseQty,
+    unitCost: optionalCost,
+    notes: optionalString(5000),
+  })
+  .refine((d) => d.quantityOrdered !== undefined || d.looseQty !== undefined, {
+    message: "Quantity is required",
+    path: ["quantityOrdered"],
+  });
 
 export const purchaseOrderLineUpdateSchema = z
   .object({
     quantityOrdered: quantity,
+    looseQty: optionalLooseQty,
     unitCost: optionalCost,
     notes: optionalString(5000),
   })
@@ -97,6 +119,17 @@ export const receiveOrderSchema = z.object({
           (v) => (v === "" || v === null || v === undefined ? 0 : v),
           z.coerce.number().nonnegative().max(1_000_000),
         ),
+        // What the supplier actually invoiced for this delivery. The order was
+        // raised from an estimate, so this is the first point the real figure
+        // is known. Omitted leaves the line's existing cost standing.
+        unitCost: optionalCost,
+        // When the delivery note is written in kilos rather than bags. The cost
+        // above is then per kilo and converts with it.
+        looseQty: optionalLooseQty,
+        // Off the carton, for perishables. Ignored on items that do not track
+        // expiry, so a leash never needs one.
+        lotNumber: optionalString(100),
+        expiryDate: optionalDate,
       }),
     )
     .min(1, "Nothing to receive"),

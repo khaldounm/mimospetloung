@@ -14,6 +14,8 @@ import {
   InputAdornment,
   MenuItem,
   Stack,
+  FormControlLabel,
+  Switch,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -22,6 +24,7 @@ import ClearIcon from "@mui/icons-material/Clear";
 import QrCodeScannerIcon from "@mui/icons-material/QrCodeScanner";
 import { apiRequest } from "@/utils/api-client";
 import { toGtin14 } from "@/utils/barcode";
+import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
 import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
 
 export interface ServiceLineOption {
@@ -37,6 +40,11 @@ export interface ItemLineOption {
   salePrice: string | null;
   currentStock: number;
   unit: string | null;
+  // Present only on items set up to be sold loose. Null on everything else,
+  // which is what hides the loose controls for the rest of the catalogue.
+  looseUnit: string | null;
+  loosePerUnit: string | null;
+  loosePrice: string | null;
 }
 
 interface Props {
@@ -92,6 +100,10 @@ function LineItemForm({
   const [description, setDescription] = useState(line?.description ?? "");
   const [quantity, setQuantity] = useState(line?.quantity ?? "1");
   const [unitPrice, setUnitPrice] = useState(line?.unitPrice ?? "");
+  // Selling part of a pack. The amount is in the item's loose unit and the
+  // server turns it into a pack quantity and a price, so neither is typed here.
+  const [sellLoose, setSellLoose] = useState(line?.looseQty != null);
+  const [looseQty, setLooseQty] = useState(line?.looseQty ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Raw text from the barcode scanner (or manual entry) before it resolves to
@@ -168,6 +180,29 @@ function LineItemForm({
     [isItem, itemOptions, sourceId],
   );
 
+  // Only items configured for it can be sold loose, so the switch appears
+  // nowhere else. When editing, the item is fixed and its config comes with the
+  // line rather than the picker.
+  const looseConfig = useMemo(
+    () => (selectedItem ? looseConfigOf(selectedItem) : null),
+    [selectedItem],
+  );
+  const loose = sellLoose && looseConfig != null;
+
+  // Same arithmetic the server will run, so staff see the charge before saving
+  // rather than after. The server still derives its own; this never leaves the
+  // browser.
+  const loosePreview = useMemo(() => {
+    if (!loose || !looseConfig) return null;
+    const amount = Number(looseQty);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+    const result = looseLine(amount, looseConfig);
+    if (!result) {
+      return `Minimum ${minLooseQuantity(looseConfig)} ${looseConfig.unit}`;
+    }
+    return `${amount} ${looseConfig.unit} at $${looseConfig.price.toFixed(2)} = $${result.lineTotal.toFixed(2)}, taking ${result.quantity} off stock`;
+  }, [loose, looseConfig, looseQty]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -181,7 +216,12 @@ function LineItemForm({
       if (editing) {
         data = await apiRequest<{ invoice: InvoiceDTO }>(
           `/api/invoices/${invoiceId}/line-items/${line!.lineItemId}`,
-          { method: "PATCH", body: { description, quantity, unitPrice } },
+          {
+            method: "PATCH",
+            body: loose
+              ? { description, looseQty }
+              : { description, quantity, unitPrice },
+          },
         );
       } else {
         data = await apiRequest<{ invoice: InvoiceDTO }>(
@@ -192,8 +232,9 @@ function LineItemForm({
               serviceId: isItem ? "" : sourceId,
               itemId: isItem ? sourceId : "",
               description,
-              quantity,
-              unitPrice,
+              // A loose line sends only the amount asked for; the server
+              // derives the pack quantity and the price it bills at.
+              ...(loose ? { looseQty } : { quantity, unitPrice }),
             },
           },
         );
@@ -332,33 +373,66 @@ function LineItemForm({
             required
             fullWidth
           />
-          <Stack direction="row" spacing={2}>
+          {looseConfig && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={sellLoose}
+                  onChange={(e) => setSellLoose(e.target.checked)}
+                />
+              }
+              label={`Sell by the ${looseConfig.unit}`}
+            />
+          )}
+
+          {loose && looseConfig ? (
             <TextField
-              label="Quantity"
+              label={`Amount (${looseConfig.unit})`}
               type="number"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
+              value={looseQty}
+              onChange={(e) => setLooseQty(e.target.value)}
               slotProps={{
-                htmlInput: { min: 0.01, step: "0.01" },
+                htmlInput: {
+                  min: minLooseQuantity(looseConfig),
+                  step: "0.001",
+                },
               }}
               required
               fullWidth
               helperText={
-                isItem && selectedItem
-                  ? `Max sellable now: ${selectedItem.currentStock}`
-                  : undefined
+                loosePreview ??
+                `$${looseConfig.price.toFixed(2)} per ${looseConfig.unit}, minimum ${minLooseQuantity(looseConfig)} ${looseConfig.unit}`
               }
             />
-            <TextField
-              label="Unit price"
-              type="number"
-              value={unitPrice}
-              onChange={(e) => setUnitPrice(e.target.value)}
-              slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
-              required
-              fullWidth
-            />
-          </Stack>
+          ) : (
+            <Stack direction="row" spacing={2}>
+              <TextField
+                label="Quantity"
+                type="number"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                slotProps={{
+                  htmlInput: { min: 0.001, step: "0.001" },
+                }}
+                required
+                fullWidth
+                helperText={
+                  isItem && selectedItem
+                    ? `Max sellable now: ${selectedItem.currentStock}`
+                    : undefined
+                }
+              />
+              <TextField
+                label="Unit price"
+                type="number"
+                value={unitPrice}
+                onChange={(e) => setUnitPrice(e.target.value)}
+                slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
+                required
+                fullWidth
+              />
+            </Stack>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions>

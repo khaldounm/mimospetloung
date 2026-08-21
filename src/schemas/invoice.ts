@@ -61,16 +61,44 @@ export const vetHoldSchema = z.object({
 
 // --- Line items (draft only) ---
 
+// Amount asked for on a loose line, in the item's loose unit (2 for "2 kg").
+// The server converts it to a pack quantity and a price, because the conversion
+// has to agree with what moves stock and cannot be trusted from the client.
+const optionalLooseQty = z.preprocess(
+  (v) => (v === "" || v === null ? undefined : v),
+  z.coerce.number().positive().max(999_999).optional(),
+);
+
 export const lineItemCreateSchema = z
   .object({
     serviceId: optionalId,
     itemId: optionalId,
     // Optional label/price overrides; default to the source name/price.
     description: optionalString(255),
-    quantity: z.coerce.number().positive().max(999_999),
+    // Pack quantity. Optional only when looseQty is given instead, since the
+    // server derives it from that.
+    quantity: z.preprocess(
+      (v) => (v === "" || v === null ? undefined : v),
+      z.coerce.number().positive().max(999_999).optional(),
+    ),
+    looseQty: optionalLooseQty,
     unitPrice: optionalMoney,
   })
   .superRefine((data, ctx) => {
+    if (data.quantity === undefined && data.looseQty === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["quantity"],
+        message: "A quantity is required",
+      });
+    }
+    if (data.looseQty !== undefined && data.serviceId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["looseQty"],
+        message: "Only inventory items can be sold loose",
+      });
+    }
     if (!data.serviceId && !data.itemId) {
       ctx.addIssue({
         code: "custom",
@@ -101,11 +129,21 @@ export const lineItemUpdateSchema = z
       (v) => (v === "" || v === null ? undefined : v),
       z.coerce.number().positive().max(999_999).optional(),
     ),
+    // Editing a loose line re-derives quantity and price from the new amount,
+    // so the two are never sent together.
+    looseQty: optionalLooseQty,
     unitPrice: optionalMoney,
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "No fields to update",
-  });
+  })
+  .refine(
+    (data) => !(data.quantity !== undefined && data.looseQty !== undefined),
+    {
+      message: "Send either a pack quantity or a loose amount, not both",
+      path: ["looseQty"],
+    },
+  );
 
 // --- Payments (append-only) ---
 

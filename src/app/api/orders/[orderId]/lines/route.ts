@@ -7,7 +7,11 @@ import {
   parseId,
   requirePermission,
 } from "@/lib/api";
-import { getOrderDetail, isEditable } from "@/lib/purchase-orders";
+import {
+  getOrderDetail,
+  isEditable,
+  resolvePurchaseLine,
+} from "@/lib/purchase-orders";
 import { writeAudit } from "@/lib/audit";
 import { purchaseOrderLineCreateSchema } from "@/schemas/purchase-order";
 
@@ -36,20 +40,42 @@ export async function POST(
 
     const item = await prisma.inventoryItem.findFirst({
       where: { itemId: data.itemId, deletedAt: null },
-      select: { itemId: true, lastCost: true },
+      select: {
+        itemId: true,
+        lastCost: true,
+        looseUnit: true,
+        loosePerUnit: true,
+        loosePrice: true,
+      },
     });
     if (!item) throw new ApiError(404, "Inventory item not found");
+
+    // A line keyed in kilos becomes bags here, and a per-kilo cost becomes a
+    // per-bag cost with it.
+    const resolved = resolvePurchaseLine(item, {
+      quantity: data.quantityOrdered,
+      looseQty: data.looseQty,
+      unitCost: data.unitCost,
+    });
 
     // Adding an item already on the order bumps its quantity, matching the
     // basket. Two lines for one item would only split the delivery in half.
     await prisma.purchaseOrderLine.upsert({
       where: { orderId_itemId: { orderId, itemId: item.itemId } },
-      update: { quantityOrdered: { increment: data.quantityOrdered } },
+      update: {
+        quantityOrdered: { increment: resolved.quantity },
+        // The loose record describes this addition, so a repeat add in the same
+        // unit keeps it and one in packs clears it rather than lying.
+        looseQty: resolved.looseQty,
+        looseUnit: resolved.looseUnit,
+      },
       create: {
         orderId,
         itemId: item.itemId,
-        quantityOrdered: data.quantityOrdered,
-        unitCost: data.unitCost ?? item.lastCost,
+        quantityOrdered: resolved.quantity,
+        unitCost: resolved.unitCost ?? item.lastCost,
+        looseQty: resolved.looseQty,
+        looseUnit: resolved.looseUnit,
         notes: data.notes,
       },
     });
@@ -58,7 +84,13 @@ export async function POST(
       action: "update",
       entity: "purchase_order",
       entityId: orderId,
-      changes: { addedItem: data.itemId, quantity: data.quantityOrdered },
+      changes: {
+        addedItem: data.itemId,
+        quantity: resolved.quantity,
+        ...(resolved.looseQty != null
+          ? { looseQty: resolved.looseQty, looseUnit: resolved.looseUnit }
+          : {}),
+      },
     });
     return NextResponse.json({ order: await getOrderDetail(orderId) });
   });

@@ -531,6 +531,16 @@ async function getInventorySnapshot(): Promise<InventoryAnalytics> {
         lastCost: true,
         partnerId: true,
         expiryDate: true,
+        tracksExpiry: true,
+        // Soonest dated batch still on the shelf. For a tracked item this is
+        // the expiry that matters; the column above only speaks for items that
+        // are not batched.
+        batches: {
+          where: { quantity: { gt: 0 }, expiryDate: { not: null } },
+          orderBy: { expiryDate: "asc" },
+          take: 1,
+          select: { expiryDate: true },
+        },
       },
     }),
     prisma.inventoryTransaction.groupBy({
@@ -554,10 +564,13 @@ async function getInventorySnapshot(): Promise<InventoryAnalytics> {
     if (it.partnerId == null) stockValuation += stock * unitCost;
     if (stock <= 0) outOfStockCount += 1;
     if (it.reorderLevel > 0 && stock <= it.reorderLevel) lowStockCount += 1;
+    const expiry = it.tracksExpiry
+      ? (it.batches[0]?.expiryDate ?? null)
+      : it.expiryDate;
     if (
-      it.expiryDate &&
-      it.expiryDate.getTime() >= today.getTime() &&
-      it.expiryDate.getTime() <= in30Days.getTime()
+      expiry &&
+      expiry.getTime() >= today.getTime() &&
+      expiry.getTime() <= in30Days.getTime()
     ) {
       expiringSoonCount += 1;
     }

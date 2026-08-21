@@ -8,7 +8,8 @@ import {
 } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
 import { lineItemScanSchema } from "@/schemas/invoice";
-import { gtinLookupCandidates } from "@/utils/barcode";
+import { gtinLookupCandidates, toGtin14 } from "@/utils/barcode";
+import { parseGs1 } from "@/utils/gs1";
 
 // One scan at the counter. Separate from POST /line-items because a scan is an
 // event, not a form submission: it carries a barcode rather than an item id,
@@ -40,15 +41,38 @@ export async function POST(
       throw new ApiError(409, "Lines can only be changed on a draft invoice");
     }
 
+    // A perishable carton carries a GS1 DataMatrix, not a plain EAN-13: one
+    // symbol holding the GTIN, the expiry and the lot as a single string. Parse
+    // it before looking anything up, or the lookup fails on exactly the
+    // products that need expiry most.
+    const gs1 = parseGs1(data.barcode);
+    const code = gs1?.gtin ?? data.barcode;
+
     // The same GTIN is stored padded or unpadded depending on where it came
     // from, so match against every equivalent form. See gtinLookupCandidates.
-    const item = await prisma.inventoryItem.findFirst({
-      where: {
-        deletedAt: null,
-        barcode: { in: gtinLookupCandidates(data.barcode) },
-      },
+    const candidates = gtinLookupCandidates(code);
+    let item = await prisma.inventoryItem.findFirst({
+      where: { deletedAt: null, barcode: { in: candidates } },
       select: { itemId: true, name: true, salePrice: true },
     });
+
+    // Not the item's primary code, so try its additional ones. This is where a
+    // case code resolves, and it carries how many units one scan means.
+    let packSize = 1;
+    if (!item) {
+      const alt = await prisma.inventoryBarcode.findFirst({
+        where: { gtin: toGtin14(code), item: { deletedAt: null } },
+        select: {
+          packSize: true,
+          item: { select: { itemId: true, name: true, salePrice: true } },
+        },
+      });
+      if (alt) {
+        item = alt.item;
+        packSize = alt.packSize.toNumber();
+      }
+    }
+
     if (!item) {
       throw new ApiError(404, `No item matches barcode ${data.barcode}`);
     }
@@ -57,6 +81,8 @@ export async function POST(
     }
     // Bound outside the transaction callback so the null check above narrows.
     const unitPrice = item.salePrice;
+    // Scanning an outer carton means its whole contents, not one of them.
+    const scannedQuantity = data.quantity * packSize;
 
     const { updated, lineItemId, created } = await prisma.$transaction(
       async (tx) => {
@@ -76,14 +102,14 @@ export async function POST(
         const line = existing
           ? await tx.invoiceLineItem.update({
               where: { lineItemId: existing.lineItemId },
-              data: { quantity: { increment: data.quantity } },
+              data: { quantity: { increment: scannedQuantity } },
             })
           : await tx.invoiceLineItem.create({
               data: {
                 invoiceId,
                 itemId: item.itemId,
                 description: item.name,
-                quantity: data.quantity,
+                quantity: scannedQuantity,
                 unitPrice,
               },
             });

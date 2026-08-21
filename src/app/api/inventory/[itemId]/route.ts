@@ -4,6 +4,7 @@ import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { canSeeCost } from "@/lib/permissions";
 import {
   isUniqueConstraintError,
+  itemExpiryInclude,
   toInventoryItemDTO,
   toInventoryTransactionDTO,
 } from "@/lib/inventory";
@@ -30,6 +31,7 @@ export async function GET(
       include: {
         partner: { select: { name: true } },
         supplier: { select: { name: true } },
+        ...itemExpiryInclude,
         transactions: {
           orderBy: { performedAt: "desc" },
           include: {
@@ -90,6 +92,18 @@ export async function PATCH(
             : {}),
           ...(data.expiryDate !== undefined
             ? { expiryDate: data.expiryDate }
+            : {}),
+          ...(data.tracksExpiry !== undefined
+            ? { tracksExpiry: data.tracksExpiry }
+            : {}),
+          ...(data.looseUnit !== undefined
+            ? { looseUnit: data.looseUnit }
+            : {}),
+          ...(data.loosePerUnit !== undefined
+            ? { loosePerUnit: data.loosePerUnit }
+            : {}),
+          ...(data.loosePrice !== undefined
+            ? { loosePrice: data.loosePrice }
             : {}),
           ...(data.notes !== undefined ? { notes: data.notes } : {}),
         },
