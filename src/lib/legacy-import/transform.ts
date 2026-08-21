@@ -701,14 +701,42 @@ export async function transform() {
       zeroPays++;
       continue;
     }
+    // What was physically handed over, and in what. The old system split every
+    // payment into a Dollar and an LL column: 6,331 are dollars only, 2 are
+    // lira only and 1 is both. `amount` stays the USD equivalent that settles
+    // the invoice either way.
+    const dollars = money(p.Dollar);
+    const lira = money(p.LL);
+    const rate = num(p.DollarRate);
+    const liraOnly = lira !== 0 && dollars === 0;
+
+    // A payment taken in both currencies cannot be split into two rows here:
+    // legacy_id is unique per payment, which is what makes this import a delta
+    // rather than a duplicate. It is imported at its USD value and flagged, so
+    // the one row a human needs to look at is findable.
+    const mixed = lira !== 0 && dollars !== 0;
+
+    // The moment of payment: PaymentDate carries the day, Time the time of day,
+    // exactly as on invoices.
+    const payDay = stamp(p.PaymentDate);
+    const payClock = stamp(p.Time);
+    const paidAt = payDay
+      ? atClinicTime(`${payDay.date} ${payClock ? payClock.time : "00:00:00"}`)
+      : null;
+
     payRows.push([
       num(p.PaymentID),
       owner,
       inv,
       amount,
-      s(p.PaymentDate) || null,
-      false,
-      null,
+      liraOnly ? "LBP" : "USD",
+      liraOnly ? lira : amount,
+      liraOnly && rate > 0 ? rate : null,
+      paidAt,
+      mixed,
+      mixed
+        ? `Taken in both currencies: ${dollars.toFixed(2)} USD and ${lira.toFixed(0)} LBP at ${rate}. Imported at its dollar value; confirm how it should be recorded.`
+        : null,
     ]);
   }
   await upsert(
@@ -718,12 +746,29 @@ export async function transform() {
       "client_id",
       "invoice_id",
       "amount",
+      "currency",
+      "amount_original",
+      "fx_rate",
       "paid_at",
       "needs_review",
       "review_note",
     ],
     payRows,
-    ["client_id", "invoice_id", "amount", "paid_at"],
+    [
+      "client_id",
+      "invoice_id",
+      "amount",
+      "currency",
+      "amount_original",
+      "fx_rate",
+      "paid_at",
+      // Refreshed on re-import, unlike most tables here, because the flag is
+      // derived from the source row rather than set by a later step. Left out,
+      // a payment that has been imported once keeps whatever flag it had and
+      // the mixed-currency note never appears.
+      "needs_review",
+      "review_note",
+    ],
   );
   report.push(
     `payments       ${payRows.length} (${unlinked} on account only, ${refunds.size} refunds flagged, ${zeroPays} zero-value skipped)`,
