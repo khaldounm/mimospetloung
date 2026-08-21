@@ -132,3 +132,9 @@ export const LEGACY_OPENING_BALANCE_SOURCE_CLIENT =
 // Below this, the old system's balance columns are floating-point residue like
 // -5.4e-06 rather than money. Anything smaller is treated as zero.
 export const LEGACY_BALANCE_EPSILON = 0.01;
+
+// The old system's SaleCreateDate column was added partway through the year and
+// backfilled: 2,271 of 7,771 invoices carry this one identical stamp, including
+// every invoice from January to March. It is a real creation time only for rows
+// written after it, so anything equal to it is treated as absent.
+export const LEGACY_SALE_CREATE_BACKFILL = "03/23/26 13:35:40";

@@ -13,6 +13,7 @@ import {
   LEGACY_OPENING_BALANCE_DATE,
   LEGACY_OPENING_BALANCE_SOURCE,
   LEGACY_PACK_SIZE,
+  LEGACY_SALE_CREATE_BACKFILL,
   LEGACY_SERVICE_EXCLUSIONS,
   LEGACY_SERVICE_PATTERNS,
   LEGACY_STRONG_SERVICE,
@@ -22,6 +23,7 @@ import {
   PET_NAME_SEPARATORS,
   PET_NON_NAMES,
 } from "@/constants/legacy-import";
+import { CLINIC } from "@/constants/clinic";
 import { normalizeLegacyPhone } from "./phone";
 
 type Row = Record<string, string | null>;
@@ -33,6 +35,63 @@ const num = (v: string | null | undefined) => {
 // UnitPrice is float32 in Access, so values arrive as 34.166599. Money is
 // Decimal(12,2) here, and the source's own totals are 2dp.
 const money = (v: string | null | undefined) => Math.round(num(v) * 100) / 100;
+
+/**
+ * Access exports every date and time as "MM/DD/YY HH:MM:SS", including columns
+ * that only carry one half of that. Returns the two halves separately so a
+ * caller can take the day from one column and the time of day from another.
+ */
+export function stamp(v: string | null | undefined) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(s(v));
+  if (!m) return null;
+  const [, mo, d, y, h, mi, sec] = m;
+  // Two-digit years. The clinic's data is 2026; the only other year in the file
+  // is 99, which is Access's 1899 epoch for a time-only column.
+  const year = Number(y) >= 90 ? 1900 + Number(y) : 2000 + Number(y);
+  return { date: `${year}-${mo}-${d}`, time: `${h}:${mi}:${sec}` };
+}
+
+/**
+ * A naive "YYYY-MM-DD HH:MM:SS" turned into an absolute instant in the clinic's
+ * timezone.
+ *
+ * Necessary because these columns land in timestamptz. Handing Postgres a naive
+ * string makes it guess using the session timezone, so the same import would
+ * store different instants depending on which machine ran it. Beirut is also
+ * +02 in winter and +03 in summer, so a fixed offset would be wrong for half
+ * the year; the offset is resolved per timestamp instead.
+ */
+export function atClinicTime(local: string): string {
+  const asUtc = new Date(`${local.replace(" ", "T")}Z`);
+  if (Number.isNaN(asUtc.getTime())) throw new Error(`bad timestamp ${local}`);
+  // Read the wall clock this instant shows in Beirut; the difference from the
+  // input is the offset. Applied twice so a timestamp within an hour of a DST
+  // change settles on the right side of it.
+  let guess = asUtc;
+  for (let pass = 0; pass < 2; pass++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: CLINIC.timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(guess);
+    const get = (t: string) => parts.find((p) => p.type === t)!.value;
+    const shown = Date.UTC(
+      Number(get("year")),
+      Number(get("month")) - 1,
+      Number(get("day")),
+      Number(get("hour")) % 24,
+      Number(get("minute")),
+      Number(get("second")),
+    );
+    guess = new Date(guess.getTime() - (shown - asUtc.getTime()));
+  }
+  return guess.toISOString();
+}
 
 /** Split a client name: first token is the first name, the rest is the surname. */
 export function splitClientName(raw: string): {
@@ -467,13 +526,43 @@ export async function transform() {
   for (const i of invoices) {
     const owner = clientId.get(num(i.CustomerWSID));
     if (!owner) continue; // 6 invoices point at a client id that does not exist
+
+    // When the invoice was written. CustInvoiceDate carries the day at
+    // midnight and a separate Time column carries the time of day, so taking
+    // the date alone put all 7,765 invoices at 00:00 and left everything
+    // billed on the same day in arbitrary order.
+    const day = stamp(i.CustInvoiceDate);
+    const clock = stamp(i.Time);
+    const issuedAt = day
+      ? atClinicTime(`${day.date} ${clock ? clock.time : "00:00:00"}`)
+      : null;
+
+    // When the row was created in the old system. Trustworthy except for the
+    // bulk backfill stamp, which is not a creation time at all; those fall
+    // back to the invoice's own moment. So does anything claiming to predate
+    // the invoice it belongs to.
+    const sale = stamp(i.SaleCreateDate);
+    const saleAt =
+      sale && s(i.SaleCreateDate) !== LEGACY_SALE_CREATE_BACKFILL
+        ? atClinicTime(`${sale.date} ${sale.time}`)
+        : null;
+    const createdAt =
+      saleAt && issuedAt && saleAt >= issuedAt ? saleAt : issuedAt;
+
+    // The rate the clinic billed this invoice at. USD is the ledger currency
+    // here, and this is what its lira figures were computed with, so it is
+    // frozen onto the invoice exactly as issuing one today does.
+    const rate = num(i.DollarRate);
+
     invRowsOut.push([
       num(i.CustInvoiceID),
       owner,
       "Paid",
       money(i.AmountInv),
       money(i.AmountInv),
-      s(i.CustInvoiceDate) || null,
+      issuedAt,
+      createdAt,
+      rate > 0 ? rate : null,
       false,
       null,
     ]);
@@ -487,11 +576,13 @@ export async function transform() {
       "subtotal",
       "total",
       "issued_at",
+      "created_at",
+      "fx_rate",
       "needs_review",
       "review_note",
     ],
     invRowsOut,
-    ["client_id", "subtotal", "total", "issued_at"],
+    ["client_id", "subtotal", "total", "issued_at", "created_at", "fx_rate"],
   );
   report.push(`invoices       ${invRowsOut.length}`);
 
