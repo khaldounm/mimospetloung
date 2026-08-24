@@ -4,11 +4,13 @@ import { useMemo, useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   FormControlLabel,
   Radio,
   RadioGroup,
@@ -23,7 +25,11 @@ interface Props {
   order: PurchaseOrderDTO;
   contacts: SupplierContactDTO[];
   onClose: () => void;
-  onSent: (contactName: string) => void;
+  onSent: (result: {
+    contactName: string;
+    placed: boolean;
+    order: PurchaseOrderDTO;
+  }) => void;
 }
 
 /**
@@ -82,6 +88,11 @@ function SendOrderForm({ order, contacts, onClose, onSent }: Props) {
       null
     );
   });
+  // Sending a draft to a supplier is what placing an order means, so this is
+  // ticked by default. Unticked covers sending a draft to ask for a quote,
+  // which matters because Placed is one-way.
+  const isDraft = order.status === "Draft";
+  const [markPlaced, setMarkPlaced] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
@@ -98,11 +109,19 @@ function SendOrderForm({ order, contacts, onClose, onSent }: Props) {
     setError(null);
     setSending(true);
     try {
-      const res = await apiRequest<{ sentTo: string }>(
-        `/api/orders/${order.orderId}/whatsapp`,
-        { method: "POST", body: { contactId } },
-      );
-      onSent(res.sentTo);
+      const res = await apiRequest<{
+        sentTo: string;
+        placed: boolean;
+        order: PurchaseOrderDTO;
+      }>(`/api/orders/${order.orderId}/whatsapp`, {
+        method: "POST",
+        body: { contactId, markPlaced: isDraft && markPlaced },
+      });
+      onSent({
+        contactName: res.sentTo,
+        placed: res.placed,
+        order: res.order,
+      });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");
@@ -200,6 +219,31 @@ function SendOrderForm({ order, contacts, onClose, onSent }: Props) {
                   );
                 })}
               </RadioGroup>
+
+              {isDraft && (
+                <>
+                  <Divider />
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={markPlaced}
+                        onChange={(e) => setMarkPlaced(e.target.checked)}
+                      />
+                    }
+                    label={
+                      <Stack>
+                        <Typography variant="body2">
+                          Mark this order as placed
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Untick if you are only asking for a quote. An order
+                          cannot be moved back to draft once placed.
+                        </Typography>
+                      </Stack>
+                    }
+                  />
+                </>
+              )}
             </>
           )}
         </Stack>

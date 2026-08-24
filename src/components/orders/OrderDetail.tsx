@@ -710,7 +710,11 @@ export default function OrderDetail({
         order={order}
         contacts={supplierContacts}
         onClose={() => setSendOpen(false)}
-        onSent={(contactName) => setSent(contactName)}
+        onSent={({ contactName, placed, order: next }) => {
+          setSent(placed ? `${contactName}, and marked placed` : contactName);
+          setOrder(next);
+          router.refresh();
+        }}
       />
     </Box>
   );

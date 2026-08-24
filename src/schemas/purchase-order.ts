@@ -174,8 +174,16 @@ export type SupplierReturnCreateInput = z.infer<
 
 // Which of the supplier's contacts an order is being sent to. The server checks
 // the contact actually belongs to that supplier, so an id alone is enough here.
+//
+// markPlaced carries the dialog's checkbox: sending a draft to a supplier is
+// what placing an order means, but sending one to ask for a quote is not, and
+// there is no way back out of Placed. It only applies to a Draft.
 export const orderWhatsAppSchema = z.object({
   contactId: z.coerce.number().int().positive(),
+  // A strict boolean, not z.coerce.boolean(): coercion treats any non-empty
+  // string as true, so a body carrying "false" would place an order the caller
+  // asked not to place. Placing cannot be undone, so this one has to be exact.
+  markPlaced: z.boolean().optional(),
 });
 
 export type OrderWhatsAppInput = z.infer<typeof orderWhatsAppSchema>;

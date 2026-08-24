@@ -7,7 +7,7 @@ import {
   parseId,
   requirePermission,
 } from "@/lib/api";
-import { getOrderDetail } from "@/lib/purchase-orders";
+import { getOrderDetail, placeOrder } from "@/lib/purchase-orders";
 import { sendDocumentViaWhatsApp } from "@/lib/notifications";
 import { signPdfToken } from "@/lib/pdf-token";
 import { orderWhatsAppMessage } from "@/utils/whatsapp";
@@ -31,7 +31,10 @@ export async function POST(
   return handle(async () => {
     const session = await requirePermission("orders:write");
     const orderId = parseId((await params).orderId, "order id");
-    const { contactId } = await parseBody(request, orderWhatsAppSchema);
+    const { contactId, markPlaced } = await parseBody(
+      request,
+      orderWhatsAppSchema,
+    );
 
     const order = await getOrderDetail(orderId);
     if (!order) throw new ApiError(404, "Order not found");
@@ -44,6 +47,14 @@ export async function POST(
     // A cancelled order is not an instruction to supply anything.
     if (order.status === "Cancelled") {
       throw new ApiError(400, "This order was cancelled and cannot be sent.");
+    }
+    // Matches what placeOrder demands, so the optional place below cannot fail
+    // on a precondition after the message has already gone out.
+    if ((order.lines?.length ?? 0) === 0) {
+      throw new ApiError(
+        400,
+        "Add at least one item before sending this order.",
+      );
     }
 
     // Scoped to the order's supplier so a contact id from another company
@@ -92,6 +103,38 @@ export async function POST(
       },
     });
 
-    return NextResponse.json({ ok: true, messageId, sentTo: contact.name });
+    // Placed only after the send succeeded, so a failed message never leaves an
+    // order marked as sent. Draft is the only status this applies to; placing
+    // is one-way, which is why the dialog asks rather than assuming.
+    let placed = false;
+    if (markPlaced && order.status === "Draft") {
+      try {
+        const updated = await placeOrder(orderId);
+        placed = true;
+        await writeAudit(session, {
+          action: "update",
+          entity: "purchase_order",
+          entityId: orderId,
+          changes: {
+            status: "Placed",
+            orderedOn: updated.orderedOn,
+            via: "whatsapp",
+          },
+        });
+      } catch (err) {
+        // The supplier already has the order. Reporting the send as a failure
+        // would invite a second one, so the status is left for a human and the
+        // response says it did not happen.
+        console.error("Sent the order but could not mark it placed", err);
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      messageId,
+      sentTo: contact.name,
+      placed,
+      order: await getOrderDetail(orderId),
+    });
   });
 }
