@@ -387,6 +387,20 @@ export async function getSupplier(
   });
 }
 
+// A supplier's contacts on their own, for the order page's WhatsApp send.
+// Deliberately not read off the active-supplier list the page already loads:
+// an order can belong to a supplier since marked inactive, and its contacts
+// still need to be reachable.
+export async function getSupplierContacts(
+  supplierId: number,
+): Promise<SupplierContactDTO[]> {
+  const contacts = await prisma.supplierContact.findMany({
+    where: { supplierId },
+    orderBy: [{ sortOrder: "asc" }, { contactId: "asc" }],
+  });
+  return contacts.map(toSupplierContactDTO);
+}
+
 export interface SupplierDetailData {
   supplier: SupplierDTO;
   orders: PurchaseOrderDTO[];

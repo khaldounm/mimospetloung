@@ -676,6 +676,9 @@ export interface PurchaseOrderLineDTO {
   itemId: number;
   itemName: string;
   unit: string | null;
+  // The item's inventory category, matched against a supplier contact's
+  // categories so sending an order can preselect the rep who handles it.
+  category: string | null;
   currentStock: number;
   reorderLevel: number;
   quantityOrdered: string;

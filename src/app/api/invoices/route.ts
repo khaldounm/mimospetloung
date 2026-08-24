@@ -4,7 +4,6 @@ import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { invoiceInclude, listInvoices, toInvoiceDTO } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
 import { invoiceCreateSchema } from "@/schemas/invoice";
-import { INVOICE_STATUSES } from "@/types/enums";
 
 export async function GET(request: Request) {
   return handle(async () => {

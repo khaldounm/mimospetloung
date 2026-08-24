@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
-import { listPatients, patientInclude, toPatientDTO } from "@/lib/patients";
+import { listPatients } from "@/lib/patients";
 import { patientCreateSchema } from "@/schemas/patient";
 
 export async function GET(request: Request) {

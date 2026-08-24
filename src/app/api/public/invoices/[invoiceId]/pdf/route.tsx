@@ -1,7 +1,7 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { prisma } from "@/lib/prisma";
 import { invoiceInclude, toInvoiceDTO } from "@/lib/invoices";
-import { verifyInvoicePdfToken } from "@/lib/pdf-token";
+import { verifyPdfToken } from "@/lib/pdf-token";
 import { CLINIC } from "@/constants/clinic";
 import InvoicePdfDocument from "@/components/invoices/InvoicePdfDocument";
 
@@ -22,7 +22,7 @@ export async function GET(
   }
 
   const token = new URL(request.url).searchParams.get("token") ?? "";
-  if (!verifyInvoicePdfToken(id, token)) {
+  if (!verifyPdfToken("invoice", id, token)) {
     return new Response("Forbidden", { status: 403 });
   }
 

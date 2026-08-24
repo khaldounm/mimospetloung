@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
-import { INVOICE_PAGE_SIZE, listInvoices } from "@/lib/invoices";
+import { listInvoices } from "@/lib/invoices";
 import InvoicesTable from "@/components/invoices/InvoicesTable";
 
 export default async function InvoicesPage() {

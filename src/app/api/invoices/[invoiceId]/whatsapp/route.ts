@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError, handle, requirePermission } from "@/lib/api";
 import { invoiceInclude, toInvoiceDTO } from "@/lib/invoices";
 import { sendDocumentViaWhatsApp } from "@/lib/notifications";
-import { signInvoicePdfToken } from "@/lib/pdf-token";
+import { signPdfToken } from "@/lib/pdf-token";
 import { invoiceWhatsAppMessage } from "@/utils/whatsapp";
 import { normalizePhone } from "@/utils/phone";
 import { writeAudit } from "@/lib/audit";
@@ -40,7 +40,7 @@ export async function POST(
     const proto = request.headers.get("x-forwarded-proto") ?? "https";
     const host = request.headers.get("host");
     if (!host) throw new ApiError(500, "Unable to resolve public URL");
-    const token = signInvoicePdfToken(id);
+    const token = signPdfToken("invoice", id);
     const documentUrl = `${proto}://${host}/api/public/invoices/${id}/pdf?token=${token}`;
 
     const messageId = await sendDocumentViaWhatsApp(

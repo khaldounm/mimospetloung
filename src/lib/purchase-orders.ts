@@ -44,6 +44,9 @@ export const orderInclude = {
         select: {
           name: true,
           unit: true,
+          // Which shelf the item belongs to, matched against a supplier
+          // contact's categories so a send picks the right rep.
+          category: true,
           currentStock: true,
           reorderLevel: true,
           // So the receive dialog knows which lines want a lot and expiry, and
@@ -83,6 +86,7 @@ export function toPurchaseOrderLineDTO(l: LineRow): PurchaseOrderLineDTO {
     orderId: l.orderId,
     itemId: l.itemId,
     itemName: l.item.name,
+    category: l.item.category,
     unit: l.item.unit,
     currentStock: l.item.currentStock.toNumber(),
     reorderLevel: l.item.reorderLevel,

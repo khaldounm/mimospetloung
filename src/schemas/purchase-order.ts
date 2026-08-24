@@ -171,3 +171,11 @@ export const supplierReturnCreateSchema = z.object({
 export type SupplierReturnCreateInput = z.infer<
   typeof supplierReturnCreateSchema
 >;
+
+// Which of the supplier's contacts an order is being sent to. The server checks
+// the contact actually belongs to that supplier, so an id alone is enough here.
+export const orderWhatsAppSchema = z.object({
+  contactId: z.coerce.number().int().positive(),
+});
+
+export type OrderWhatsAppInput = z.infer<typeof orderWhatsAppSchema>;

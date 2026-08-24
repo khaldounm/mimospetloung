@@ -25,6 +25,8 @@ import {
   Typography,
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
+import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney } from "@/utils/format";
 import { suggestedReorderQuantity } from "@/utils/inventory";
@@ -36,15 +38,19 @@ import {
 import type {
   InventoryItemDTO,
   PurchaseOrderDTO,
+  SupplierContactDTO,
   SupplierDTO,
 } from "@/types/entities";
 import ReceiveOrderDialog from "./ReceiveOrderDialog";
+import SendOrderDialog from "./SendOrderDialog";
 import SupplierReturnDialog from "./SupplierReturnDialog";
 
 interface Props {
   initialOrder: PurchaseOrderDTO;
   items: InventoryItemDTO[];
   suppliers: SupplierDTO[];
+  /** Contacts of this order's supplier, for the WhatsApp send. */
+  supplierContacts: SupplierContactDTO[];
   canWrite: boolean;
   canReceive: boolean;
 }
@@ -125,6 +131,7 @@ export default function OrderDetail({
   initialOrder,
   items,
   suppliers,
+  supplierContacts,
   canWrite,
   canReceive,
 }: Props) {
@@ -135,6 +142,9 @@ export default function OrderDetail({
   const [picked, setPicked] = useState<InventoryItemDTO | null>(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   // Memoized so the fallback empty array is stable across renders and does not
   // invalidate the picker below on every pass.
@@ -244,6 +254,33 @@ export default function OrderDetail({
     }
   }
 
+  // Generate the purchase order PDF and download it. Same document the supplier
+  // is sent, so what gets printed, emailed or handed over is the one artefact.
+  // The renderer is loaded on demand so it stays out of the initial bundle.
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setError(null);
+    try {
+      const [{ pdf }, { default: OrderPdfDocument }] = await Promise.all([
+        import("@react-pdf/renderer"),
+        import("./OrderPdfDocument"),
+      ]);
+      const blob = await pdf(<OrderPdfDocument order={order} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${order.reference || `PO-${order.orderId}`}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate PDF");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   return (
     <Box>
       <Stack
@@ -261,6 +298,33 @@ export default function OrderDetail({
           />
         </Stack>
         <Stack direction="row" spacing={1}>
+          {/* The order as a document, independent of how it reaches the
+              supplier. Works with no messaging provider configured, so it is
+              also the fallback whenever WhatsApp is not set up. */}
+          <Button
+            variant="outlined"
+            startIcon={<DownloadIcon />}
+            disabled={pdfBusy || busy}
+            onClick={() => void downloadPdf()}
+          >
+            {pdfBusy ? "Preparing…" : "Download PDF"}
+          </Button>
+          {/* Sending is what actually reaches the supplier, so it is offered on
+              any live order: a draft being sent for a quote, a placed one being
+              chased, or a received one sent again as a copy. */}
+          {canWrite &&
+            order.supplierId != null &&
+            order.status !== "Cancelled" && (
+              <Button
+                variant="outlined"
+                color="success"
+                startIcon={<WhatsAppIcon />}
+                disabled={busy}
+                onClick={() => setSendOpen(true)}
+              >
+                Send via WhatsApp
+              </Button>
+            )}
           {canEdit && order.status === "Draft" && (
             <Button
               variant="contained"
@@ -332,6 +396,12 @@ export default function OrderDetail({
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+
+      {sent && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSent(null)}>
+          {`Order sent to ${sent} on WhatsApp.`}
         </Alert>
       )}
 
@@ -634,6 +704,13 @@ export default function OrderDetail({
           setOrder(next);
           router.refresh();
         }}
+      />
+      <SendOrderDialog
+        open={sendOpen}
+        order={order}
+        contacts={supplierContacts}
+        onClose={() => setSendOpen(false)}
+        onSent={(contactName) => setSent(contactName)}
       />
     </Box>
   );
