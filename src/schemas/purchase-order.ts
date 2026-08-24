@@ -153,3 +153,21 @@ export type PurchaseOrderLineCreateInput = z.infer<
   typeof purchaseOrderLineCreateSchema
 >;
 export type AddToFutureOrderInput = z.infer<typeof addToFutureOrderSchema>;
+
+// One delivered line going back to the supplier. The quantity is a positive
+// magnitude; the server negates it, so a caller cannot turn a return into an
+// order by getting the sign wrong.
+export const supplierReturnCreateSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        sourceLineId: z.coerce.number().int().positive(),
+        quantity: z.coerce.number().positive().max(999_999),
+      }),
+    )
+    .min(1, "Choose at least one line"),
+});
+
+export type SupplierReturnCreateInput = z.infer<
+  typeof supplierReturnCreateSchema
+>;

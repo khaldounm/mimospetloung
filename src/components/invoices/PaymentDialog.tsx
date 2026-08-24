@@ -77,9 +77,17 @@ function PaymentForm({
   onSaved,
 }: FormProps) {
   const due = Number(balance);
+  // A return whose credit has not been handed back yet has a NEGATIVE balance:
+  // the shop owes the customer. Everything below works on the magnitude and
+  // reads `refunding` for the wording, which keeps one set of arithmetic for
+  // both directions. The tenders posted stay positive either way; the server
+  // takes the direction from the invoice, so the counter cannot hand back money
+  // on a document that was owed to the shop.
+  const refunding = due < 0;
+  const owed = Math.abs(due);
   // Cash actually handed over, per currency. Both can be filled: a customer
   // routinely pays part in dollars and the rest in lira.
-  const [usdCash, setUsdCash] = useState(balance);
+  const [usdCash, setUsdCash] = useState(owed.toFixed(2));
   const [lbpCash, setLbpCash] = useState("");
   const [method, setMethod] = useState("");
   const [reference, setReference] = useState("");
@@ -95,8 +103,12 @@ function PaymentForm({
 
   // What actually settles the invoice. Anything over the balance is change,
   // and anything under it is a partial payment, which is allowed.
-  const applied = Math.min(tendered, due);
-  const change = Math.max(0, tendered - due);
+  //
+  // There is no change on a refund: the shop chooses which notes to hand back,
+  // so anything beyond the credit is not change, it is an overpayment the
+  // server rejects.
+  const applied = Math.min(tendered, owed);
+  const change = refunding ? 0 : Math.max(0, tendered - owed);
   const changeLbp = roundLbpCash(change * fxRate);
   const exactChangeLbp = Math.round(change * fxRate);
 
@@ -109,7 +121,11 @@ function PaymentForm({
     e.preventDefault();
     setError(null);
     if (applied <= 0) {
-      setError("Enter how much was handed over.");
+      setError(
+        refunding
+          ? "Enter how much is being handed back."
+          : "Enter how much was handed over.",
+      );
       return;
     }
     setSaving(true);
@@ -146,20 +162,26 @@ function PaymentForm({
 
   return (
     <form onSubmit={handleSubmit}>
-      <DialogTitle>Take payment</DialogTitle>
+      <DialogTitle>
+        {refunding ? "Refund this return" : "Take payment"}
+      </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
 
           <Stack spacing={0.5}>
-            <Line label="Balance due" value={formatMoney(due)} strong />
-            <Line label="" value={formatSecondaryMoney(due, fxRate)} />
+            <Line
+              label={refunding ? "To hand back" : "Balance due"}
+              value={formatMoney(owed)}
+              strong
+            />
+            <Line label="" value={formatSecondaryMoney(owed, fxRate)} />
           </Stack>
 
           <Divider />
 
           <Typography variant="subtitle2" color="text.secondary">
-            Cash received
+            {refunding ? "Cash given back" : "Cash received"}
           </Typography>
           <Stack direction="row" spacing={2}>
             <TextField
@@ -185,14 +207,15 @@ function PaymentForm({
           <Stack spacing={0.5}>
             <Line label="Total handed over" value={formatMoney(tendered)} />
             <Line
-              label="Applied to invoice"
+              label={refunding ? "Refunded" : "Applied to invoice"}
               value={formatMoney(applied)}
               strong
             />
-            {applied < due && (
+            {applied < owed && (
               <Alert severity="info" sx={{ mt: 1 }}>
-                Part payment. {formatMoney(due - applied)} will still be
-                outstanding.
+                {refunding
+                  ? `Part refund. ${formatMoney(owed - applied)} will still be owed back.`
+                  : `Part payment. ${formatMoney(owed - applied)} will still be outstanding.`}
               </Alert>
             )}
             {change > 0 && (

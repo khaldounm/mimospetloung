@@ -39,6 +39,7 @@ import type {
   SupplierDTO,
 } from "@/types/entities";
 import ReceiveOrderDialog from "./ReceiveOrderDialog";
+import SupplierReturnDialog from "./SupplierReturnDialog";
 
 interface Props {
   initialOrder: PurchaseOrderDTO;
@@ -133,6 +134,7 @@ export default function OrderDetail({
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState<InventoryItemDTO | null>(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
+  const [returnOpen, setReturnOpen] = useState(false);
 
   // Memoized so the fallback empty array is stable across renders and does not
   // invalidate the picker below on every pass.
@@ -142,6 +144,8 @@ export default function OrderDetail({
   // still take deliveries, which is what receivable covers.
   const editable = order.status === "Draft" || order.status === "Placed";
   const receivable = editable || order.status === "Partial";
+  // Stock is on the shelf from this order, so some of it can go back.
+  const delivered = order.status === "Partial" || order.status === "Received";
   const canEdit = canWrite && editable;
 
   // Items already on the order are filtered out of the picker: adding one again
@@ -283,6 +287,18 @@ export default function OrderDetail({
               onClick={() => void transition("close-short")}
             >
               Close short
+            </Button>
+          )}
+          {/* Only once something has actually arrived: you cannot send back
+              what was never delivered. A return is its own document, so this
+              leaves the order the supplier invoiced exactly as it is. */}
+          {canWrite && delivered && (
+            <Button
+              color="warning"
+              disabled={busy}
+              onClick={() => setReturnOpen(true)}
+            >
+              Return to supplier
             </Button>
           )}
           {canEdit && (
@@ -602,6 +618,14 @@ export default function OrderDetail({
         />
       </Paper>
 
+      <SupplierReturnDialog
+        open={returnOpen}
+        orderId={order.orderId}
+        onClose={() => setReturnOpen(false)}
+        // The return is a NEW document, so go to it rather than staying here:
+        // it still has to be sent before any stock moves.
+        onCreated={(created) => router.push(`/orders/${created.orderId}`)}
+      />
       <ReceiveOrderDialog
         open={receiveOpen}
         order={order}

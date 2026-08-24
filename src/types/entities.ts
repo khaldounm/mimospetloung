@@ -678,6 +678,29 @@ export interface PurchaseOrderLineDTO {
 // A reorder sheet. supplierId is null for the "No supplier" bucket, which
 // collects items that have no usual supplier yet and cannot be placed until one
 // is assigned.
+// One delivered line of a purchase order, seen from the stockroom that is about
+// to send some of it back. Mirrors ReturnableLineDTO on the sales side.
+export interface ReturnableDeliveryLineDTO {
+  lineId: number;
+  itemId: number;
+  itemName: string;
+  unit: string | null;
+  unitCost: string | null;
+  quantityReceived: string;
+  quantityReturned: string;
+  quantityReturnable: string;
+}
+
+export interface ReturnableOrderDTO {
+  orderId: number;
+  supplierId: number | null;
+  supplierName: string | null;
+  status: PurchaseOrderStatus;
+  reference: string | null;
+  receivedOn: string | null;
+  lines: ReturnableDeliveryLineDTO[];
+}
+
 export interface PurchaseOrderDTO {
   orderId: number;
   supplierId: number | null;

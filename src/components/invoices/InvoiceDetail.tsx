@@ -118,10 +118,13 @@ export default function InvoiceDetail({
     canWrite &&
     !paid &&
     (invoice.status === "Draft" || invoice.status === "Issued");
+  // Not `> 0`: a return that has not been refunded yet has a NEGATIVE balance,
+  // and that is exactly the document the counter needs to settle by handing
+  // cash back. Zero is settled in either direction.
   const canRecordPayment =
     canPay &&
     (invoice.status === "Issued" || invoice.status === "Partial") &&
-    balanceDue > 0;
+    balanceDue !== 0;
 
   function applyInvoice(next: InvoiceDTO) {
     setInvoice(next);
@@ -365,11 +368,11 @@ export default function InvoiceDetail({
           {canRecordPayment && (
             <Button
               variant="contained"
-              color="success"
+              color={balanceDue < 0 ? "warning" : "success"}
               startIcon={<PaymentsIcon />}
               onClick={() => setPaymentOpen(true)}
             >
-              Record payment
+              {balanceDue < 0 ? "Refund" : "Record payment"}
             </Button>
           )}
           {canVoid && (

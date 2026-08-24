@@ -67,9 +67,17 @@ export function toPurchaseOrderLineDTO(l: LineRow): PurchaseOrderLineDTO {
   const lineTotal = l.unitCost
     ? l.quantityOrdered.times(l.unitCost).toDecimalPlaces(2)
     : D(0);
-  // Floored at zero: a closed-short line keeps its ordered quantity, so the
-  // difference stays meaningful for history without showing as still expected.
-  const outstanding = l.quantityOrdered.minus(l.quantityReceived);
+  // How much of this line has still to move, as a MAGNITUDE. On a return line
+  // ordered is negative and so is the difference, and reporting that verbatim
+  // would have the receive dialog filter the line out entirely (it keeps lines
+  // with outstanding > 0), leaving a return document impossible to send.
+  //
+  // A magnitude is also what the dialog wants either way: whoever is at the
+  // shelf types how many moved, and the direction comes off the line on the
+  // server. Floored at zero because a closed-short line keeps its ordered
+  // quantity, so the difference stays meaningful for history without showing as
+  // still expected.
+  const outstanding = l.quantityOrdered.minus(l.quantityReceived).abs();
   return {
     lineId: l.lineId,
     orderId: l.orderId,
@@ -125,8 +133,11 @@ export function toPurchaseOrderDTO(
     taxAmount: o.taxAmount ? o.taxAmount.toFixed(2) : null,
     notes: o.notes,
     lineCount: o.lines.length,
+    // Magnitudes again: `ordered > received` is false for every return line
+    // (-4 > 0), which would hide the Receive action on a return document and
+    // strand it in Draft forever.
     hasOutstanding: o.lines.some((l) =>
-      l.quantityOrdered.greaterThan(l.quantityReceived),
+      l.quantityOrdered.abs().greaterThan(l.quantityReceived.abs()),
     ),
     subtotal: subtotal.toDecimalPlaces(2).toFixed(2),
     taxableBase: taxableBase.toDecimalPlaces(2).toFixed(2),
@@ -386,6 +397,30 @@ export function resolvePurchaseLine(
 // estimate was booked as fact and then written back as the item's last cost,
 // seeding the next order with the same stale number, and the supplier balance
 // (built from quantityOrdered * unitCost) was billed at a guess.
+// The Received movement that brought a delivery line's stock in, found through
+// the batch that delivery opened.
+//
+// Movements record the order, not the line, so the batch is the only thing that
+// remembers which line a particular lot came from (it carries purchaseLineId).
+// Untracked items have no batches and get null, which is right: with no lots
+// there is nothing to send back "from", and ordinary picking is correct.
+async function originReceiptMovement(
+  tx: Prisma.TransactionClient,
+  purchaseLineId: number,
+): Promise<number | null> {
+  const batch = await tx.inventoryBatch.findFirst({
+    where: { purchaseLineId },
+    select: { batchId: true },
+  });
+  if (!batch) return null;
+  const movement = await tx.inventoryBatchMovement.findFirst({
+    where: { batchId: batch.batchId, quantity: { gt: 0 } },
+    orderBy: { id: "asc" },
+    select: { transactionId: true },
+  });
+  return movement?.transactionId ?? null;
+}
+
 export async function receiveOrder(
   orderId: number,
   received: {
@@ -438,6 +473,8 @@ export async function receiveOrder(
   const deliveries: {
     line: (typeof order.lines)[number];
     quantity: Prisma.Decimal;
+    // True when this line is stock going BACK to the supplier.
+    outgoing: boolean;
     // What this delivery cost, frozen onto its own movement.
     unitCost: Prisma.Decimal;
     // What the line should now read, blended across every delivery so far.
@@ -462,14 +499,24 @@ export async function receiveOrder(
       unitCost: entry.unitCost,
     });
 
-    const quantity = D(resolved.quantity);
-    if (quantity.lessThanOrEqualTo(0)) continue;
+    // Always a magnitude. Which way the stock moves is a property of the LINE:
+    // a negative quantityOrdered is stock going back to the supplier, the
+    // convention the ledger has used since supplier returns landed. This used to
+    // read `<= 0 continue`, which silently skipped every return line and made
+    // one impossible to book.
+    const quantity = D(resolved.quantity).abs();
+    if (quantity.isZero()) continue;
+    const outgoing = line.quantityOrdered.isNegative();
 
-    const outstanding = line.quantityOrdered.minus(line.quantityReceived);
+    // Compared as magnitudes, or a return line (ordered -2, received 0) reads as
+    // having nothing outstanding and refuses the very delivery it exists for.
+    const outstanding = line.quantityOrdered.minus(line.quantityReceived).abs();
     if (quantity.greaterThan(outstanding)) {
       throw new ApiError(
         409,
-        `Cannot receive ${quantity.toString()} of ${line.item.name}: only ${outstanding.toString()} is still outstanding.`,
+        outgoing
+          ? `Cannot send back ${quantity.toString()} of ${line.item.name}: only ${outstanding.toString()} is still to go back.`
+          : `Cannot receive ${quantity.toString()} of ${line.item.name}: only ${outstanding.toString()} is still outstanding.`,
       );
     }
     // Cost is what makes the delivery worth anything downstream: it becomes the
@@ -492,7 +539,7 @@ export async function receiveOrder(
     // Letting the newest price simply overwrite would retroactively reprice a
     // delivery that settled months ago. The per-delivery cost is frozen on its
     // own movement, so COGS and margin are untouched by this blend.
-    const alreadyIn = line.quantityReceived;
+    const alreadyIn = line.quantityReceived.abs();
     const lineCost =
       alreadyIn.greaterThan(0) && line.unitCost != null
         ? alreadyIn
@@ -505,6 +552,7 @@ export async function receiveOrder(
     deliveries.push({
       line,
       quantity,
+      outgoing,
       unitCost,
       lineCost,
       lotNumber: entry.lotNumber,
@@ -523,18 +571,31 @@ export async function receiveOrder(
       for (const {
         line,
         quantity,
+        outgoing,
         unitCost,
         lineCost,
         lotNumber,
         expiryDate,
       } of deliveries) {
+        // Goods going back leave by the lot they arrived in where that can be
+        // worked out, rather than by FEFO. FEFO is usually wrong here: what goes
+        // back to the supplier is the short-dated or damaged carton, not the
+        // oldest one on the shelf. Only an exact undo qualifies, so a part
+        // return falls back to the ordinary picking rules.
+        const reverseOf =
+          outgoing && line.returnedFromLineId != null
+            ? await originReceiptMovement(tx, line.returnedFromLineId)
+            : null;
+
         // The movement takes this delivery's own cost, which also refreshes the
         // item's last cost. That is deliberately the newest real price rather
         // than the blend below: last cost means "what it cost most recently",
-        // and it is what seeds the next reorder.
+        // and it is what seeds the next reorder. A return does NOT refresh it,
+        // because applyStockMovementTx only does that for Received: sending
+        // stock back is not a purchase and must not reprice the item.
         await applyStockMovementTx(tx, {
           itemId: line.itemId,
-          type: "Received",
+          type: outgoing ? "ReturnedToSupplier" : "Received",
           quantity: quantity.toNumber(),
           unitCost: unitCost.toNumber(),
           referenceType: "purchase_order",
@@ -545,11 +606,16 @@ export async function receiveOrder(
           lotNumber,
           expiryDate,
           purchaseLineId: line.lineId,
+          reverseOf,
         });
         await tx.purchaseOrderLine.update({
           where: { lineId: line.lineId },
           data: {
-            quantityReceived: { increment: quantity },
+            // Received shares the sign of ordered, which the
+            // po_lines_received_within_ordered constraint enforces.
+            quantityReceived: {
+              increment: outgoing ? quantity.negated() : quantity,
+            },
             unitCost: lineCost,
           },
         });
@@ -561,8 +627,11 @@ export async function receiveOrder(
         where: { orderId },
         select: { quantityOrdered: true, quantityReceived: true },
       });
+      // Magnitudes, or a return line is complete before anything has gone back:
+      // ordered -2 with received 0 satisfies `0 >= -2` and would flip the whole
+      // document to Received the moment the line was added.
       const complete = after.every((l) =>
-        l.quantityReceived.greaterThanOrEqualTo(l.quantityOrdered),
+        l.quantityReceived.abs().greaterThanOrEqualTo(l.quantityOrdered.abs()),
       );
 
       return tx.purchaseOrder.update({

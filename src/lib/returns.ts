@@ -7,8 +7,13 @@ import {
   recomputeInvoiceTotals,
 } from "@/lib/invoices";
 import { toDateOnly } from "@/utils/format";
-import type { ReturnableInvoiceDTO, ReturnableLineDTO } from "@/types/entities";
-import type { InvoiceStatus } from "@/types/enums";
+import { orderInclude } from "@/lib/purchase-orders";
+import type {
+  ReturnableInvoiceDTO,
+  ReturnableLineDTO,
+  ReturnableOrderDTO,
+} from "@/types/entities";
+import type { InvoiceStatus, PurchaseOrderStatus } from "@/types/enums";
 
 const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
 
@@ -257,13 +262,18 @@ export async function addReturnLines(
       if (quantity.lessThanOrEqualTo(0)) {
         throw new ApiError(400, "A return quantity must be more than zero");
       }
-      const remaining = source.quantity.minus(
-        claimedBy.get(entry.sourceLineItemId) ?? D(0),
-      );
+      const claimed = claimedBy.get(entry.sourceLineItemId) ?? D(0);
+      const remaining = source.quantity.minus(claimed);
       if (quantity.greaterThan(remaining)) {
+        // Two different situations, and saying "the rest has already come back"
+        // for both is a lie half the time. Either nothing has come back and
+        // they are simply asking for more than was ever sold, or some has and
+        // the counter needs to know how much is left.
         throw new ApiError(
           409,
-          `Only ${remaining.toString()} of "${source.description}" is still returnable: ${source.quantity.toString()} was sold and the rest has already come back.`,
+          claimed.isZero()
+            ? `Only ${source.quantity.toString()} of "${source.description}" was sold, so ${quantity.toString()} cannot come back.`
+            : `Only ${remaining.toString()} of "${source.description}" is still returnable: ${source.quantity.toString()} was sold and ${claimed.toString()} has already come back.`,
         );
       }
 
@@ -319,6 +329,220 @@ export async function addReturnLines(
     return tx.invoice.findUniqueOrThrow({
       where: { invoiceId: targetInvoiceId },
       include: invoiceInclude,
+    });
+  });
+}
+
+// ============================================================
+// SUPPLIER RETURNS
+// ============================================================
+// The mirror image, and deliberately the same shape: a negative quantity, an
+// unchanged cost, and a link back to what is being undone. The ledger has
+// understood these since 20260820150000_purchase_returns, because orderValue()
+// in suppliers.ts is plain arithmetic and nets a negative line on its own. What
+// was missing was any way to create one.
+
+// Stock can only go back once it has actually arrived.
+const RETURNABLE_DELIVERY_FROM: PurchaseOrderStatus[] = ["Partial", "Received"];
+
+// A return document that has not been cancelled still holds its claim, exactly
+// like a draft credit note does on the sales side.
+const DELIVERY_CLAIMED_BY: Prisma.PurchaseOrderLineWhereInput = {
+  order: { status: { not: "Cancelled" }, deletedAt: null },
+};
+
+export async function listReturnableDeliveries(
+  orderId: number,
+): Promise<ReturnableOrderDTO> {
+  const order = await prisma.purchaseOrder.findFirst({
+    where: { orderId, deletedAt: null },
+    include: {
+      supplier: { select: { name: true } },
+      lines: {
+        // Only stock that came IN can go back. A line that is itself a return
+        // is already a sending-back.
+        where: { quantityReceived: { gt: 0 } },
+        orderBy: { lineId: "asc" },
+        include: { item: { select: { name: true, unit: true } } },
+      },
+    },
+  });
+  if (!order) throw new ApiError(404, "Purchase order not found");
+  if (!RETURNABLE_DELIVERY_FROM.includes(order.status as PurchaseOrderStatus)) {
+    throw new ApiError(
+      409,
+      `Nothing has been delivered on this order yet, so there is nothing to send back. It is ${order.status.toLowerCase()}.`,
+    );
+  }
+
+  const lineIds = order.lines.map((l) => l.lineId);
+  const claimed = await prisma.purchaseOrderLine.groupBy({
+    by: ["returnedFromLineId"],
+    where: { returnedFromLineId: { in: lineIds }, ...DELIVERY_CLAIMED_BY },
+    _sum: { quantityOrdered: true },
+  });
+  const claimedBy = new Map(
+    claimed.map((c) => [
+      c.returnedFromLineId!,
+      (c._sum.quantityOrdered ?? D(0)).abs(),
+    ]),
+  );
+
+  return {
+    orderId: order.orderId,
+    supplierId: order.supplierId,
+    supplierName: order.supplier?.name ?? null,
+    status: order.status as PurchaseOrderStatus,
+    reference: order.reference,
+    receivedOn: toDateOnly(order.receivedOn),
+    lines: order.lines.map((l) => {
+      const returned = claimedBy.get(l.lineId) ?? D(0);
+      const returnable = Prisma.Decimal.max(
+        l.quantityReceived.minus(returned),
+        0,
+      );
+      return {
+        lineId: l.lineId,
+        itemId: l.itemId,
+        itemName: l.item.name,
+        unit: l.item.unit,
+        unitCost: l.unitCost ? l.unitCost.toString() : null,
+        quantityReceived: l.quantityReceived.toString(),
+        quantityReturned: returned.toString(),
+        quantityReturnable: returnable.toString(),
+      };
+    }),
+  };
+}
+
+export interface SupplierReturnEntry {
+  sourceLineId: number;
+  // A positive magnitude, in the stocking unit. The server puts the sign on.
+  quantity: number;
+}
+
+// Raise a return document against a delivered order.
+//
+// A NEW document, never an edit to the delivered one. That order's billedOn
+// already dated the liability into a period, and editing it rewrites a month
+// that is closed; the supplier also invoiced what it invoiced. All 5 supplier
+// returns the loader brought across are standalone documents with no positive
+// lines, which is how the shop already did this by hand.
+//
+// It starts as a Draft. Sending the goods back is a delivery in reverse, so it
+// goes through receiveOrder like any other, and only counts against the supplier
+// balance once it reaches Received.
+export async function createSupplierReturn(
+  sourceOrderId: number,
+  entries: SupplierReturnEntry[],
+  createdBy: number | null,
+) {
+  if (entries.length === 0) throw new ApiError(400, "Nothing to return");
+
+  return prisma.$transaction(async (tx) => {
+    const source = await tx.purchaseOrder.findFirst({
+      where: { orderId: sourceOrderId, deletedAt: null },
+      include: {
+        lines: {
+          where: { lineId: { in: entries.map((e) => e.sourceLineId) } },
+          include: { item: { select: { name: true } } },
+        },
+      },
+    });
+    if (!source) throw new ApiError(404, "Purchase order not found");
+    if (
+      !RETURNABLE_DELIVERY_FROM.includes(source.status as PurchaseOrderStatus)
+    ) {
+      throw new ApiError(
+        409,
+        `Nothing has been delivered on this order, so there is nothing to send back. It is ${source.status.toLowerCase()}.`,
+      );
+    }
+    if (source.supplierId == null) {
+      throw new ApiError(
+        409,
+        "This order has no supplier, so there is nobody to send the goods back to.",
+      );
+    }
+
+    const byId = new Map(source.lines.map((l) => [l.lineId, l]));
+    const claimed = await tx.purchaseOrderLine.groupBy({
+      by: ["returnedFromLineId"],
+      where: {
+        returnedFromLineId: { in: entries.map((e) => e.sourceLineId) },
+        ...DELIVERY_CLAIMED_BY,
+      },
+      _sum: { quantityOrdered: true },
+    });
+    const claimedBy = new Map(
+      claimed.map((c) => [
+        c.returnedFromLineId!,
+        (c._sum.quantityOrdered ?? D(0)).abs(),
+      ]),
+    );
+
+    const returnOrder = await tx.purchaseOrder.create({
+      data: {
+        supplierId: source.supplierId,
+        status: "Draft",
+        reference:
+          `Return against ${source.reference ?? `order ${sourceOrderId}`}`.slice(
+            0,
+            100,
+          ),
+        createdBy,
+        notes: `Goods going back to the supplier from order ${sourceOrderId}.`,
+      },
+    });
+
+    for (const entry of entries) {
+      const line = byId.get(entry.sourceLineId);
+      if (!line) {
+        throw new ApiError(
+          404,
+          `Line ${entry.sourceLineId} is not on this order`,
+        );
+      }
+      if (line.quantityReceived.lessThanOrEqualTo(0)) {
+        throw new ApiError(
+          409,
+          `Nothing has been delivered of "${line.item.name}", so none of it can go back.`,
+        );
+      }
+
+      const quantity = D(entry.quantity);
+      if (quantity.lessThanOrEqualTo(0)) {
+        throw new ApiError(400, "A return quantity must be more than zero");
+      }
+      const already = claimedBy.get(entry.sourceLineId) ?? D(0);
+      const remaining = line.quantityReceived.minus(already);
+      if (quantity.greaterThan(remaining)) {
+        throw new ApiError(
+          409,
+          already.isZero()
+            ? `Only ${line.quantityReceived.toString()} of "${line.item.name}" was delivered, so ${quantity.toString()} cannot go back.`
+            : `Only ${remaining.toString()} of "${line.item.name}" is still returnable: ${line.quantityReceived.toString()} arrived and ${already.toString()} has already gone back.`,
+        );
+      }
+
+      await tx.purchaseOrderLine.create({
+        data: {
+          orderId: returnOrder.orderId,
+          itemId: line.itemId,
+          // The sign lives here. unitCost stays what the goods cost, so
+          // quantityOrdered * unitCost comes out negative on its own and nets
+          // against what the clinic owes with no special case anywhere.
+          quantityOrdered: quantity.negated(),
+          unitCost: line.unitCost,
+          returnedFromLineId: line.lineId,
+        },
+      });
+      claimedBy.set(entry.sourceLineId, already.plus(quantity));
+    }
+
+    return tx.purchaseOrder.findUniqueOrThrow({
+      where: { orderId: returnOrder.orderId },
+      include: orderInclude,
     });
   });
 }

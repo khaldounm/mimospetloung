@@ -930,8 +930,13 @@ export async function voidInvoice(
 // on non-issued invoices.
 export interface Tender {
   currency: string;
-  // The amount applied to the invoice, in that currency. Not the cash handed
-  // over: change is given back at the counter and never reaches the ledger.
+  // A POSITIVE magnitude, in that currency. Not the cash handed over: change is
+  // given back at the counter and never reaches the ledger.
+  //
+  // Direction is never sent. Whether this settles a sale or refunds a return is
+  // decided by the invoice's own total, server-side, so the counter types an
+  // amount and cannot get the sign backwards on the one transaction where doing
+  // so would take money off a customer who came in to be paid.
   amount: number;
 }
 
@@ -963,6 +968,21 @@ export async function recordPayment(
     const alreadyPaid = sumPaid(invoice.payments);
     const balance = invoice.total.minus(alreadyPaid);
 
+    // A document whose returns outweigh its sales has a negative total, so
+    // settling it means paying the customer rather than being paid. Everything
+    // below works in magnitudes and applies this once, which keeps one code path
+    // for both and leaves no branch where a sign can be forgotten.
+    const refunding = invoice.total.isNegative();
+    const direction = refunding ? -1 : 1;
+    if (balance.isZero()) {
+      throw new ApiError(
+        400,
+        refunding
+          ? "This return has already been refunded in full."
+          : "This invoice is already settled.",
+      );
+    }
+
     // Cash arrives as a mix: some dollars, the rest in lira. Each currency is
     // stored as its own row carrying what was handed over and the rate used, so
     // the drawer can be counted at close, while `amount` stays the USD
@@ -973,12 +993,19 @@ export async function recordPayment(
     const legs = data.tenders
       .filter((t) => t.amount > 0)
       .map((t) => {
-        const original = D(t.amount).toDecimalPlaces(2);
+        // Converted as a magnitude, then pointed the invoice's way. Both figures
+        // take the sign: amount_original is what crossed the counter, and a
+        // drawer counted at close has to net the refunds out of it.
+        const magnitude = D(t.amount).toDecimalPlaces(2);
         const usd =
           t.currency === CURRENCY.code
-            ? original
-            : original.dividedBy(fxRate).toDecimalPlaces(2);
-        return { currency: t.currency, original, usd };
+            ? magnitude
+            : magnitude.dividedBy(fxRate).toDecimalPlaces(2);
+        return {
+          currency: t.currency,
+          original: magnitude.times(direction),
+          usd: usd.times(direction),
+        };
       });
     if (legs.length === 0) throw new ApiError(400, "Enter an amount");
 
@@ -986,17 +1013,21 @@ export async function recordPayment(
 
     // Converting lira to dollars rounds, so a settlement meant to clear the
     // balance exactly can land a cent over it. Absorb that on the last leg
-    // rather than rejecting a payment the counter got right.
-    const overshoot = amount.minus(balance);
+    // rather than rejecting a payment the counter got right. Compared as
+    // magnitudes so a refund of exactly the credit is not rejected for
+    // overshooting in the negative direction.
+    const overshoot = amount.abs().minus(balance.abs());
     if (overshoot.gt(0) && overshoot.lte(D("0.01"))) {
       const last = legs[legs.length - 1]!;
-      last.usd = last.usd.minus(overshoot);
+      last.usd = last.usd.minus(overshoot.times(direction));
       amount = balance;
     }
-    if (amount.gt(balance)) {
+    if (amount.abs().gt(balance.abs())) {
       throw new ApiError(
         400,
-        `Payment exceeds the outstanding balance of ${balance.toFixed(2)}`,
+        refunding
+          ? `Refund exceeds the ${balance.abs().toFixed(2)} owed back on this return`
+          : `Payment exceeds the outstanding balance of ${balance.toFixed(2)}`,
       );
     }
 
@@ -1025,14 +1056,22 @@ export async function recordPayment(
     }
 
     const newPaid = alreadyPaid.plus(amount);
-    const status: InvoiceStatus = newPaid.gte(invoice.total)
-      ? "Paid"
-      : "Partial";
+    // "Settled" means the whole total has been handed over, in whichever
+    // direction it points. A plain gte would read a part-paid refund as fully
+    // settled the moment the first note left the drawer.
+    const settled = refunding
+      ? newPaid.lte(invoice.total)
+      : newPaid.gte(invoice.total);
+    const status: InvoiceStatus = settled ? "Paid" : "Partial";
     await tx.invoice.update({ where: { invoiceId }, data: { status } });
 
     // Keep the client's running account balance in step: taking money in
     // reduces what they owe. The balance can go negative, which is the client
     // sitting in credit.
+    //
+    // A refund is a negative amount, so this decrement increments, and handing
+    // the cash back correctly puts the debt it had cancelled straight back on
+    // the account. No branch needed.
     if (invoice.clientId != null) {
       await tx.client.update({
         where: { clientId: invoice.clientId },
