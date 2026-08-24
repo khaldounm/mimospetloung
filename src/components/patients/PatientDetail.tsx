@@ -22,10 +22,13 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
+import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate } from "@/utils/format";
 import type {
   ClinicalRecordDTO,
+  MedicalRecordDTO,
   PatientDTO,
   ServicePickerOption,
 } from "@/types/entities";
@@ -41,6 +44,9 @@ interface Props {
   canWritePatient: boolean;
   canReadClinical: boolean;
   canWriteClinical: boolean;
+  /** Whether this user may send the record to the owner over WhatsApp. */
+  canSendRecord: boolean;
+  clientPhone: string | null;
 }
 
 function Field({ label, value }: { label: string; value: string | null }) {
@@ -62,6 +68,8 @@ export default function PatientDetail({
   canWritePatient,
   canReadClinical,
   canWriteClinical,
+  canSendRecord,
+  clientPhone,
 }: Props) {
   const router = useRouter();
   const [records, setRecords] = useState(initialRecords);
@@ -70,12 +78,69 @@ export default function PatientDetail({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [waBusy, setWaBusy] = useState(false);
+  const [confirmSend, setConfirmSend] = useState(false);
 
   async function reloadRecords() {
     const data = await apiRequest<{ records: ClinicalRecordDTO[] }>(
       `/api/patients/${patient.patientId}/records`,
     );
     setRecords(data.records);
+  }
+
+  // The document the owner receives is built server-side so the download and
+  // the WhatsApp attachment are byte-for-byte the same file. The PDF renderer
+  // is loaded on demand so it stays out of the initial page bundle.
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setError(null);
+    try {
+      const [{ pdf }, { default: MedicalRecordPdfDocument }, data] =
+        await Promise.all([
+          import("@react-pdf/renderer"),
+          import("./MedicalRecordPdfDocument"),
+          apiRequest<{ record: MedicalRecordDTO }>(
+            `/api/patients/${patient.patientId}/medical-record`,
+          ),
+        ]);
+      const blob = await pdf(
+        <MedicalRecordPdfDocument record={data.record} />,
+      ).toBlob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `medical-record-${patient.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate PDF");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
+  async function sendWhatsApp() {
+    setError(null);
+    setSuccess(null);
+    setWaBusy(true);
+    try {
+      await apiRequest(
+        `/api/patients/${patient.patientId}/medical-record/whatsapp`,
+        { method: "POST" },
+      );
+      setConfirmSend(false);
+      setSuccess(`Medical record sent to ${clientName} via WhatsApp.`);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to send via WhatsApp",
+      );
+    } finally {
+      setWaBusy(false);
+    }
   }
 
   async function handleDelete() {
@@ -134,9 +199,19 @@ export default function PatientDetail({
         )}
       </Stack>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+      {error && !confirmSend && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+
+      {success && (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          onClose={() => setSuccess(null)}
+        >
+          {success}
         </Alert>
       )}
 
@@ -179,15 +254,43 @@ export default function PatientDetail({
         sx={{ justifyContent: "space-between", alignItems: "center", mb: 2 }}
       >
         <Typography variant="h5">Clinical history</Typography>
-        {canWriteClinical && (
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setRecordOpen(true)}
-          >
-            Add record
-          </Button>
-        )}
+        <Stack
+          direction="row"
+          spacing={1.5}
+          useFlexGap
+          sx={{ flexWrap: "wrap" }}
+        >
+          {canReadClinical && (
+            <Button
+              variant="outlined"
+              startIcon={<DownloadIcon />}
+              onClick={() => void downloadPdf()}
+              disabled={pdfBusy}
+            >
+              {pdfBusy ? "Preparing..." : "Download record"}
+            </Button>
+          )}
+          {canReadClinical && canSendRecord && (
+            <Button
+              variant="outlined"
+              color="success"
+              startIcon={<WhatsAppIcon />}
+              onClick={() => setConfirmSend(true)}
+              disabled={waBusy}
+            >
+              {waBusy ? "Sending..." : "Send to client"}
+            </Button>
+          )}
+          {canWriteClinical && (
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => setRecordOpen(true)}
+            >
+              Add record
+            </Button>
+          )}
+        </Stack>
       </Stack>
 
       {!canReadClinical ? (
@@ -237,6 +340,45 @@ export default function PatientDetail({
         onClose={() => setRecordOpen(false)}
         onSaved={() => void reloadRecords()}
       />
+
+      {/* Sending clinical history off the premises is worth one deliberate
+          step, and the confirmation is where the owner's number is checked. */}
+      <Dialog open={confirmSend} onClose={() => setConfirmSend(false)}>
+        <DialogTitle>Send medical record?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {patient.name}&apos;s full clinical history ({records.length}{" "}
+            {records.length === 1 ? "entry" : "entries"}) will be sent to{" "}
+            {clientName}
+            {clientPhone ? ` on ${clientPhone}` : ""} as a PDF over WhatsApp.
+          </DialogContentText>
+          {!clientPhone && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              This client has no phone number on file.
+            </Alert>
+          )}
+          {/* Kept inside the dialog: an alert behind the backdrop is one the
+              person who just pressed Send cannot read. */}
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmSend(false)} disabled={waBusy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            onClick={() => void sendWhatsApp()}
+            disabled={waBusy || !clientPhone}
+          >
+            {waBusy ? "Sending..." : "Send"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
         <DialogTitle>Delete patient?</DialogTitle>

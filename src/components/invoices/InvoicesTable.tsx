@@ -20,6 +20,7 @@ import {
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import PointOfSaleIcon from "@mui/icons-material/PointOfSale";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney } from "@/utils/format";
 import { INVOICE_STATUS_COLOR } from "@/constants/invoice";
@@ -27,6 +28,7 @@ import TablePaginationBar from "@/components/ui/TablePaginationBar";
 import { INVOICE_STATUSES } from "@/types/enums";
 import type { InvoiceDTO, InvoiceListItemDTO } from "@/types/entities";
 import InvoiceFormDialog from "./InvoiceFormDialog";
+import RegisterCloseDialog from "./RegisterCloseDialog";
 
 interface Props {
   initialInvoices: InvoiceListItemDTO[];
@@ -49,6 +51,7 @@ export default function InvoicesTable({
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
   const firstRender = useRef(true);
 
   // Every filter runs in SQL, so the browser only ever holds one page.
@@ -101,6 +104,13 @@ export default function InvoicesTable({
         <Stack direction="row" spacing={1}>
           <Button component={Link} href="/services" variant="outlined">
             Services
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<PointOfSaleIcon />}
+            onClick={() => setRegisterOpen(true)}
+          >
+            Close register
           </Button>
           {canWrite && (
             <Button
@@ -206,6 +216,11 @@ export default function InvoicesTable({
           noun="invoices"
         />
       </TableContainer>
+
+      <RegisterCloseDialog
+        open={registerOpen}
+        onClose={() => setRegisterOpen(false)}
+      />
 
       <InvoiceFormDialog
         open={dialogOpen}

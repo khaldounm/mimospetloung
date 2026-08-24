@@ -7,12 +7,13 @@ import { createHmac, timingSafeEqual } from "crypto";
 //
 // The kind is inside the signed payload rather than only in the URL, so a token
 // minted for invoice 12 cannot be replayed against purchase order 12. Purchase
-// orders carry supplier cost, which is otherwise Admin-only.
+// orders carry supplier cost, which is otherwise Admin-only, and a medical
+// record carries a patient's clinical history.
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 /** Documents reachable over a signed public link. */
-export type PdfKind = "invoice" | "order";
+export type PdfKind = "invoice" | "order" | "medical-record";
 
 function secret(): string {
   const value = process.env.NEXTAUTH_SECRET;

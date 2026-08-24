@@ -24,12 +24,23 @@ export default async function PatientDetailPage({
   const canWritePatient = hasPermission(session?.user, "patients:write");
   const canReadClinical = hasPermission(session?.user, "clinical:read");
   const canWriteClinical = hasPermission(session?.user, "clinical:write");
+  // Sending is a notification action, so it rides on the messaging permission
+  // rather than on clinical:write: reception sends, they do not author records.
+  const canSendRecord = hasPermission(session?.user, "notifications:write");
 
   const [patient, rawServices] = await Promise.all([
     prisma.patient.findFirst({
       where: { patientId: id, deletedAt: null },
       include: {
-        client: { select: { clientId: true, firstName: true, lastName: true } },
+        client: {
+          select: {
+            clientId: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            phone2: true,
+          },
+        },
         clinicalRecords: {
           where: { deletedAt: null },
           orderBy: { performedAt: "desc" },
@@ -89,6 +100,8 @@ export default async function PatientDetailPage({
       canWritePatient={canWritePatient}
       canReadClinical={canReadClinical}
       canWriteClinical={canWriteClinical}
+      canSendRecord={canSendRecord}
+      clientPhone={patient.client.phone ?? patient.client.phone2 ?? null}
     />
   );
 }

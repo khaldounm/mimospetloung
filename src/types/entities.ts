@@ -101,6 +101,19 @@ export interface ClinicalRecordDTO {
   performerName: string | null;
 }
 
+// A patient's complete clinical history plus the owner details, assembled for
+// the shareable medical record PDF. Built once server-side (see
+// @/lib/medical-record) so the download and the WhatsApp attachment are the
+// same document.
+export interface MedicalRecordDTO {
+  patient: PatientDTO;
+  clientName: string;
+  clientPhone: string | null;
+  records: ClinicalRecordDTO[];
+  /** ISO timestamp the document was produced, printed in the footer. */
+  generatedAt: string;
+}
+
 // Lightweight option used in the Add Record dialog to populate the
 // subcategory dropdown from the services table (source of truth for procedures).
 export interface ServicePickerOption {
@@ -860,4 +873,35 @@ export interface InvoiceListItemDTO {
   issuedAt: string | null;
   dueDate: string | null;
   isOverdue: boolean;
+}
+
+// ---- register close ----
+
+// One currency's cash movement through the drawer for a single day. Amounts are
+// in that currency, not converted: the drawer is counted in the notes it holds.
+export interface RegisterCurrencyLine {
+  currency: string;
+  taken: string;
+  refunded: string;
+  net: string;
+}
+
+// Money taken that day that never reached the drawer, shown so the staff can
+// tell a card day from a short drawer.
+export interface RegisterNonCashLine {
+  method: string;
+  amountUsd: string;
+  count: number;
+}
+
+export interface RegisterDayDTO {
+  date: string;
+  // LBP per 1 USD, for reading the two currencies as one figure.
+  fxRate: number;
+  currencies: RegisterCurrencyLine[];
+  nonCash: RegisterNonCashLine[];
+  // Payments with no method recorded, counted as cash above. Surfaced so a
+  // drawer that does not balance can be traced back to them.
+  unspecifiedCount: number;
+  unspecifiedUsd: string;
 }

@@ -1,6 +1,10 @@
 import { CLINIC } from "@/constants/clinic";
 import { formatMoney } from "@/utils/format";
-import type { InvoiceDTO, PurchaseOrderDTO } from "@/types/entities";
+import type {
+  InvoiceDTO,
+  MedicalRecordDTO,
+  PurchaseOrderDTO,
+} from "@/types/entities";
 
 // Composes the WhatsApp message body (caption) for an invoice summary.
 export function invoiceWhatsAppMessage(invoice: InvoiceDTO): string {
@@ -39,4 +43,39 @@ export function orderWhatsAppMessage(
   if (order.notes) lines.push("", order.notes);
   lines.push("", "Thank you,", CLINIC.name);
   return lines.join("\n");
+}
+
+// Composes the WhatsApp message body (caption) sent to an owner with their
+// pet's medical record PDF. The history itself stays in the attachment: a
+// caption long enough to list visits pushes the file off a phone screen.
+export function medicalRecordWhatsAppMessage(record: MedicalRecordDTO): string {
+  const { patient, records } = record;
+  const lines = [
+    `Hello ${record.clientName},`,
+    "",
+    `Please find ${patient.name}'s medical record attached.`,
+    `Entries: ${records.length}`,
+  ];
+
+  // The next recall is the one thing worth repeating outside the PDF, since it
+  // is the only part that asks the owner to do something.
+  const today = new Date().toISOString().slice(0, 10);
+  const nextDue = records
+    .map((r) => r.nextDueDate)
+    .filter((d): d is string => !!d && d >= today)
+    .sort()[0];
+  if (nextDue) lines.push(`Next due: ${nextDue}`);
+
+  lines.push("", "Thank you,", CLINIC.name);
+  return lines.join("\n");
+}
+
+// Filename-safe slug of a pet's name, so the attachment arrives as
+// "medical-record-luna.pdf" rather than an id the owner cannot read.
+export function medicalRecordFileName(record: MedicalRecordDTO): string {
+  const slug = record.patient.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `medical-record-${slug || record.patient.patientId}.pdf`;
 }

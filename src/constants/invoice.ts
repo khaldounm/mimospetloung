@@ -17,3 +17,8 @@ export const INVOICE_STATUS_COLOR: Record<
   Overdue: "error",
   Void: "default",
 };
+
+// How far back the register close can reach. The count belongs to the day it
+// covers, so the window is a grace period for a day nobody got to, not a way to
+// re-open the books.
+export const REGISTER_MAX_DAYS_BACK = 7;
