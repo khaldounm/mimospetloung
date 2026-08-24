@@ -197,18 +197,31 @@ export default function SuppliersTable({
                       </Typography>
                     )}
                   </TableCell>
+                  {/* The primary contact only. A supplier is often split
+                      across a food rep, a medication rep and an accounts
+                      person, so the rest are counted here and listed in full
+                      on the supplier's own page. */}
                   <TableCell>
                     {s.phone && (
                       <Typography variant="body2">{s.phone}</Typography>
                     )}
                     {s.email && (
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ display: "block" }}
+                      >
                         {s.email}
                       </Typography>
                     )}
                     {!s.phone && !s.email && (
                       <Typography variant="body2" color="text.secondary">
-                        &mdash;
+                        No contacts
+                      </Typography>
+                    )}
+                    {s.contacts.length > 1 && (
+                      <Typography variant="caption" color="text.secondary">
+                        {`+${s.contacts.length - 1} more`}
                       </Typography>
                     )}
                   </TableCell>

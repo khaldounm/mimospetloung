@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { optionalString } from "./common";
+import { INVENTORY_CATEGORIES } from "@/constants/inventory";
 
 // Blank email is "not provided", not an invalid address, so it must be stripped
 // before the format check runs. Mirrors the client schema.
@@ -8,11 +9,35 @@ const optionalEmail = z.preprocess(
   z.email("Invalid email").max(160).optional(),
 );
 
+// One person at the supplier. contactId is present when the repeater is editing
+// a row that already exists, absent for a newly added one, which is how the
+// save distinguishes an update from an insert and keeps ids stable.
+//
+// A contact must be reachable: name alone is a note, not a contact. The DB
+// carries the same rule as a CHECK so it holds however the row arrives.
+export const supplierContactSchema = z
+  .object({
+    contactId: z.coerce.number().int().positive().optional(),
+    name: z.string().trim().min(1, "Contact name is required").max(120),
+    role: optionalString(60),
+    categories: z.array(z.enum(INVENTORY_CATEGORIES)).default([]),
+    phone: optionalString(40),
+    email: optionalEmail,
+    notes: optionalString(5000),
+    isPrimary: z.coerce.boolean().optional(),
+  })
+  .refine((c) => Boolean(c.phone) || Boolean(c.email), {
+    message: "Add a phone number or an email",
+    path: ["phone"],
+  });
+
+// Contacts arrive as the whole set, not a delta: the form edits them inline and
+// saves once, so anything missing from the array was removed.
+const contacts = z.array(supplierContactSchema).max(20).optional();
+
 export const supplierCreateSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
-  contactPerson: optionalString(120),
-  phone: optionalString(40),
-  email: optionalEmail,
+  contacts,
   notes: optionalString(5000),
   isActive: z.coerce.boolean().optional(),
 });
@@ -58,6 +83,7 @@ export const supplierPaymentCreateSchema = z.object({
 });
 
 export type SupplierCreateInput = z.infer<typeof supplierCreateSchema>;
+export type SupplierContactInput = z.infer<typeof supplierContactSchema>;
 export type SupplierPaymentCreateInput = z.infer<
   typeof supplierPaymentCreateSchema
 >;

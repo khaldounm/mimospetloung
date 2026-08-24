@@ -564,9 +564,28 @@ export interface SupplierMoneyDTO {
   openOrderCount: number; // Draft / Placed / Partial
 }
 
+// One named person at a supplier. The clinic splits its dealings by product
+// line, so a company typically has a food rep, a medication rep and whoever
+// settles the account, each with their own number.
+export interface SupplierContactDTO {
+  contactId: number;
+  supplierId: number;
+  name: string;
+  role: string | null; // free label: "Sales rep", "Accounts"
+  categories: string[]; // from INVENTORY_CATEGORIES; empty means general
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  isPrimary: boolean;
+  sortOrder: number;
+}
+
 export interface SupplierDTO {
   supplierId: number;
   name: string;
+  contacts: SupplierContactDTO[];
+  // Flattened from the primary contact so the list and the detail header can
+  // show one line without walking the array. Null when there are no contacts.
   contactPerson: string | null;
   phone: string | null;
   email: string | null;

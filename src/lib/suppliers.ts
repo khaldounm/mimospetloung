@@ -4,12 +4,33 @@ import { orderInclude, toPurchaseOrderDTO } from "@/lib/purchase-orders";
 import { toDateOnly } from "@/utils/format";
 import type {
   PurchaseOrderDTO,
+  SupplierContactDTO,
   SupplierDTO,
   SupplierMoneyDTO,
   SupplierPaymentDTO,
 } from "@/types/entities";
+import type { SupplierContactInput } from "@/schemas/supplier";
 
 const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
+
+// Contacts in the order the form laid them out, so the repeater round-trips
+// unchanged and the first row is a stable fallback for the primary.
+export const supplierInclude = {
+  contacts: { orderBy: [{ sortOrder: "asc" }, { contactId: "asc" }] },
+} as const satisfies Prisma.SupplierInclude;
+
+type ContactRow = {
+  contactId: number;
+  supplierId: number;
+  name: string;
+  role: string | null;
+  categories: string[];
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  isPrimary: boolean;
+  sortOrder: number;
+};
 
 // Shape returned by supplier queries. Kept structural (not a Prisma payload
 // type) so create/update rows map through the same function.
@@ -18,13 +39,26 @@ type SupplierRow = {
   reviewNote: string | null;
   supplierId: number;
   name: string;
-  contactPerson: string | null;
-  phone: string | null;
-  email: string | null;
   notes: string | null;
   isActive: boolean;
   createdAt: Date;
+  contacts: ContactRow[];
 };
+
+export function toSupplierContactDTO(c: ContactRow): SupplierContactDTO {
+  return {
+    contactId: c.contactId,
+    supplierId: c.supplierId,
+    name: c.name,
+    role: c.role,
+    categories: c.categories,
+    phone: c.phone,
+    email: c.email,
+    notes: c.notes,
+    isPrimary: c.isPrimary,
+    sortOrder: c.sortOrder,
+  };
+}
 
 type SupplierStats = {
   itemCount: number;
@@ -35,14 +69,20 @@ export function toSupplierDTO(
   s: SupplierRow,
   stats?: SupplierStats,
 ): SupplierDTO {
+  // Falls back to the first contact so a supplier whose rows predate the
+  // primary flag, or one saved outside the form, still shows a line of detail
+  // rather than "No contact details" beside a populated list.
+  const primary = s.contacts.find((c) => c.isPrimary) ?? s.contacts[0] ?? null;
+
   const dto: SupplierDTO = {
     supplierId: s.supplierId,
     name: s.name,
     needsReview: s.needsReview,
     reviewNote: s.reviewNote,
-    contactPerson: s.contactPerson,
-    phone: s.phone,
-    email: s.email,
+    contacts: s.contacts.map(toSupplierContactDTO),
+    contactPerson: primary?.name ?? null,
+    phone: primary?.phone ?? null,
+    email: primary?.email ?? null,
     notes: s.notes,
     isActive: s.isActive,
     createdAt: s.createdAt.toISOString(),
@@ -81,6 +121,81 @@ export function toSupplierPaymentDTO(p: PaymentRow): SupplierPaymentDTO {
       : null,
     createdAt: p.createdAt.toISOString(),
   };
+}
+
+// ---- Contact writes ----
+
+// Replaces a supplier's contact set in one pass: rows carrying a contactId are
+// updated, rows without one are created, and anything absent from the array is
+// deleted. Runs inside a transaction, since the set is briefly incomplete.
+//
+// isPrimary is cleared across the supplier before the chosen row is flagged.
+// The partial unique index permits one primary at a time, so flagging the new
+// one while the old still holds it would collide, and a unique index cannot be
+// deferred to the end of the transaction.
+export async function writeSupplierContacts(
+  tx: Prisma.TransactionClient,
+  supplierId: number,
+  contacts: SupplierContactInput[],
+): Promise<void> {
+  const keptIds = contacts
+    .map((c) => c.contactId)
+    .filter((id): id is number => id !== undefined);
+
+  await tx.supplierContact.deleteMany({
+    where: {
+      supplierId,
+      ...(keptIds.length > 0 ? { contactId: { notIn: keptIds } } : {}),
+    },
+  });
+  await tx.supplierContact.updateMany({
+    where: { supplierId },
+    data: { isPrimary: false },
+  });
+
+  const ids: number[] = [];
+  for (const [index, c] of contacts.entries()) {
+    const data = {
+      name: c.name,
+      role: c.role ?? null,
+      categories: c.categories,
+      phone: c.phone ?? null,
+      email: c.email ?? null,
+      notes: c.notes ?? null,
+      sortOrder: index,
+      isPrimary: false,
+    };
+
+    // Scoped by supplierId so an id belonging to another supplier cannot be
+    // adopted by editing the payload; a miss falls through to a create.
+    let id: number | null = null;
+    if (c.contactId !== undefined) {
+      const updated = await tx.supplierContact.updateMany({
+        where: { contactId: c.contactId, supplierId },
+        data,
+      });
+      if (updated.count > 0) id = c.contactId;
+    }
+    if (id === null) {
+      const created = await tx.supplierContact.create({
+        data: { ...data, supplierId },
+      });
+      id = created.contactId;
+    }
+    ids.push(id);
+  }
+
+  // Whichever row the form flagged, else the first: a supplier that has any
+  // contacts always has exactly one primary, which is what the list column and
+  // the detail header read.
+  const flagged = contacts.findIndex((c) => c.isPrimary);
+  const primaryId = ids[flagged === -1 ? 0 : flagged];
+  if (primaryId !== undefined) {
+    await tx.supplierContact.update({
+      where: { contactId: primaryId },
+      data: { isPrimary: true },
+    });
+  }
 }
 
 // ---- Balance ----
@@ -174,6 +289,7 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
     await Promise.all([
       prisma.supplier.findMany({
         where: { deletedAt: null },
+        include: supplierInclude,
         orderBy: [{ isActive: "desc" }, { name: "asc" }],
       }),
       prisma.inventoryItem.groupBy({
@@ -228,6 +344,7 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
 export async function getActiveSuppliers(): Promise<SupplierDTO[]> {
   const suppliers = await prisma.supplier.findMany({
     where: { deletedAt: null, isActive: true },
+    include: supplierInclude,
     orderBy: { name: "asc" },
   });
   return suppliers.map((s) => toSupplierDTO(s));
@@ -238,6 +355,7 @@ export async function getSupplier(
 ): Promise<SupplierDTO | null> {
   const supplier = await prisma.supplier.findFirst({
     where: { supplierId, deletedAt: null },
+    include: supplierInclude,
   });
   if (!supplier) return null;
 

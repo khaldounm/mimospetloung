@@ -458,28 +458,26 @@ export async function transform() {
 
   // ── Suppliers ──────────────────────────────────────────────────────────
   const sups = await q(`SELECT * FROM staging.suppliers`);
+  // Contact details are deliberately not imported. PhoneNumber, FaxNumber and
+  // Address are empty on all 25 supplier rows, so the old mapping only ever
+  // wrote nulls, and because "phone" was in the conflict-update list every
+  // re-run blanked whatever staff had typed in the app. Supplier people now
+  // live in supplier_contacts, which this import does not touch at all, so a
+  // re-run at cutover cannot reach them.
   await upsert(
     "suppliers",
-    [
-      "legacy_id",
-      "name",
-      "phone",
-      "account_balance",
-      "needs_review",
-      "review_note",
-    ],
+    ["legacy_id", "name", "account_balance", "needs_review", "review_note"],
     sups.map((x: Row) => [
       num(x.SupplierID),
       // One supplier row has no name but does carry a balance, so it gets a
       // placeholder rather than being dropped along with the money it owes.
       (s(x.SupplierName) || `Supplier ${num(x.SupplierID)}`).slice(0, 255),
-      normalizeLegacyPhone(s(x.PhoneNumber)).phone,
       // The old system's supplier Account column: what the clinic still owes.
       money(x.Account),
       false,
       null,
     ]),
-    ["name", "phone", "account_balance"],
+    ["name", "account_balance"],
   );
   report.push(`suppliers      ${sups.length}`);
 

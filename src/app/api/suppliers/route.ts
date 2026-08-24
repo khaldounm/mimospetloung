@@ -4,7 +4,9 @@ import { handle, parseBody, requirePermission } from "@/lib/api";
 import {
   getActiveSuppliers,
   getSuppliersWithStats,
+  supplierInclude,
   toSupplierDTO,
+  writeSupplierContacts,
 } from "@/lib/suppliers";
 import { writeAudit } from "@/lib/audit";
 import { supplierCreateSchema } from "@/schemas/supplier";
@@ -29,15 +31,23 @@ export async function POST(request: Request) {
     const session = await requirePermission("orders:write");
     const data = await parseBody(request, supplierCreateSchema);
 
-    const supplier = await prisma.supplier.create({
-      data: {
-        name: data.name,
-        contactPerson: data.contactPerson,
-        phone: data.phone,
-        email: data.email,
-        notes: data.notes,
-        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-      },
+    // One transaction so a supplier is never created with half its contacts:
+    // the reachability CHECK or the primary index can still reject a row.
+    const supplier = await prisma.$transaction(async (tx) => {
+      const created = await tx.supplier.create({
+        data: {
+          name: data.name,
+          notes: data.notes,
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        },
+      });
+      if (data.contacts?.length) {
+        await writeSupplierContacts(tx, created.supplierId, data.contacts);
+      }
+      return tx.supplier.findUniqueOrThrow({
+        where: { supplierId: created.supplierId },
+        include: supplierInclude,
+      });
     });
     await writeAudit(session, {
       action: "create",

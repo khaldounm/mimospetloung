@@ -7,7 +7,12 @@ import {
   parseId,
   requirePermission,
 } from "@/lib/api";
-import { getSupplier, toSupplierDTO } from "@/lib/suppliers";
+import {
+  getSupplier,
+  supplierInclude,
+  toSupplierDTO,
+  writeSupplierContacts,
+} from "@/lib/suppliers";
 import { writeAudit } from "@/lib/audit";
 import { supplierUpdateSchema } from "@/schemas/supplier";
 
@@ -45,18 +50,25 @@ export async function PATCH(
     });
     if (!existing) throw new ApiError(404, "Supplier not found");
 
-    const supplier = await prisma.supplier.update({
-      where: { supplierId },
-      data: {
-        ...(data.name !== undefined ? { name: data.name } : {}),
-        ...(data.contactPerson !== undefined
-          ? { contactPerson: data.contactPerson }
-          : {}),
-        ...(data.phone !== undefined ? { phone: data.phone } : {}),
-        ...(data.email !== undefined ? { email: data.email } : {}),
-        ...(data.notes !== undefined ? { notes: data.notes } : {}),
-        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-      },
+    // Contacts arrive as the whole set, so an omitted key leaves them alone
+    // while an empty array clears them. Both happen in the same transaction as
+    // the supplier fields, so a rejected contact rolls the name back too.
+    const supplier = await prisma.$transaction(async (tx) => {
+      await tx.supplier.update({
+        where: { supplierId },
+        data: {
+          ...(data.name !== undefined ? { name: data.name } : {}),
+          ...(data.notes !== undefined ? { notes: data.notes } : {}),
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        },
+      });
+      if (data.contacts !== undefined) {
+        await writeSupplierContacts(tx, supplierId, data.contacts);
+      }
+      return tx.supplier.findUniqueOrThrow({
+        where: { supplierId },
+        include: supplierInclude,
+      });
     });
     await writeAudit(session, {
       action: "update",

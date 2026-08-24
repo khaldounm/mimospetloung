@@ -273,15 +273,13 @@ model Supplier {
   reviewNote     String?   @map("review_note") @db.Text
   legacyId       Int?      @unique @map("legacy_id")
   name           String    @db.VarChar(120)
-  contactPerson  String?   @map("contact_person") @db.VarChar(120)
-  phone          String?   @db.VarChar(40)
-  email          String?   @db.VarChar(160)
   notes          String?   @db.Text
   isActive       Boolean   @default(true) @map("is_active")
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
+  contacts        SupplierContact[]
   items           InventoryItem[]
   orders          PurchaseOrder[]
   payments        SupplierPayment[]
@@ -289,6 +287,42 @@ model Supplier {
 
   @@index([name], map: "idx_suppliers_active")
   @@map("suppliers")
+}
+
+// A named person at a supplier. The clinic deals with several people per
+// company, split by what they sell: one rep for food, another for medication,
+// a third for accessories, plus whoever settles the account. `categories` is
+// drawn from INVENTORY_CATEGORIES so an order's lines can point at the person
+// who handles them.
+//
+// Replaces the flat contact_person/phone/email columns that used to sit on
+// Supplier. They held nothing: neither this app nor the Access file it was
+// imported from ever captured a single supplier phone number.
+model SupplierContact {
+  contactId  Int      @id @default(autoincrement()) @map("contact_id")
+  supplierId Int      @map("supplier_id")
+  name       String   @db.VarChar(120)
+  // Free label for the job ("Sales rep", "Accounts"). Kept apart from
+  // categories because whoever settles the bill sells nothing.
+  role       String?  @db.VarChar(60)
+  // Which shelves this person covers, from INVENTORY_CATEGORIES. Empty means a
+  // general contact rather than one tied to a product line.
+  categories String[] @default([])
+  phone      String?  @db.VarChar(40)
+  email      String?  @db.VarChar(160)
+  notes      String?  @db.Text
+  // The contact shown wherever only one line of detail fits. A partial unique
+  // index allows at most one per supplier, and the API promotes the first row
+  // when a save flags none.
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  supplier Supplier @relation(fields: [supplierId], references: [supplierId], onDelete: Cascade)
+
+  @@index([supplierId], map: "idx_supplier_contacts_supplier")
+  @@map("supplier_contacts")
 }
 
 // Money actually paid to a supplier. The clinic pays both on the spot and on

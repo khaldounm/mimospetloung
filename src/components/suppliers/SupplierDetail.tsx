@@ -191,6 +191,93 @@ export default function SupplierDetail({
       </Typography>
 
       <Typography variant="h5" sx={{ mb: 2 }}>
+        Contacts
+      </Typography>
+      <TableContainer component={Paper} sx={{ mb: 4 }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>Role</TableCell>
+              <TableCell>Handles</TableCell>
+              <TableCell>Phone</TableCell>
+              <TableCell>Email</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {supplier.contacts.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} align="center">
+                  <Typography color="text.secondary" sx={{ py: 2 }}>
+                    No contacts yet. Add them from Edit.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : (
+              supplier.contacts.map((c) => (
+                <TableRow key={c.contactId} hover>
+                  <TableCell>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{ alignItems: "center", flexWrap: "wrap" }}
+                    >
+                      <Typography variant="body2">{c.name}</Typography>
+                      {c.isPrimary && <Chip size="small" label="Primary" />}
+                    </Stack>
+                  </TableCell>
+                  <TableCell>
+                    {c.role || (
+                      <Typography variant="body2" color="text.secondary">
+                        -
+                      </Typography>
+                    )}
+                  </TableCell>
+                  {/* No categories means a general contact, typically whoever
+                      settles the account rather than someone who sells. */}
+                  <TableCell>
+                    {c.categories.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        General
+                      </Typography>
+                    ) : (
+                      <Stack
+                        direction="row"
+                        sx={{ flexWrap: "wrap", gap: 0.5 }}
+                      >
+                        {c.categories.map((category) => (
+                          <Chip
+                            key={category}
+                            size="small"
+                            variant="outlined"
+                            label={category}
+                          />
+                        ))}
+                      </Stack>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {c.phone || (
+                      <Typography variant="body2" color="text.secondary">
+                        -
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {c.email || (
+                      <Typography variant="body2" color="text.secondary">
+                        -
+                      </Typography>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Typography variant="h5" sx={{ mb: 2 }}>
         Orders
       </Typography>
       <TableContainer component={Paper} sx={{ mb: 4 }}>
