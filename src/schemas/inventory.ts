@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { optionalString, optionalDate } from "./common";
-import { INVENTORY_TX_TYPES } from "@/types/enums";
+import { INVENTORY_TX_TYPES, SIGNED_TX_TYPES } from "@/types/enums";
 
 // Non-negative money value (sale price / cost). Blank -> undefined.
 const optionalMoney = z.preprocess(
@@ -132,9 +132,10 @@ export const inventoryItemUpdateSchema = inventoryItemCreateFields
     { message: LOOSE_MESSAGE, path: ["looseUnit"] },
   );
 
-// A single stock movement. `quantity` is a magnitude for directional types
-// (Received/Used/Sold/Expired) and a signed delta for Adjusted corrections.
-// The server converts this into the signed value stored on the transaction.
+// A single stock movement. `quantity` is a magnitude for the directional types,
+// whose direction their name already fixes, and a signed delta for the two in
+// SIGNED_TX_TYPES. The server converts this into the signed value stored on the
+// transaction.
 export const inventoryTransactionSchema = z
   .object({
     type: z.enum(INVENTORY_TX_TYPES),
@@ -152,7 +153,7 @@ export const inventoryTransactionSchema = z
         message: "Quantity cannot be zero",
       });
     }
-    if (data.type !== "Adjusted" && data.quantity < 0) {
+    if (!SIGNED_TX_TYPES.includes(data.type) && data.quantity < 0) {
       ctx.addIssue({
         code: "custom",
         path: ["quantity"],

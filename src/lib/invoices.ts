@@ -5,7 +5,7 @@ import { applyStockMovementTx, isStockCheckViolation } from "@/lib/inventory";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
 import { computePartnerPayable, effectiveSharePct } from "@/lib/partners";
 import { toDateOnly } from "@/utils/format";
-import { INVOICE_STATUSES } from "@/types/enums";
+import { INVOICE_STATUSES, SIGNED_TX_TYPES } from "@/types/enums";
 import type {
   InvoiceDTO,
   InvoiceLineItemDTO,
@@ -13,7 +13,11 @@ import type {
   PaymentDTO,
   ServiceDTO,
 } from "@/types/entities";
-import type { InvoiceStatus, PaymentMethod } from "@/types/enums";
+import type {
+  InventoryTxType,
+  InvoiceStatus,
+  PaymentMethod,
+} from "@/types/enums";
 import { CURRENCY } from "@/constants/clinic";
 
 // What an invoice with no client is called everywhere it is shown.
@@ -481,6 +485,179 @@ export function resolveLine(
 // Issue a draft: freeze totals, decrement stock for inventory lines (recorded as
 // 'Sold' movements referencing this invoice), and lock the invoice. All atomic,
 // so an oversell rolls the whole issue back.
+// The Sold movement behind each return line, so giving a sale back takes off
+// exactly the cost the sale put on rather than today's cost price.
+//
+// Return lines on one invoice can point at several different sales, so the
+// sources are resolved a sale at a time. Within a sale, movements record the
+// item and not the line, so duplicate lines for one item pair up in order:
+// issueInvoice writes them in line order, and the nth movement for an item
+// belongs to the nth line for it. Same pairing voidInvoice relies on.
+async function originSoldMovements(
+  tx: Tx,
+  lines: {
+    lineItemId: number;
+    quantity: Prisma.Decimal;
+    returnedFromLineId: number | null;
+  }[],
+) {
+  const byReturnLine = new Map<
+    number,
+    { transactionId: number; unitCost: Prisma.Decimal | null }
+  >();
+  const returns = lines.filter(
+    (l) => l.quantity.lessThan(0) && l.returnedFromLineId != null,
+  );
+  if (returns.length === 0) return byReturnLine;
+
+  const sources = await tx.invoiceLineItem.findMany({
+    where: { lineItemId: { in: returns.map((l) => l.returnedFromLineId!) } },
+    select: { lineItemId: true, invoiceId: true, itemId: true },
+  });
+  const sourceById = new Map(sources.map((s) => [s.lineItemId, s]));
+
+  const bySourceLine = new Map<
+    number,
+    { transactionId: number; unitCost: Prisma.Decimal | null }
+  >();
+  for (const sourceInvoiceId of new Set(sources.map((s) => s.invoiceId))) {
+    const [sold, sourceLines] = await Promise.all([
+      tx.inventoryTransaction.findMany({
+        where: {
+          referenceType: "invoice",
+          referenceId: sourceInvoiceId,
+          type: "Sold",
+        },
+        orderBy: { transactionId: "asc" },
+        select: { transactionId: true, itemId: true, unitCost: true },
+      }),
+      tx.invoiceLineItem.findMany({
+        where: { invoiceId: sourceInvoiceId, quantity: { gt: 0 } },
+        orderBy: { lineItemId: "asc" },
+        select: { lineItemId: true, itemId: true },
+      }),
+    ]);
+    const queued = new Map<number, typeof sold>();
+    for (const m of sold) {
+      const q = queued.get(m.itemId) ?? [];
+      q.push(m);
+      queued.set(m.itemId, q);
+    }
+    for (const l of sourceLines) {
+      if (l.itemId == null) continue;
+      const next = queued.get(l.itemId)?.shift();
+      if (next) bySourceLine.set(l.lineItemId, next);
+    }
+  }
+
+  for (const l of returns) {
+    const source = sourceById.get(l.returnedFromLineId!);
+    const move = source ? bySourceLine.get(source.lineItemId) : undefined;
+    if (move) byReturnLine.set(l.lineItemId, move);
+  }
+  return byReturnLine;
+}
+
+// Put a return line's goods back, and bin them again if they came back unfit.
+//
+// Two movements rather than one flagged movement, and never a suppressed one.
+// The customer is refunded either way, so a write-off that skipped its stock
+// movement would make the loss invisible; writing Returned then Damaged keeps
+// "returned 12 this month, wrote off 3" answerable from the movement table
+// alone. The Damaged movement names the Returned one as what it undoes, so it
+// eats the very stock just put back instead of picking FEFO and quietly moving
+// the loss onto a different lot.
+async function applyReturnLineTx(
+  tx: Tx,
+  params: {
+    invoiceId: number;
+    line: {
+      lineItemId: number;
+      itemId: number | null;
+      quantity: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+      returnRestock: boolean | null;
+      returnLotNumber: string | null;
+      returnExpiryDate: Date | null;
+      item: {
+        lastCost: Prisma.Decimal | null;
+        partnerId: number | null;
+        partnerSharePct: Prisma.Decimal | null;
+        partner: { defaultSharePct: Prisma.Decimal } | null;
+      } | null;
+    };
+    origin?: { transactionId: number; unitCost: Prisma.Decimal | null };
+    performedBy: number | null;
+  },
+) {
+  const { invoiceId, line, origin, performedBy } = params;
+  if (line.itemId == null) return;
+  // The line carries the sign; the movement is given a magnitude and the type
+  // says which way it goes.
+  const quantity = line.quantity.negated();
+  // The sale's own frozen cost when it can be traced, so COGS nets to zero.
+  // Falling back to the item's cost price keeps an untraceable return (a legacy
+  // sale, or stock sold before movements were kept) valued rather than free.
+  const unitCost = origin?.unitCost ?? line.item?.lastCost ?? null;
+
+  // Consignment: cancel the share of the accrual that is coming back. Computed
+  // from the returned quantity rather than lifted off the original movement, so
+  // returning 1 of 3 cancels a third of it.
+  let partnerId: number | null = null;
+  let partnerPayable: Prisma.Decimal | null = null;
+  if (line.item?.partnerId != null) {
+    partnerId = line.item.partnerId;
+    partnerPayable = computePartnerPayable(
+      quantity,
+      line.unitPrice,
+      unitCost ?? 0,
+      effectiveSharePct(
+        line.item.partnerSharePct,
+        line.item.partner?.defaultSharePct,
+      ),
+    ).negated();
+  }
+
+  const { transaction } = await applyStockMovementTx(tx, {
+    itemId: line.itemId,
+    type: "Returned",
+    quantity: quantity.toNumber(),
+    unitCost: unitCost?.toNumber(),
+    // Frozen at what it sold for, so the movement nets the sale's revenue back
+    // out without a join to the invoice.
+    salePrice: line.unitPrice,
+    partnerId,
+    partnerPayable,
+    referenceType: "invoice",
+    referenceId: invoiceId,
+    notes: `Returned on ${formatInvoiceNumber(invoiceId)}`,
+    performedBy,
+    allowDeletedItem: true,
+    // Confirmed at the counter, pre-filled from the lot the sale drew from. An
+    // untracked item ignores both.
+    lotNumber: line.returnLotNumber,
+    expiryDate: line.returnExpiryDate,
+  });
+
+  if (line.returnRestock === false) {
+    await applyStockMovementTx(tx, {
+      itemId: line.itemId,
+      type: "Damaged",
+      // Damaged carries a sign so that voiding this document can undo it, which
+      // means the write-off has to state its own direction: negative takes the
+      // goods straight back off the shelf they were just put on.
+      quantity: quantity.negated().toNumber(),
+      unitCost: unitCost?.toNumber(),
+      referenceType: "invoice",
+      referenceId: invoiceId,
+      notes: `Written off from the return on ${formatInvoiceNumber(invoiceId)}`,
+      performedBy,
+      allowDeletedItem: true,
+      reverseOf: transaction.transactionId,
+    });
+  }
+}
+
 export async function issueInvoice(
   invoiceId: number,
   performedBy: number | null,
@@ -525,12 +702,30 @@ export async function issueInvoice(
         );
       }
 
+      // What each return line's original sale actually cost, so giving it back
+      // takes the same figure off COGS that the sale put on. Resolved in one
+      // pass because return lines on one invoice can point at several different
+      // sales.
+      const origins = await originSoldMovements(tx, invoice.lineItems);
+
       for (const line of invoice.lineItems) {
         if (line.itemId == null) continue;
         // Stock is tracked to 2 decimals, so fractional sell quantities
         // (e.g. 0.5 vial, 2.5 ml) decrement stock as-is.
         const qty = line.quantity.toNumber();
         const item = line.item;
+
+        // A negative line is a return: the same document that sells can also
+        // take something back, which is how an exchange happens at the counter.
+        if (qty < 0) {
+          await applyReturnLineTx(tx, {
+            invoiceId,
+            line,
+            origin: origins.get(line.lineItemId),
+            performedBy,
+          });
+          continue;
+        }
 
         // Consigned lines must have a recorded cost: the payout is the partner's
         // cost back plus a share of the profit, so a null lastCost would owe them
@@ -583,14 +778,29 @@ export async function issueInvoice(
 
       await recomputeInvoiceTotals(tx, invoiceId);
 
+      // Re-read the total rather than using the copy loaded before the
+      // recompute. That copy was stale even before returns existed, and it is
+      // now dangerous: a document whose returns outweigh its sales has a
+      // NEGATIVE total, so a stale figure moves the account by the wrong amount
+      // and, on a pure return, in the wrong direction.
+      const { total } = await tx.invoice.findUniqueOrThrow({
+        where: { invoiceId },
+        select: { total: true },
+      });
+
       // Raise what the client owes. Without this the account balance only ever
       // fell (payments decrement it), so an unpaid invoice never showed as due
       // and paying one pushed the client into phantom credit. A walk-in has no
       // account for it to land on.
+      //
+      // A negative total decrements instead, which is the whole money side of a
+      // return: it takes the debt down, and takes it below zero into credit when
+      // the customer had already settled. Positive means owed, negative means in
+      // credit, throughout.
       if (invoice.clientId != null) {
         await tx.client.update({
           where: { clientId: invoice.clientId },
-          data: { accountBalance: { increment: invoice.total } },
+          data: { accountBalance: { increment: total } },
         });
       }
 
@@ -620,8 +830,8 @@ export async function issueInvoice(
 }
 
 // Void an invoice. Blocked once any payment exists (handle a refund first). If
-// the invoice was already issued, the sold stock is returned via reversing
-// 'Adjusted' movements so inventory stays honest.
+// the invoice was already issued, the sold stock comes back as 'Returned'
+// movements so inventory stays honest.
 export async function voidInvoice(
   invoiceId: number,
   performedBy: number | null,
@@ -641,59 +851,60 @@ export async function voidInvoice(
 
     // Only issued invoices have moved stock; drafts never did.
     if (invoice.status !== "Draft") {
-      // Consignment: pull the frozen partner payable from the original Sold
-      // movements so the reversal negates it (cancelling what was owed). Queued
-      // per item so duplicate item lines each reverse their own accrual.
-      const soldMoves = await tx.inventoryTransaction.findMany({
-        where: {
-          referenceType: "invoice",
-          referenceId: invoiceId,
-          type: "Sold",
-        },
+      // Reverse the MOVEMENTS this invoice wrote, not its lines. Lines had to be
+      // paired back to movements by item and ordinal, which held only while one
+      // line meant exactly one movement. It no longer does: a return line that
+      // came back damaged writes two (Returned, then Damaged), and an exchange
+      // writes them in both directions on one document. Reading the movements
+      // back makes the reversal exact by construction, and drops the pairing.
+      const written = await tx.inventoryTransaction.findMany({
+        where: { referenceType: "invoice", referenceId: invoiceId },
         orderBy: { transactionId: "asc" },
         select: {
           transactionId: true,
           itemId: true,
-          partnerId: true,
-          partnerPayable: true,
+          type: true,
+          quantity: true,
           unitCost: true,
           salePrice: true,
+          partnerId: true,
+          partnerPayable: true,
         },
       });
-      const soldByItem = new Map<number, typeof soldMoves>();
-      for (const m of soldMoves) {
-        const queue = soldByItem.get(m.itemId) ?? [];
-        queue.push(m);
-        soldByItem.set(m.itemId, queue);
-      }
 
-      for (const line of invoice.lineItems) {
-        if (line.itemId == null) continue;
-        const qty = line.quantity.toNumber();
-        const sold = soldByItem.get(line.itemId)?.shift();
+      for (const m of written) {
+        // A sale is undone by the goods coming back. Everything else this
+        // invoice can write is already a signed type and undoes itself, which is
+        // exactly why those types carry a sign.
+        const type =
+          m.type === "Sold" ? "Returned" : (m.type as InventoryTxType);
+        if (!SIGNED_TX_TYPES.includes(type)) {
+          throw new ApiError(
+            409,
+            `This invoice wrote a ${m.type} movement, which cannot be reversed automatically.`,
+          );
+        }
         await applyStockMovementTx(tx, {
-          itemId: line.itemId,
-          // Adjusted takes the sign as given, so a positive quantity puts the
-          // stock back.
-          type: "Adjusted",
-          quantity: qty,
-          // Carry the frozen cost and sale price from the original Sold
-          // movement (positive quantity here) so analytics can net this sale's
-          // COGS and revenue back out, mirroring how the negated
-          // partnerPayable cancels the accrual.
-          unitCost: sold?.unitCost?.toNumber(),
-          salePrice: sold?.salePrice,
-          partnerId: sold?.partnerId,
-          partnerPayable: sold?.partnerPayable?.negated(),
+          itemId: m.itemId,
+          type,
+          // The stored quantity is already signed, so its negation is the exact
+          // opposite movement whichever way the original went.
+          quantity: m.quantity.negated().toNumber(),
+          // Carry the frozen cost and sale price so analytics nets this sale's
+          // COGS and revenue back out, and negate the consignment accrual so
+          // what the partner was owed is cancelled.
+          unitCost: m.unitCost?.toNumber(),
+          salePrice: m.salePrice,
+          partnerId: m.partnerId,
+          partnerPayable: m.partnerPayable?.negated(),
           referenceType: "invoice",
           referenceId: invoiceId,
-          notes: `Restock from voided ${formatInvoiceNumber(invoiceId)}`,
+          notes: `Reversed by voiding ${formatInvoiceNumber(invoiceId)}`,
           performedBy,
           allowDeletedItem: true,
-          // Put a perishable line back into the exact lots the sale drew from,
-          // rather than creating a fresh undated batch that would then be
-          // picked ahead of stock with a known expiry.
-          reverseOf: sold?.transactionId,
+          // Undo it batch for batch, so a perishable goes back to the exact lot
+          // it left rather than opening an undated one that then picks first.
+          reverseOf: m.transactionId,
         });
       }
     }

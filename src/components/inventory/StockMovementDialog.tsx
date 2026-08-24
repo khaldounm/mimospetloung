@@ -13,7 +13,11 @@ import {
   TextField,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
-import { INVENTORY_TX_TYPES, type InventoryTxType } from "@/types/enums";
+import {
+  MANUAL_TX_TYPES,
+  SIGNED_TX_TYPES,
+  type InventoryTxType,
+} from "@/types/enums";
 
 interface Props {
   open: boolean;
@@ -28,8 +32,13 @@ const HELP: Record<InventoryTxType, string> = {
   Received: "Adds stock. Unit cost updates the item's last cost.",
   Used: "Removes stock (e.g. used in a procedure).",
   Sold: "Removes stock sold to a client.",
-  Adjusted: "Correction. Use a negative number to reduce stock.",
-  Expired: "Removes stock that has expired or was discarded.",
+  Adjusted: "Correction after a count. Use a negative number to reduce stock.",
+  Expired: "Removes stock that has expired or is no longer sellable.",
+  Damaged: "Raised from a return that came back unfit to sell.",
+  Returned:
+    "Raised from the invoice a customer is bringing goods back against.",
+  ReturnedToSupplier:
+    "Raised from the purchase order the goods are going back on.",
 };
 
 export default function StockMovementDialog({ open, onClose, ...rest }: Props) {
@@ -61,7 +70,9 @@ function StockMovementForm({
   const [saving, setSaving] = useState(false);
 
   const isReceived = type === "Received";
-  const isAdjusted = type === "Adjusted";
+  // Only a signed type may be given a negative quantity; the rest take a
+  // magnitude and get their direction from the type.
+  const isSigned = SIGNED_TX_TYPES.includes(type);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -108,7 +119,7 @@ function StockMovementForm({
             helperText={HELP[type]}
             fullWidth
           >
-            {INVENTORY_TX_TYPES.map((t) => (
+            {MANUAL_TX_TYPES.map((t) => (
               <MenuItem key={t} value={t}>
                 {t}
               </MenuItem>
@@ -120,7 +131,7 @@ function StockMovementForm({
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             slotProps={{
-              htmlInput: isAdjusted
+              htmlInput: isSigned
                 ? { step: "0.01" }
                 : { min: 0.01, step: "0.01" },
             }}

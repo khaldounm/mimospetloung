@@ -255,17 +255,19 @@ async function getProfitSection(
       orderBy: { _sum: { amount: "desc" } },
       take: 8,
     }),
-    // Sold movements carry the frozen unit cost; COGS = |qty| * unitCost. A
-    // void writes an Adjusted movement (referenceType "invoice") carrying the
-    // same frozen cost with a positive quantity, so the signed sum below nets
-    // a voided sale back out. Consigned items (partnerId set) are excluded here
-    // and counted as partner payouts instead, so their cost is not double-counted.
+    // Sold movements carry the frozen unit cost; COGS = |qty| * unitCost. Giving
+    // a sale back writes a Returned movement (referenceType "invoice") carrying
+    // the same frozen cost at the opposite sign, so the signed sum below nets it
+    // out. That covers both a voided invoice and a counter return, because they
+    // are the same event to the ledger and now share one type. Consigned items
+    // (partnerId set) are excluded here and counted as partner payouts instead,
+    // so their cost is not double-counted.
     prisma.inventoryTransaction.findMany({
       where: {
         partnerId: null,
         unitCost: { not: null },
         performedAt: { gte: from, lt: toExclusive },
-        OR: [{ type: "Sold" }, { type: "Adjusted", referenceType: "invoice" }],
+        OR: [{ type: "Sold" }, { type: "Returned", referenceType: "invoice" }],
       },
       select: { performedAt: true, quantity: true, unitCost: true },
     }),

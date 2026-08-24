@@ -23,14 +23,58 @@ export const BOOKING_STATUSES = [
 ] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 
+// Every type states what happened, and its direction follows from that. Only
+// Adjusted carries a sign, because only a count correction can go either way:
+// the shelf says 7, the system says 9, and the fix is -2. Everything else is a
+// magnitude, so no caller has to remember which way to write the number.
 export const INVENTORY_TX_TYPES = [
   "Received",
   "Used",
   "Sold",
   "Adjusted",
   "Expired",
+  // A customer brought goods back. Also what a voided invoice writes, because
+  // the stock effect is identical and calling it an adjustment made a reversal
+  // indistinguishable from someone correcting a miscount.
+  "Returned",
+  // Goods went back to the supplier.
+  "ReturnedToSupplier",
+  // Written off as unsellable, including a return that came back damaged.
+  "Damaged",
 ] as const;
 export type InventoryTxType = (typeof INVENTORY_TX_TYPES)[number];
+
+// The two types whose quantity carries a sign. Everything else is a magnitude
+// whose direction the type already fixes.
+//
+// Adjusted is signed because a count correction is the only movement that can
+// genuinely go either way. Returned and Damaged are signed because a document
+// that wrote them can be voided, and a void has to undo each movement exactly:
+// an invoice can hold lines in both directions at once (the customer brings the
+// 20kg bag back and takes the 15kg one), and a returned item that was written
+// off moved stock twice. Forcing a magnitude on these would push half of a
+// cancelled exchange the wrong way and quietly corrupt stock.
+export const SIGNED_TX_TYPES: readonly InventoryTxType[] = [
+  "Adjusted",
+  "Returned",
+  "Damaged",
+];
+
+// What the manual stock dialog offers.
+//
+// Returned, ReturnedToSupplier and Damaged are deliberately absent. The first
+// two carry a document link and a money side, and writing one as a bare stock
+// poke would move the shelf without touching the invoice or the supplier
+// balance. Damaged is absent for a second reason: it is signed, so a magnitude
+// typed into a plain quantity box would ADD the write-off instead of taking it
+// off. A write-off with no document behind it is what Expired is for.
+export const MANUAL_TX_TYPES: readonly InventoryTxType[] = [
+  "Received",
+  "Used",
+  "Sold",
+  "Adjusted",
+  "Expired",
+];
 
 // Lifecycle of a reorder sheet. Draft is the "future order" the low-stock
 // basket fills; Placed means sent to the supplier; Partial means some of it has

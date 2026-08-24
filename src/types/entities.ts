@@ -189,6 +189,39 @@ export interface InvoiceLineItemDTO {
   looseUnit: string | null;
 }
 
+// One line of an issued invoice, seen from the counter that is about to take
+// some of it back. quantityReturnable is what is left after everything already
+// claimed against this line, so the same tin cannot come back twice.
+export interface ReturnableLineDTO {
+  lineItemId: number;
+  description: string;
+  itemId: number | null;
+  serviceId: number | null;
+  unitPrice: string;
+  quantitySold: string;
+  quantityReturned: string;
+  quantityReturnable: string;
+  // Set when the sale was loose, so the dialog can label the quantity in the
+  // units the customer bought in.
+  looseUnit: string | null;
+  // Perishables have to go back into a dated lot. These are the lot the sale
+  // drew from, offered as the default so taking a return is a confirmation
+  // rather than a lookup.
+  tracksExpiry: boolean;
+  suggestedLotNumber: string | null;
+  suggestedExpiryDate: string | null;
+}
+
+export interface ReturnableInvoiceDTO {
+  invoiceId: number;
+  number: string;
+  clientId: number | null;
+  clientName: string;
+  status: InvoiceStatus;
+  issuedAt: string | null;
+  lines: ReturnableLineDTO[];
+}
+
 export interface PaymentDTO {
   paymentId: number;
   invoiceId: number | null;

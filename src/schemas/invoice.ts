@@ -169,6 +169,26 @@ export const paymentCreateSchema = z.object({
   notes: optionalString(5000),
 });
 
+// One line coming back. The quantity is always a positive magnitude: the sign
+// that makes it a return is put on by the server, so a caller cannot get it
+// backwards and credit a customer for buying something.
+export const returnEntrySchema = z.object({
+  sourceLineItemId: z.coerce.number().int().positive(),
+  quantity: z.coerce.number().positive().max(999_999),
+  // No default. Guessing this either invents stock the clinic cannot sell or
+  // bins stock it can, so whoever takes the return has to say which it is.
+  restock: z.boolean(),
+  lotNumber: optionalString(100),
+  // Required by the server for an item tracked by expiry, where it decides which
+  // lot the goods rejoin.
+  expiryDate: optionalDate,
+});
+
+export const returnCreateSchema = z.object({
+  entries: z.array(returnEntrySchema).min(1, "Choose at least one line"),
+});
+
+export type ReturnCreateInput = z.infer<typeof returnCreateSchema>;
 export type InvoiceCreateInput = z.infer<typeof invoiceCreateSchema>;
 export type InvoiceUpdateInput = z.infer<typeof invoiceUpdateSchema>;
 export type InvoiceTransitionInput = z.infer<typeof invoiceTransitionSchema>;

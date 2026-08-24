@@ -90,11 +90,12 @@ type PartnerStats = {
 };
 
 // Movements that represent a sale or its reversal. A Sold line carries a negative
-// quantity, and voiding it writes an Adjusted line with the same frozen cost and
-// sale price at positive quantity, so summing `-quantity * price` across both
-// nets a voided sale back to zero without special-casing it.
+// quantity, and giving it back writes a Returned line with the same frozen cost
+// and sale price at the opposite sign, so summing `-quantity * price` across both
+// nets it to zero without special-casing it. One filter covers a voided invoice
+// and a counter return alike: to a partner's balance they are the same event.
 const SALE_MOVEMENT_FILTER: Prisma.InventoryTransactionWhereInput = {
-  OR: [{ type: "Sold" }, { type: "Adjusted", referenceType: "invoice" }],
+  OR: [{ type: "Sold" }, { type: "Returned", referenceType: "invoice" }],
 };
 
 // Turn a partner's sale movements into the four raw sums.

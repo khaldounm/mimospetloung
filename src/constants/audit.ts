@@ -9,6 +9,9 @@ export const AUDIT_ACTIONS = [
   "stock",
   "send",
   "cancel",
+  // Goods given back against an earlier sale. Distinct from "void", which
+  // cancels a document, and from "update", which is someone editing a draft.
+  "return",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -82,4 +85,5 @@ export const AUDIT_ACTION_COLOR: Record<
   stock: "info",
   send: "info",
   cancel: "warning",
+  return: "warning",
 };

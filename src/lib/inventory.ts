@@ -8,7 +8,7 @@ import type {
   InventoryItemDTO,
   InventoryTransactionDTO,
 } from "@/types/entities";
-import type { InventoryTxType } from "@/types/enums";
+import { SIGNED_TX_TYPES, type InventoryTxType } from "@/types/enums";
 
 // Shape returned by inventory item queries.
 type ItemRow = {
@@ -152,12 +152,15 @@ export function toInventoryTransactionDTO(
 }
 
 // Convert the request's quantity into the signed value stored on the
-// transaction (and added to current_stock). Received adds, Used/Sold/Expired
-// subtract, Adjusted is already a signed correction.
+// transaction (and added to current_stock).
+//
+// Direction is a property of the type, so most callers send a magnitude and
+// never a sign. The two in SIGNED_TX_TYPES are the exceptions and say why they
+// are; everything that used to borrow Adjusted purely to get a sign now has a
+// type that states what it was.
 export function signedDelta(type: InventoryTxType, quantity: number): number {
-  if (type === "Received") return Math.abs(quantity);
-  if (type === "Adjusted") return quantity;
-  return -Math.abs(quantity);
+  if (SIGNED_TX_TYPES.includes(type)) return quantity;
+  return type === "Received" ? Math.abs(quantity) : -Math.abs(quantity);
 }
 
 // The DB CHECK (current_stock >= 0) rejects any movement that would oversell.
@@ -224,10 +227,12 @@ export interface StockMovementParams {
   lotNumber?: string | null;
   expiryDate?: Date | null;
   purchaseLineId?: number | null;
-  // Put stock back into the exact batches an earlier movement took it from,
-  // instead of opening a new one. Voiding an invoice uses this so a returned
-  // scoop goes back to the lot it came out of rather than becoming undated
-  // stock that then picks first.
+  // Exactly undo an earlier movement, batch for batch, instead of opening a new
+  // lot or picking FEFO. Voiding an invoice uses this so a returned scoop goes
+  // back to the lot it came out of rather than becoming undated stock that then
+  // picks first, and a written-off return uses it so the Damaged movement eats
+  // the very stock the Returned movement just put back. Ignored unless this
+  // movement is the exact opposite of that one.
   reverseOf?: number | null;
 }
 
@@ -276,6 +281,31 @@ async function applyBatchDelta(
     });
   };
 
+  // Undoing a specific movement puts the stock back exactly where that movement
+  // took it from, or takes back exactly what it added. Both directions matter: a
+  // return that comes back damaged is a Returned into a lot followed by a
+  // Damaged out of it, and if the write-off picked FEFO instead it would leave
+  // the returned goods sitting in one lot while eating another.
+  //
+  // Only an exact undo qualifies. A partial reversal cannot be split across the
+  // original's lots without guessing which one came back, so it falls through to
+  // the ordinary rules below.
+  if (params.reverseOf != null) {
+    const original = await tx.inventoryBatchMovement.findMany({
+      where: { transactionId: params.reverseOf },
+    });
+    const moved = original.reduce(
+      (sum, m) => sum.plus(m.quantity),
+      new Prisma.Decimal(0),
+    );
+    if (original.length > 0 && moved.negated().equals(delta)) {
+      for (const m of original) {
+        await allocate(m.batchId, m.quantity.negated());
+      }
+      return;
+    }
+  }
+
   if (delta.isNegative()) {
     let remaining = delta.abs();
     for (const row of await lockBatchesForPicking(tx, itemId)) {
@@ -293,20 +323,6 @@ async function applyBatchDelta(
       );
     }
     return;
-  }
-
-  // Putting stock back: return it to the batches it came from, so a voided sale
-  // restores the original lots rather than inventing an undated one.
-  if (params.reverseOf != null) {
-    const original = await tx.inventoryBatchMovement.findMany({
-      where: { transactionId: params.reverseOf },
-    });
-    if (original.length > 0) {
-      for (const m of original) {
-        await allocate(m.batchId, m.quantity.negated());
-      }
-      return;
-    }
   }
 
   // A real lot number identifies stock, so a repeat delivery of it joins the
@@ -359,8 +375,9 @@ export async function applyStockMovementTx(
   });
   if (!item) throw new ApiError(404, "Inventory item not found");
 
-  // Stock consumed in the clinic or written off leaves without a sale, so no
-  // cost gets frozen on it the way a Sold movement freezes one from the invoice.
+  // Stock consumed in the clinic or written off (expired, or a return that came
+  // back damaged) leaves without a sale, so no cost gets frozen on it the way a
+  // Sold movement freezes one from the invoice.
   // Default it from the item's latest purchase cost, so the value of what was
   // used or binned is on record rather than lost. The caller sends nothing, so
   // nobody has to type it.
@@ -370,7 +387,9 @@ export async function applyStockMovementTx(
   // twice. Analytics reports these separately for visibility.
   const unitCost =
     params.unitCost ??
-    (params.type === "Used" || params.type === "Expired"
+    (params.type === "Used" ||
+    params.type === "Expired" ||
+    params.type === "Damaged"
       ? (item.lastCost ?? undefined)
       : undefined);
 

@@ -36,6 +36,7 @@ import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
+import AssignmentReturnIcon from "@mui/icons-material/AssignmentReturn";
 import { apiRequest } from "@/utils/api-client";
 import { formatLineQuantity } from "@/utils/inventory";
 import {
@@ -56,6 +57,7 @@ import LineItemDialog, {
   type ServiceLineOption,
 } from "./LineItemDialog";
 import PaymentDialog from "./PaymentDialog";
+import ReturnDialog from "./ReturnDialog";
 import ScanBar from "./ScanBar";
 
 interface Props {
@@ -95,6 +97,7 @@ export default function InvoiceDetail({
   const [editLine, setEditLine] = useState<InvoiceLineItemDTO | null>(null);
   const [editInvoiceOpen, setEditInvoiceOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [returnOpen, setReturnOpen] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState(false);
   const [confirmVoid, setConfirmVoid] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -446,13 +449,26 @@ export default function InvoiceDetail({
           >
             <Typography variant="h6">Line items</Typography>
             {canWrite && isDraft && (
-              <Button
-                size="small"
-                startIcon={<AddIcon />}
-                onClick={() => setAddLineOpen(true)}
-              >
-                Add service or manual line
-              </Button>
+              <Stack direction="row" spacing={1}>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => setAddLineOpen(true)}
+                >
+                  Add service or manual line
+                </Button>
+                {/* A return goes on the same document as whatever the customer
+                    is taking instead, because that is one transaction at the
+                    counter. */}
+                <Button
+                  size="small"
+                  color="warning"
+                  startIcon={<AssignmentReturnIcon />}
+                  onClick={() => setReturnOpen(true)}
+                >
+                  Take a return
+                </Button>
+              </Stack>
             )}
           </Stack>
           {/* Scanning is the primary way lines get onto a draft; the dialog
@@ -489,7 +505,18 @@ export default function InvoiceDetail({
                   </TableRow>
                 ) : (
                   invoice.lineItems.map((l) => (
-                    <TableRow key={l.lineItemId} hover>
+                    <TableRow
+                      key={l.lineItemId}
+                      hover
+                      // A return reads as an ordinary line with a minus in front
+                      // of it, which is easy to skim past on a busy counter, so
+                      // the row says what it is.
+                      sx={
+                        Number(l.quantity) < 0
+                          ? { "& td": { color: "warning.dark" } }
+                          : undefined
+                      }
+                    >
                       <TableCell>{l.description}</TableCell>
                       <TableCell align="right">
                         {formatLineQuantity(l)}
@@ -659,6 +686,13 @@ export default function InvoiceDetail({
         onClose={() => setEditInvoiceOpen(false)}
         onSaved={applyInvoice}
       />
+      <ReturnDialog
+        open={returnOpen}
+        invoiceId={invoice.invoiceId}
+        clientId={invoice.clientId}
+        onClose={() => setReturnOpen(false)}
+        onSaved={applyInvoice}
+      />
       <PaymentDialog
         open={paymentOpen}
         invoiceId={invoice.invoiceId}
@@ -672,8 +706,9 @@ export default function InvoiceDetail({
         <DialogTitle>Issue this invoice?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Issuing freezes the totals and line items. Any inventory lines will
-            decrement stock. This cannot be undone except by voiding.
+            Issuing freezes the totals and line items. Items sold come off the
+            shelf and anything being returned goes back on it, except lines
+            marked write-off. This cannot be undone except by voiding.
           </DialogContentText>
           {onVetHold && (
             <Alert severity="warning" sx={{ mt: 2 }}>
