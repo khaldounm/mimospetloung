@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import ThemeRegistry from "@/components/ui/ThemeRegistry";
 import { COLOR_MODE_COOKIE } from "@/constants/theme";
 
@@ -45,6 +47,9 @@ export default async function RootLayout({
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>
         <ThemeRegistry initialMode={initialMode}>{children}</ThemeRegistry>
+        {/* Both are no-ops off Vercel, so local development is unaffected. */}
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );
