@@ -6,14 +6,27 @@ import {
   defaultRange,
   pickGranularity,
   rangeBounds,
+  priorRange,
   type Bucket,
   type Granularity,
 } from "@/utils/date-range";
+import {
+  AD_HOC_LABEL,
+  CATEGORY_GROUPS,
+  GROOMING_SERVICE_CATEGORY,
+  NON_TRADE_SERVICE_CATEGORIES,
+  UNCATEGORISED_LABEL,
+  type CategoryGroupKey,
+} from "@/constants/analytics";
 import type { AnalyticsSection } from "@/schemas/analytics";
 import type {
   AnalyticsDTO,
   AnalyticsRange,
   BookingsAnalytics,
+  CategoriesAnalytics,
+  CategoryComparison,
+  CategoryTrendGroup,
+  CategoryTrendRow,
   ClientsAnalytics,
   InventoryAnalytics,
   NamedCount,
@@ -448,6 +461,153 @@ async function getBookingsSection(
   };
 }
 
+// ---- category performance (period over period) ----
+
+// Billed revenue per category for one window, as group -> category -> total.
+//
+// Billed rather than collected, on purpose: a payment settles an invoice, not a
+// line, so cash cannot honestly be attributed to a category. Returns carry a
+// negative lineTotal (see InvoiceLineItem.returnedFromLineId), so a refunded
+// sale subtracts itself from its own category with no special handling here.
+async function billedByCategory(
+  range: AnalyticsRange,
+): Promise<Map<CategoryGroupKey, Map<string, number>>> {
+  const { from, toExclusive } = rangeBounds(range);
+
+  const lines = await prisma.invoiceLineItem.findMany({
+    where: {
+      invoice: {
+        status: { in: REVENUE_STATUSES },
+        issuedAt: { gte: from, lt: toExclusive },
+      },
+    },
+    select: {
+      lineTotal: true,
+      item: { select: { category: true } },
+      service: { select: { category: true } },
+    },
+  });
+
+  const out = new Map<CategoryGroupKey, Map<string, number>>(
+    CATEGORY_GROUPS.map((g) => [g.key, new Map<string, number>()]),
+  );
+  for (const line of lines) {
+    const [group, label] = classifyLine(line);
+    const bucket = out.get(group)!;
+    bucket.set(label, (bucket.get(label) ?? 0) + line.lineTotal.toNumber());
+  }
+  return out;
+}
+
+// Which business line a sold line belongs to, and under what name. A service
+// line takes the service's category, split so grooming reads as its own trade
+// rather than as veterinary work; a stock line takes the item's category.
+function classifyLine(line: {
+  item: { category: string | null } | null;
+  service: { category: string | null } | null;
+}): [CategoryGroupKey, string] {
+  if (line.service) {
+    const category = line.service.category ?? UNCATEGORISED_LABEL;
+    if (NON_TRADE_SERVICE_CATEGORIES.has(category)) return ["other", category];
+    return [
+      category === GROOMING_SERVICE_CATEGORY ? "grooming" : "vet",
+      category,
+    ];
+  }
+  if (line.item) return ["products", line.item.category ?? UNCATEGORISED_LABEL];
+  // Neither: a free-text line typed at the counter, with no category to take.
+  return ["other", AD_HOC_LABEL];
+}
+
+function sumValues(map: Map<string, number>): number {
+  let total = 0;
+  for (const v of map.values()) total += v;
+  return total;
+}
+
+function toTrendRow(
+  label: string,
+  current: number,
+  prior: number,
+): CategoryTrendRow {
+  const delta = current - prior;
+  return {
+    label,
+    current: round2(current),
+    prior: round2(prior),
+    delta: round2(delta),
+    // Only a positive base gives a percentage any meaning. A window that billed
+    // nothing, or that netted negative on returns, gets null and reads as "new"
+    // rather than as a number the reader would have to distrust.
+    percent: prior > 0 ? round2((delta / prior) * 100) : null,
+  };
+}
+
+// Pair one window's totals against another's. Categories are unioned across
+// both, so a line that sold last year and not this year still appears, showing
+// the drop instead of quietly vanishing from the report.
+function compareCategories(
+  priorWindow: AnalyticsRange,
+  current: Map<CategoryGroupKey, Map<string, number>>,
+  prior: Map<CategoryGroupKey, Map<string, number>>,
+): CategoryComparison {
+  let currentTotal = 0;
+  let priorTotal = 0;
+
+  const groups: CategoryTrendGroup[] = [];
+  for (const group of CATEGORY_GROUPS) {
+    const cur = current.get(group.key) ?? new Map<string, number>();
+    const pri = prior.get(group.key) ?? new Map<string, number>();
+
+    const rows = [...new Set([...cur.keys(), ...pri.keys()])]
+      .map((label) =>
+        toTrendRow(label, cur.get(label) ?? 0, pri.get(label) ?? 0),
+      )
+      // A category that billed nothing in either window is noise, not a zero
+      // worth a row.
+      .filter((r) => r.current !== 0 || r.prior !== 0)
+      .sort((a, b) => b.current - a.current);
+    if (rows.length === 0) continue;
+
+    const groupCurrent = sumValues(cur);
+    const groupPrior = sumValues(pri);
+    currentTotal += groupCurrent;
+    priorTotal += groupPrior;
+    groups.push({
+      key: group.key,
+      ...toTrendRow(group.label, groupCurrent, groupPrior),
+      rows,
+    });
+  }
+
+  return {
+    priorRange: priorWindow,
+    total: toTrendRow("All billed revenue", currentTotal, priorTotal),
+    groups,
+  };
+}
+
+// Month-on-month and year-on-year in one payload. Both comparisons share the
+// current window, so they can never disagree about it, and the UI can flip
+// between them without another round trip.
+async function getCategoriesSection(
+  range: AnalyticsRange,
+): Promise<CategoriesAnalytics> {
+  const momWindow = priorRange(range, "mom");
+  const yoyWindow = priorRange(range, "yoy");
+
+  const [current, mom, yoy] = await Promise.all([
+    billedByCategory(range),
+    billedByCategory(momWindow),
+    billedByCategory(yoyWindow),
+  ]);
+
+  return {
+    mom: compareCategories(momWindow, current, mom),
+    yoy: compareCategories(yoyWindow, current, yoy),
+  };
+}
+
 // ---- snapshot sections (not time-boxed) ----
 
 async function getClientsSnapshot(): Promise<ClientsAnalytics> {
@@ -790,7 +950,11 @@ export function getAnalyticsSection(
   section: AnalyticsSection,
   range: AnalyticsRange,
 ): Promise<
-  RevenueAnalytics | ProfitAnalytics | PurchasesAnalytics | BookingsAnalytics
+  | RevenueAnalytics
+  | ProfitAnalytics
+  | PurchasesAnalytics
+  | BookingsAnalytics
+  | CategoriesAnalytics
 > {
   switch (section) {
     case "revenue":
@@ -801,6 +965,8 @@ export function getAnalyticsSection(
       return getPurchasesSection(range);
     case "bookings":
       return getBookingsSection(range);
+    case "categories":
+      return getCategoriesSection(range);
   }
 }
 
@@ -812,10 +978,11 @@ export async function getAnalytics(
 ): Promise<AnalyticsDTO> {
   const range = defaultRange();
 
-  const [revenue, bookings, clients, inventory, profit, purchases] =
+  const [revenue, bookings, categories, clients, inventory, profit, purchases] =
     await Promise.all([
       getRevenueSection(range),
       getBookingsSection(range),
+      getCategoriesSection(range),
       getClientsSnapshot(),
       getInventorySnapshot(),
       options.includeProfit ? getProfitSection(range) : null,
@@ -829,6 +996,7 @@ export async function getAnalytics(
     clients,
     inventory,
     bookings,
+    categories,
     profit,
     purchases,
   };

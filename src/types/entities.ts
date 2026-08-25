@@ -519,6 +519,43 @@ export interface PurchasesAnalytics {
   bySupplier: NamedValue[]; // top suppliers by amount billed within the range
 }
 
+// ── Category performance (period over period) ────────────────
+//
+// Billed, never collected. A payment settles an invoice, not a line, so there
+// is no honest way to attribute cash to a category; these figures are line
+// totals on invoices issued within the window. That is why they will not tie to
+// the Collected KPI in the revenue section.
+export interface CategoryTrendRow {
+  label: string;
+  current: number; // billed within the selected range
+  prior: number; // billed within the comparison window
+  delta: number; // current - prior
+  // Growth as a percentage, or null when the prior window billed nothing (or
+  // net-negative) and there is no base to grow from. Null is not zero: it means
+  // there is no meaningful percentage, and the UI says so instead of printing
+  // one.
+  percent: number | null;
+}
+
+// A business line (products, vet, grooming) with its constituent categories.
+export interface CategoryTrendGroup extends CategoryTrendRow {
+  key: string;
+  rows: CategoryTrendRow[];
+}
+
+export interface CategoryComparison {
+  priorRange: AnalyticsRange; // the window `prior` was measured over
+  total: CategoryTrendRow; // every group combined
+  groups: CategoryTrendGroup[];
+}
+
+// Both comparisons are computed together so the toggle needs no refetch and the
+// two views can never disagree about the current period.
+export interface CategoriesAnalytics {
+  mom: CategoryComparison; // against the same dates one month earlier
+  yoy: CategoryComparison; // against the same dates one year earlier
+}
+
 export interface AnalyticsDTO {
   generatedAt: string;
   // The range the boxable sections were initially computed for (the default);
@@ -528,6 +565,7 @@ export interface AnalyticsDTO {
   clients: ClientsAnalytics;
   inventory: InventoryAnalytics;
   bookings: BookingsAnalytics;
+  categories: CategoriesAnalytics;
   // Only populated for users allowed to see costs (costs:read). Net-profit
   // figures combine revenue with running costs, which are admin-only.
   profit?: ProfitAnalytics | null;

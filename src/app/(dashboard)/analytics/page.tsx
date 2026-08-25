@@ -29,9 +29,9 @@ export default async function AnalyticsPage() {
         <AnalyticsGuide />
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Expand a section to explore it. Profitability, purchases, revenue and
-        bookings each have their own date range with quick presets; clients and
-        inventory show the current snapshot.
+        Expand a section to explore it. Profitability, purchases, revenue,
+        category performance and bookings each have their own date range with
+        quick presets; clients and inventory show the current snapshot.
       </Typography>
       <AnalyticsDashboard data={data} />
     </Box>

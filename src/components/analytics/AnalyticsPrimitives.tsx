@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Paper, Typography } from "@mui/material";
+import { Box, Chip, Paper, Typography } from "@mui/material";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { formatMoney } from "@/utils/format";
 import type { NamedCount, NamedValue } from "@/types/entities";
@@ -131,4 +131,42 @@ export function toPieData(items: NamedCount[]) {
     value: it.count,
     label: it.label,
   }));
+}
+
+// A period-over-period movement, coloured by direction. A null percent means
+// the prior window gave no base to grow from, and the two ways that happens read
+// differently: nothing billed at all is genuinely "new", whereas a window that
+// netted negative (a discount line, or returns outrunning sales) has a base that
+// a percentage simply cannot describe. Calling the second one "new" would be a
+// lie, so it gets "n/a".
+export function DeltaChip({
+  delta,
+  prior,
+  percent,
+}: {
+  delta: number;
+  prior: number;
+  percent: number | null;
+}) {
+  if (percent === null) {
+    if (delta === 0) return <Chip size="small" variant="outlined" label="-" />;
+    const isNew = prior === 0;
+    return (
+      <Chip
+        size="small"
+        variant="outlined"
+        label={isNew ? "New" : "n/a"}
+        color={isNew && delta > 0 ? "success" : "default"}
+      />
+    );
+  }
+  const up = percent > 0;
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      color={percent === 0 ? "default" : up ? "success" : "error"}
+      label={`${up ? "+" : ""}${percent}%`}
+    />
+  );
 }

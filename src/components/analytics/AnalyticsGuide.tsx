@@ -164,6 +164,29 @@ export default function AnalyticsGuide() {
               </Term>
             </Section>
 
+            <Section title="Category performance">
+              <Term label="Month on month / Year on year">
+                The same dates one month, or one year, earlier. A part-finished
+                month compares against the same days of the previous one, so Aug
+                1-25 reads against Jul 1-25 rather than a whole month.
+              </Term>
+              <Term label="Billed, not collected">
+                A payment settles a whole invoice, not a single line, so cash
+                cannot be split by category. These figures are what you billed,
+                and will not match Collected in Revenue.
+              </Term>
+              <Term label="Products / Vet services / Grooming services">
+                Stock lines take the product category; service lines take the
+                service category, with grooming shown as its own trade.
+                Discounts and unmatched legacy lines sit under Other.
+              </Term>
+              <Term label="New / n/a">
+                New means the earlier period billed nothing, so there is no
+                percentage to show. n/a means it netted negative (a discount
+                line), which a percentage cannot describe.
+              </Term>
+            </Section>
+
             <Section title="Clients & patients">
               <Term label="Active clients">
                 Clients on file who are not archived.

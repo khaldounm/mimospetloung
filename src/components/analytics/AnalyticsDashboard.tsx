@@ -5,6 +5,7 @@ import { formatDateTime } from "@/utils/format";
 import ProfitabilitySection from "./ProfitabilitySection";
 import PurchasesSection from "./PurchasesSection";
 import RevenueSection from "./RevenueSection";
+import CategoriesSection from "./CategoriesSection";
 import ClientsSection from "./ClientsSection";
 import InventorySection from "./InventorySection";
 import BookingsSection from "./BookingsSection";
@@ -15,6 +16,11 @@ import type { AnalyticsDTO } from "@/types/entities";
 // calendar and re-query on demand; the snapshot sections (Clients, Inventory)
 // show current state. Profitability needs costs:read, Purchases needs
 // orders:read.
+//
+// Category performance follows Revenue because it splits the same billed figure
+// by business line and compares it against an earlier window. It reports billed
+// revenue, never collected: cash settles an invoice, not a line, so it cannot be
+// attributed to a category.
 //
 // Purchases sits directly after Profitability so the two are read together and
 // never confused: profit recognises stock cost when it sells, purchases records
@@ -35,6 +41,10 @@ export default function AnalyticsDashboard({ data }: { data: AnalyticsDTO }) {
         />
       )}
       <RevenueSection initial={data.revenue} initialRange={data.defaultRange} />
+      <CategoriesSection
+        initial={data.categories}
+        initialRange={data.defaultRange}
+      />
       <ClientsSection data={data.clients} />
       <InventorySection data={data.inventory} />
       <BookingsSection

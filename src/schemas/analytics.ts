@@ -7,6 +7,7 @@ export const ANALYTICS_SECTIONS = [
   "profit",
   "purchases",
   "bookings",
+  "categories",
 ] as const;
 export type AnalyticsSection = (typeof ANALYTICS_SECTIONS)[number];
 

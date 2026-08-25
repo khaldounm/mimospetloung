@@ -233,3 +233,41 @@ export function rangeSummary(
   const preset = id ? DATE_PRESETS.find((p) => p.id === id) : null;
   return preset ? preset.label : formatRangeLabel(range);
 }
+
+// ---- period-over-period ----
+
+export type ComparisonMode = "mom" | "yoy";
+
+// Same day number, `months` calendar months away, clamped to the target month's
+// last day so Mar 31 lands on Feb 28 rather than spilling into March.
+function shiftLocalDate(value: string, months: number): string {
+  const d = parseLocalDate(value);
+  const target = new Date(d.getFullYear(), d.getMonth() + months, 1);
+  const lastDay = new Date(
+    target.getFullYear(),
+    target.getMonth() + 1,
+    0,
+  ).getDate();
+  return formatLocalDate(
+    new Date(
+      target.getFullYear(),
+      target.getMonth(),
+      Math.min(d.getDate(), lastDay),
+    ),
+  );
+}
+
+// The equivalent window one month (MoM) or one year (YoY) earlier. Shifting by
+// calendar month rather than by a fixed day count is what makes a part-finished
+// month compare like for like: Aug 1-25 reads against Jul 1-25, not against a
+// 25-day window that happens to start mid-July.
+export function priorRange(
+  range: AnalyticsRange,
+  mode: ComparisonMode,
+): AnalyticsRange {
+  const months = mode === "mom" ? -1 : -12;
+  return {
+    from: shiftLocalDate(range.from, months),
+    to: shiftLocalDate(range.to, months),
+  };
+}
