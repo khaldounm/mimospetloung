@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { optionalString, optionalDate } from "./common";
+import { DISCOUNT_UNITS, DEFAULT_DISCOUNT_UNIT } from "@/constants/order";
 
 // Order quantity: always a positive magnitude (a line for zero is a line that
 // should not exist, so it is removed instead).
@@ -119,10 +120,24 @@ export const receiveOrderSchema = z.object({
           (v) => (v === "" || v === null || v === undefined ? 0 : v),
           z.coerce.number().nonnegative().max(1_000_000),
         ),
-        // What the supplier actually invoiced for this delivery. The order was
-        // raised from an estimate, so this is the first point the real figure
-        // is known. Omitted leaves the line's existing cost standing.
+        // What the supplier actually invoiced for this delivery, before any
+        // discount. The order was raised from an estimate, so this is the first
+        // point the real figure is known. Omitted leaves the line's existing
+        // cost standing.
         unitCost: optionalCost,
+        // A trade discount off that cost, as a flat amount or a percentage of
+        // it. Reduces the unit cost, so the net is what books against stock and
+        // against the supplier. A percentage is capped at 100 here; an amount
+        // larger than the cost is caught per line below, where the cost is in
+        // scope.
+        discount: z.preprocess(
+          (v) => (v === "" || v === null || v === undefined ? 0 : v),
+          z.coerce
+            .number({ message: "Discount must be a number" })
+            .nonnegative("Discount cannot be negative")
+            .max(99_999_999.99),
+        ),
+        discountUnit: z.enum(DISCOUNT_UNITS).default(DEFAULT_DISCOUNT_UNIT),
         // When the delivery note is written in kilos rather than bags. The cost
         // above is then per kilo and converts with it.
         looseQty: optionalLooseQty,
@@ -132,7 +147,33 @@ export const receiveOrderSchema = z.object({
         expiryDate: optionalDate,
       }),
     )
-    .min(1, "Nothing to receive"),
+    .min(1, "Nothing to receive")
+    // A discount that swallows the whole cost means someone mistyped a rate as
+    // an amount (or the other way round). Refused rather than floored, because
+    // booking stock in at zero would quietly wipe the item's cost price and
+    // hand the profit report a free carton.
+    .superRefine((lines, ctx) => {
+      lines.forEach((line, i) => {
+        if (line.discount <= 0) return;
+        if (line.discountUnit === "percent") {
+          if (line.discount > 100) {
+            ctx.addIssue({
+              code: "custom",
+              path: [i, "discount"],
+              message: "A percentage discount cannot be more than 100%",
+            });
+          }
+          return;
+        }
+        if (line.unitCost !== undefined && line.discount > line.unitCost) {
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "discount"],
+            message: `A discount of ${line.discount} is more than the unit cost of ${line.unitCost}`,
+          });
+        }
+      });
+    }),
   receivedOn: optionalDate,
 });
 

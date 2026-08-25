@@ -1,6 +1,8 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
+import { DEFAULT_DISCOUNT_UNIT, type DiscountUnit } from "@/constants/order";
+import { netUnitCost } from "@/utils/discount";
 import {
   applyStockMovementTx,
   rethrowStockMovementError,
@@ -431,6 +433,10 @@ export async function receiveOrder(
     lineId: number;
     quantity: number;
     unitCost?: number;
+    // A trade discount off the invoiced cost. Applied here rather than carried
+    // any further: what the rest of the system sees is the net cost.
+    discount?: number;
+    discountUnit?: DiscountUnit;
     looseQty?: number;
     // Off the carton, for perishables. One GS1 DataMatrix scan fills both.
     lotNumber?: string | null;
@@ -497,10 +503,22 @@ export async function receiveOrder(
     // outstanding check below compares it against the ordered quantity. Both
     // have to be in the stocking unit by that point or the comparison is
     // meaningless. The per-kilo cost converts to a per-bag cost with it.
+    // The discount comes off before the loose conversion, so a rate quoted per
+    // kilo discounts per kilo and then multiplies up by the pack size. Doing it
+    // after would apply a per-kilo amount to a per-bag cost.
+    const invoiced = entry.unitCost;
+    const discounted =
+      invoiced !== undefined
+        ? netUnitCost(
+            invoiced,
+            entry.discount,
+            entry.discountUnit ?? DEFAULT_DISCOUNT_UNIT,
+          )
+        : undefined;
     const resolved = resolvePurchaseLine(line.item, {
       quantity: entry.quantity,
       looseQty: entry.looseQty,
-      unitCost: entry.unitCost,
+      unitCost: discounted,
     });
 
     // Always a magnitude. Which way the stock moves is a property of the LINE:

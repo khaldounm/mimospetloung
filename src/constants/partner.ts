@@ -11,6 +11,12 @@ export const PARTNER_PAYOUT_METHODS = [
 
 export type PartnerPayoutMethod = (typeof PARTNER_PAYOUT_METHODS)[number];
 
+// The sample sale the partner forms use to show what a pair of payout rates
+// means in cash. Round numbers on purpose: the point is to make a deal legible
+// at a glance, so the reader can check the arithmetic in their head.
+export const SAMPLE_PAYOUT_COST = 100;
+export const SAMPLE_PAYOUT_PRICE = 150;
+
 // Plain-language definitions surfaced on the partners screens. Consignment
 // blends two very different things into one payout (the partner's capital coming
 // back, and their cut of the profit), which is the single biggest source of
@@ -24,7 +30,7 @@ export const PARTNER_GLOSSARY: { term: string; meaning: string }[] = [
   {
     term: "Capital",
     meaning:
-      "The partner's own money in the stock: what has already come back through sales plus what is still on the shelf. It is not profit for anyone, it is their stake being returned.",
+      "The partner's own money in the stock: what has already come back through sales plus what is still on the shelf. It is not profit for anyone, it is their stake being returned. How much of it the deal actually returns is the cost share: 100% hands back their outlay exactly, and a higher or lower rate hands back more or less.",
   },
   {
     term: "Gross profit",
@@ -33,17 +39,17 @@ export const PARTNER_GLOSSARY: { term: string; meaning: string }[] = [
   {
     term: "Their share",
     meaning:
-      "The partner's cut of the gross profit only, at their agreed percentage.",
+      "Everything the deal pays the partner above what the stock cost them. That is their profit cut, plus or minus any part of the cost share that runs above or below 100%.",
   },
   {
     term: "Clinic share",
     meaning:
-      "What the clinic keeps. It can be negative: if an item sells below cost the partner still gets their full capital back and no share, so the clinic absorbs the loss.",
+      "What the clinic keeps: revenue less what the partner is owed. It can be negative, because a sale below cost still owes the partner their cost share and pays them no profit, so the clinic absorbs the shortfall.",
   },
   {
     term: "Owed",
     meaning:
-      "Capital plus their share, minus payouts already made. Split into the two so it is clear how much is their money going back and how much is their earnings. Payouts settle capital first.",
+      "The cost half of the deal plus their profit cut, minus payouts already made. Split into the two so it is clear how much is their money going back and how much is their earnings. Payouts settle capital first.",
   },
   {
     term: "Performance vs Position",

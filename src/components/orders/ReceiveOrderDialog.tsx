@@ -16,9 +16,19 @@ import {
   TableHead,
   TableRow,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
+import {
+  DEFAULT_DISCOUNT_UNIT,
+  DISCOUNT_UNITS,
+  type DiscountUnit,
+} from "@/constants/order";
+import { CURRENCY } from "@/constants/clinic";
+import { discountExceedsCost, netUnitCost } from "@/utils/discount";
+import { formatMoney } from "@/utils/format";
 import { toDateOnly } from "@/utils/format";
 import { toGtin14 } from "@/utils/barcode";
 import { parseGs1 } from "@/utils/gs1";
@@ -35,7 +45,9 @@ export default function ReceiveOrderDialog({ open, onClose, ...rest }: Props) {
   // Remount per open so the quantities re-seed from what is currently
   // outstanding rather than from a previous delivery.
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+    // Wider than the usual dialog: the delivery table carries cost, discount and
+    // net side by side, and squeezing them wraps the item name to four lines.
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
       {open && <ReceiveForm onClose={onClose} {...rest} />}
     </Dialog>
   );
@@ -89,6 +101,15 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
       }),
     ),
   );
+  // A trade discount off the invoiced cost, per line. Not stored anywhere: it
+  // reduces the unit cost and the net is what books, so the order total, what
+  // the supplier is owed and the item's cost price all follow it without
+  // needing to know a discount was taken.
+  const [discounts, setDiscounts] = useState<Record<number, string>>({});
+  const [discountUnits, setDiscountUnits] = useState<
+    Record<number, DiscountUnit>
+  >({});
+
   // One scan of a GS1 DataMatrix fills the lot and expiry for whichever line
   // the carton belongs to. That is the whole point of parsing the symbol: the
   // alternative is staff reading two fields off a box and typing them, per
@@ -138,18 +159,48 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
       (raw === "" || !Number.isFinite(Number(raw)) || Number(raw) < 0)
     );
   }
+  function discountOf(line: PurchaseOrderLineDTO) {
+    const raw = (discounts[line.lineId] ?? "").trim();
+    if (raw === "") return 0;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+  function unitOf(line: PurchaseOrderLineDTO): DiscountUnit {
+    return discountUnits[line.lineId] ?? DEFAULT_DISCOUNT_UNIT;
+  }
+  // What the line will actually book at, which is what every downstream figure
+  // is built from. Shown under the discount so the net is never a surprise.
+  function netOf(line: PurchaseOrderLineDTO) {
+    const cost = Number(costOf(line));
+    if (!Number.isFinite(cost)) return null;
+    return netUnitCost(cost, discountOf(line), unitOf(line));
+  }
+  function badDiscount(line: PurchaseOrderLineDTO) {
+    if (Number(quantities[line.lineId]) <= 0) return false;
+    const raw = (discounts[line.lineId] ?? "").trim();
+    if (raw !== "" && (!Number.isFinite(Number(raw)) || Number(raw) < 0)) {
+      return true;
+    }
+    return discountExceedsCost(
+      Number(costOf(line)),
+      discountOf(line),
+      unitOf(line),
+    );
+  }
+
   const anyMissingCost = outstanding.some(missingCost);
+  const anyBadDiscount = outstanding.some(badDiscount);
   // The lot and expiry column only appears when something on this delivery
   // actually perishes, so an order of leashes looks exactly as it always did.
   const anyPerishable = outstanding.some((l) => l.tracksExpiry);
 
   // Correcting a cost moves the order total and what the supplier is owed, so
   // say so before it happens rather than letting the balance shift silently.
+  // Compared on the NET, since that is the figure that will move the balance.
+  // Taking a discount is itself a repricing and should say so.
   const repriced = entered.filter(
     (l) =>
-      !missingCost(l) &&
-      l.unitCost != null &&
-      Number(costOf(l)) !== Number(l.unitCost),
+      !missingCost(l) && l.unitCost != null && netOf(l) !== Number(l.unitCost),
   );
 
   function applyScan(raw: string) {
@@ -197,6 +248,9 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
         const loose = looseOf(l);
         const typed = Number(quantities[l.lineId]);
         const cost = costOf(l) === "" ? undefined : Number(costOf(l));
+        // The gross cost and the discount both go up; the server does the
+        // arithmetic, so what books can never depend on the browser.
+        const discount = { discount: discountOf(l), discountUnit: unitOf(l) };
         const batch = l.tracksExpiry
           ? {
               lotNumber: (lots[l.lineId] ?? "").trim() || undefined,
@@ -209,9 +263,16 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
               quantity: 0,
               looseQty: typed,
               unitCost: cost,
+              ...discount,
               ...batch,
             }
-          : { lineId: l.lineId, quantity: typed, unitCost: cost, ...batch };
+          : {
+              lineId: l.lineId,
+              quantity: typed,
+              unitCost: cost,
+              ...discount,
+              ...batch,
+            };
       })
       .filter((l) => {
         const typed = "looseQty" in l ? l.looseQty : l.quantity;
@@ -259,6 +320,13 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
             Every line arriving needs a unit cost. It becomes the item&apos;s
             cost price and is what the profit report charges when that stock
             sells.
+          </Alert>
+        )}
+
+        {anyBadDiscount && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            A discount is larger than the cost it comes off. Check whether a
+            rate was typed as an amount, or the other way round.
           </Alert>
         )}
 
@@ -316,13 +384,15 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
                 <TableCell align="right">Outstanding</TableCell>
                 <TableCell align="right">Receiving now</TableCell>
                 <TableCell align="right">Unit cost</TableCell>
+                <TableCell align="right">Discount</TableCell>
+                <TableCell align="right">Net cost</TableCell>
                 {anyPerishable && <TableCell>Lot / expiry</TableCell>}
               </TableRow>
             </TableHead>
             <TableBody>
               {outstanding.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={anyPerishable ? 7 : 6} align="center">
+                  <TableCell colSpan={anyPerishable ? 9 : 8} align="center">
                     <Typography color="text.secondary" sx={{ py: 2 }}>
                       Everything on this order has already been received.
                     </Typography>
@@ -406,6 +476,87 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
                           sx={{ width: 120 }}
                         />
                       </TableCell>
+                      <TableCell align="right">
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          sx={{ justifyContent: "flex-end" }}
+                        >
+                          <TextField
+                            type="number"
+                            size="small"
+                            value={discounts[l.lineId] ?? ""}
+                            onChange={(e) =>
+                              setDiscounts((prev) => ({
+                                ...prev,
+                                [l.lineId]: e.target.value,
+                              }))
+                            }
+                            error={badDiscount(l)}
+                            placeholder="0"
+                            slotProps={{
+                              htmlInput: {
+                                min: 0,
+                                step: "0.01",
+                                "aria-label": `Discount for ${l.itemName}`,
+                              },
+                            }}
+                            sx={{ width: 90 }}
+                          />
+                          <ToggleButtonGroup
+                            exclusive
+                            size="small"
+                            value={unitOf(l)}
+                            onChange={(_, next: DiscountUnit | null) =>
+                              next &&
+                              setDiscountUnits((prev) => ({
+                                ...prev,
+                                [l.lineId]: next,
+                              }))
+                            }
+                            aria-label={`Discount unit for ${l.itemName}`}
+                          >
+                            {DISCOUNT_UNITS.map((u) => (
+                              <ToggleButton
+                                key={u}
+                                value={u}
+                                sx={{ px: 1.25 }}
+                                aria-label={
+                                  u === "percent" ? "percent" : "amount"
+                                }
+                              >
+                                {u === "percent" ? "%" : CURRENCY.symbol}
+                              </ToggleButton>
+                            ))}
+                          </ToggleButtonGroup>
+                        </Stack>
+                      </TableCell>
+                      <TableCell align="right">
+                        {(() => {
+                          const net = netOf(l);
+                          if (net == null || missingCost(l)) return "-";
+                          const changed = discountOf(l) > 0;
+                          return (
+                            <>
+                              <Typography
+                                variant="body2"
+                                sx={{ fontWeight: changed ? 700 : 400 }}
+                              >
+                                {formatMoney(net)}
+                              </Typography>
+                              {loose && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: "block" }}
+                                >
+                                  {`per ${loose.unit}`}
+                                </Typography>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </TableCell>
                       {anyPerishable && (
                         <TableCell>
                           {l.tracksExpiry ? (
@@ -478,7 +629,12 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
         <Button
           type="submit"
           variant="contained"
-          disabled={saving || outstanding.length === 0 || anyMissingCost}
+          disabled={
+            saving ||
+            outstanding.length === 0 ||
+            anyMissingCost ||
+            anyBadDiscount
+          }
         >
           {saving ? "Receiving…" : "Receive"}
         </Button>

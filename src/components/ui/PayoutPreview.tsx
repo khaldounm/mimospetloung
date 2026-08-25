@@ -2,7 +2,7 @@
 
 import { Box, Typography } from "@mui/material";
 import { formatMoney } from "@/utils/format";
-import { SAMPLE_PAYOUT_COST, SAMPLE_PAYOUT_PRICE } from "@/constants/partners";
+import { SAMPLE_PAYOUT_COST, SAMPLE_PAYOUT_PRICE } from "@/constants/partner";
 
 // Two free-form percentages describe a deal precisely but read abstractly, so
 // the form shows what they mean on one concrete sale. Illustration only: the

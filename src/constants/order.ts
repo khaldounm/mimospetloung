@@ -10,6 +10,17 @@ export const NO_SUPPLIER_LABEL = "No supplier assigned";
 // so changing this leaves past orders alone.
 export const DEFAULT_VAT_RATE = 11;
 
+// How a discount typed on a delivery is read: a flat amount off the unit cost,
+// or a percentage of it. Stored nowhere: the discount reduces the unit cost and
+// the net figure is what books, so the order total, the supplier balance and the
+// item's cost price all follow it without any of them knowing a discount was
+// taken.
+export const DISCOUNT_UNITS = ["amount", "percent"] as const;
+
+export type DiscountUnit = (typeof DISCOUNT_UNITS)[number];
+
+export const DEFAULT_DISCOUNT_UNIT: DiscountUnit = "amount";
+
 // MUI Chip colors per order status.
 export const ORDER_STATUS_COLOR: Record<
   PurchaseOrderStatus,
