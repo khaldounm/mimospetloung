@@ -2,7 +2,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { CLINIC, CURRENCY } from "@/constants/clinic";
 import { AGING_BUCKETS } from "@/constants/statement";
-import { rangeBounds } from "@/utils/date-range";
+import { dateOnlyBounds } from "@/utils/date-range";
 import { toDateOnly } from "@/utils/format";
 import type {
   AnalyticsRange,
@@ -135,9 +135,19 @@ function agingToStrings(
 export async function getStatement(
   range: AnalyticsRange,
 ): Promise<StatementDTO> {
-  const { from, toExclusive } = rangeBounds(range);
+  // Every date this report touches (billedOn, paidOn, asOfDate) is a date-only
+  // column, so it works entirely in calendar-date bounds and never the timestamp
+  // ones. `from` below splits opening balances from in-period activity, and a
+  // local-midnight bound would misfile a charge dated on the first day of the
+  // period in any timezone behind UTC.
+  const { from, toExclusive: dateToExclusive } = dateOnlyBounds(range);
   // Last day of the period, which is what balances and aging are stated as at.
-  const asAt = new Date(toExclusive.getTime() - DAY_MS);
+  // Stepped back from the calendar bound, not the timestamp one: the label is
+  // rendered by taking the UTC date off this value, and the charges it is aged
+  // against are date-only columns read back at UTC midnight. Deriving it from
+  // local midnight put both a day out east of UTC, so a period ending today was
+  // headed "as at yesterday" and every charge aged a day young.
+  const asAt = new Date(dateToExclusive.getTime() - DAY_MS);
 
   const [suppliers, charges, payments, openingEntries] = await Promise.all([
     prisma.supplier.findMany({
@@ -152,12 +162,12 @@ export async function getStatement(
         deletedAt: null,
         supplierId: { not: null },
         status: "Received",
-        billedOn: { not: null, lt: toExclusive },
+        billedOn: { not: null, lt: dateToExclusive },
       },
       select: chargeSelect,
     }),
     prisma.supplierPayment.findMany({
-      where: { deletedAt: null, paidOn: { lt: toExclusive } },
+      where: { deletedAt: null, paidOn: { lt: dateToExclusive } },
       select: paymentSelect,
     }),
     // Balances carried in from the old Access system. Treated as an ordinary
@@ -165,7 +175,7 @@ export async function getStatement(
     // same rule as everything else, and so `ties` stays meaningful: before
     // these existed, the five suppliers holding one never reconciled.
     prisma.openingBalance.findMany({
-      where: { supplierId: { not: null }, asOfDate: { lt: toExclusive } },
+      where: { supplierId: { not: null }, asOfDate: { lt: dateToExclusive } },
       select: { supplierId: true, amount: true, asOfDate: true },
     }),
   ]);

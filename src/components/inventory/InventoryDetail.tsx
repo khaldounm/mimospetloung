@@ -213,10 +213,22 @@ export default function InventoryDetail({
           {item.partnerName && (
             <Grid size={{ xs: 6, sm: 3 }}>
               <Field
+                label="Cost share"
+                value={
+                  item.partnerCostPct
+                    ? `${item.partnerCostPct}%`
+                    : "Partner default"
+                }
+              />
+            </Grid>
+          )}
+          {item.partnerName && (
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Field
                 label="Profit share"
                 value={
-                  item.partnerSharePct
-                    ? `${item.partnerSharePct}%`
+                  item.partnerProfitPct
+                    ? `${item.partnerProfitPct}%`
                     : "Partner default"
                 }
               />

@@ -1,7 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { toDateOnly } from "@/utils/format";
-import { rangeBounds } from "@/utils/date-range";
+import { dateOnlyBounds, rangeBounds } from "@/utils/date-range";
 import type {
   AnalyticsRange,
   PartnerDTO,
@@ -22,31 +22,86 @@ function invoiceNumber(id: number): string {
   return `INV-${String(id).padStart(5, "0")}`;
 }
 
-// Amount owed to a partner for one sold line: their cost back plus the agreed
-// share of the profit. The partner always gets their cost back; the profit
-// share only applies when the sale beat the cost (floored at zero, so a sale
-// below cost never charges the partner a negative share).
+// The two free-form rates that define a partner's deal. Kept as one object so
+// the pair travels together: reading a cost rate without the profit rate it was
+// agreed alongside describes half a deal.
+export interface PartnerRates {
+  costPct: Prisma.Decimal;
+  profitPct: Prisma.Decimal;
+}
+
+// Amount owed to a partner for one sold line:
+//
+//   qty * ( cost * costPct% + max(salePrice - cost, 0) * profitPct% )
+//
+// Two independent percentages rather than one, which is what lets a single
+// formula cover every deal the clinic strikes. 100/30 hands back the outlay and
+// splits the upside; 90/50 keeps a tenth of the cost against handling; 120/0 is
+// a flat 20% uplift on cost with no interest in the sale price; 0/60 is a pure
+// profit split. None of these needs a branch here.
+//
+// Profit stays floored at zero, so a sale below cost never charges the partner a
+// negative share. Note what that means for a costPct of 100: the partner is made
+// whole and the clinic absorbs the whole loss. Lower the cost rate if the deal
+// is meant to share the downside.
+//
+// Rounding happens once, on each line total, so a fractional per-unit share never
+// compounds across the quantity.
+export interface PartnerPayable {
+  // What the clinic owes for the line, and what gets frozen on the movement.
+  total: Prisma.Decimal;
+  // How much of that total is the cost half. Frozen alongside the total so the
+  // capital/profit split stays exact: once costPct can be anything, subtracting
+  // the item's cost from the total no longer recovers the profit share.
+  costPart: Prisma.Decimal;
+}
+
 export function computePartnerPayable(
   quantity: DecimalInput,
   salePrice: DecimalInput,
   cost: DecimalInput,
-  sharePct: DecimalInput,
-): Prisma.Decimal {
+  rates: PartnerRates,
+): PartnerPayable {
   const qty = D(quantity);
   const unitCost = D(cost);
   const diff = D(salePrice).minus(unitCost);
   const profit = diff.greaterThan(0) ? diff : D(0);
-  const sharePerUnit = profit.times(D(sharePct)).dividedBy(100);
-  return qty.times(unitCost.plus(sharePerUnit)).toDecimalPlaces(2);
+  const costPerUnit = unitCost.times(rates.costPct).dividedBy(100);
+  const sharePerUnit = profit.times(rates.profitPct).dividedBy(100);
+  // Both rounded from the unrounded per-unit figures rather than the cost half
+  // being rounded and the total built from it, so the total is unchanged from
+  // what a single-rate calculation produced. Any sub-cent remainder therefore
+  // lands in the profit half, which is the residual of the two and the right
+  // place for it.
+  return {
+    total: qty.times(costPerUnit.plus(sharePerUnit)).toDecimalPlaces(2),
+    costPart: qty.times(costPerUnit).toDecimalPlaces(2),
+  };
 }
 
-// Effective profit-share %: the per-item override when set, else the partner
-// default, else zero.
-export function effectiveSharePct(
-  itemSharePct: Prisma.Decimal | null,
-  partnerDefaultPct: Prisma.Decimal | null | undefined,
-): Prisma.Decimal {
-  return itemSharePct ?? partnerDefaultPct ?? D(0);
+// The rates in force for one item: each per-item override applies on its own,
+// falling back to the partner's default. They resolve independently on purpose,
+// so an item can carry a custom cost rate while still following the partner's
+// standard profit split.
+//
+// The cost fallback is 100 rather than 0: an item consigned with nothing said
+// about cost returns the partner's outlay, which is the safe reading of silence.
+// A zero there would quietly keep money that was never the clinic's.
+export function effectiveRates(
+  item: {
+    partnerCostPct: Prisma.Decimal | null;
+    partnerProfitPct: Prisma.Decimal | null;
+  },
+  partnerDefaults:
+    | { defaultCostPct: Prisma.Decimal; defaultProfitPct: Prisma.Decimal }
+    | null
+    | undefined,
+): PartnerRates {
+  return {
+    costPct: item.partnerCostPct ?? partnerDefaults?.defaultCostPct ?? D(100),
+    profitPct:
+      item.partnerProfitPct ?? partnerDefaults?.defaultProfitPct ?? D(0),
+  };
 }
 
 // ---- Row shapes ----
@@ -55,7 +110,8 @@ type PartnerRow = {
   partnerId: number;
   name: string;
   phone: string | null;
-  defaultSharePct: Prisma.Decimal;
+  defaultCostPct: Prisma.Decimal;
+  defaultProfitPct: Prisma.Decimal;
   notes: string | null;
   isActive: boolean;
   createdAt: Date;
@@ -67,6 +123,11 @@ type PartnerTotals = {
   revenue: Prisma.Decimal;
   costOfSales: Prisma.Decimal;
   accrued: Prisma.Decimal;
+  // The cost half of `accrued`, summed from the frozen split on each movement.
+  // Distinct from costOfSales: that is what the partner actually laid out, this
+  // is what the deal returns to them for it. They coincide only at a 100% cost
+  // rate.
+  accruedCost: Prisma.Decimal;
   unitsSold: Prisma.Decimal;
 };
 
@@ -74,6 +135,7 @@ const emptyTotals = (): PartnerTotals => ({
   revenue: D(0),
   costOfSales: D(0),
   accrued: D(0),
+  accruedCost: D(0),
   unitsSold: D(0),
 });
 
@@ -105,6 +167,7 @@ function sumSaleMovements(
     unitCost: Prisma.Decimal | null;
     salePrice: Prisma.Decimal | null;
     partnerPayable: Prisma.Decimal | null;
+    partnerCostPart: Prisma.Decimal | null;
   }[],
 ): PartnerTotals {
   const totals = emptyTotals();
@@ -119,6 +182,12 @@ function sumSaleMovements(
       totals.costOfSales = totals.costOfSales.plus(sold.times(row.unitCost));
     }
     totals.accrued = totals.accrued.plus(row.partnerPayable ?? 0);
+    // Movements written before the split was frozen carry null here. Falling
+    // back to the item cost matches what those sales actually accrued, since
+    // every one of them ran at a 100% cost rate.
+    totals.accruedCost = totals.accruedCost.plus(
+      row.partnerCostPart ?? (row.unitCost ? sold.times(row.unitCost) : 0),
+    );
   }
   return totals;
 }
@@ -132,10 +201,22 @@ function sumSaleMovements(
 function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   const { inRange, toDate } = stats;
 
+  // How gross profit divides between the two, which is a different question from
+  // how the money owed divides (that split is below, and uses accruedCost).
+  //
+  // Measured against what the stock cost, not against the cost half of the
+  // payout. The partner funded the goods, so everything the deal pays them above
+  // that outlay is their take: at a cost rate over 100 the uplift is part of what
+  // they earn, and below 100 the shortfall is value the clinic kept. Using the
+  // frozen cost half here instead would drop that adjustment on the floor and
+  // report a clinic share it never actually received.
+  //
+  // Defined this way the two always sum to gross profit, and clinicShare always
+  // equals revenue minus what was accrued.
   const partnerShare = inRange.accrued.minus(inRange.costOfSales);
   const grossProfit = inRange.revenue.minus(inRange.costOfSales);
-  // Can go negative: a sale below cost still returns the partner their full
-  // cost and pays them no share, so the clinic absorbs the whole shortfall.
+  // Can go negative: a sale below cost still owes the partner their cost share,
+  // so the clinic absorbs the shortfall.
   const clinicShare = grossProfit.minus(partnerShare);
 
   const balance = toDate.accrued.minus(stats.paidToDate);
@@ -158,8 +239,13 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   //
   // The two always sum to the balance, including when payouts have overshot: a
   // negative profitOwed then reads as an overpayment, which is the truth.
-  const profitShareToDate = toDate.accrued.minus(capitalRecovered);
-  const capitalOutstanding = capitalRecovered.minus(stats.paidToDate);
+  // Split on what the deal owes for capital, not on what the stock cost. At a
+  // 100% rate these are the same figure; below it, only the owed half can be
+  // settled, so using cost would hold back more than the partner is due and
+  // drive profitOwed negative.
+  const capitalAccrued = toDate.accruedCost;
+  const profitShareToDate = toDate.accrued.minus(capitalAccrued);
+  const capitalOutstanding = capitalAccrued.minus(stats.paidToDate);
   const capitalOwed = capitalOutstanding.greaterThan(0)
     ? capitalOutstanding
     : D(0);
@@ -213,7 +299,8 @@ export function toPartnerDTO(p: PartnerRow, stats?: PartnerStats): PartnerDTO {
     partnerId: p.partnerId,
     name: p.name,
     phone: p.phone,
-    defaultSharePct: p.defaultSharePct.toString(),
+    defaultCostPct: p.defaultCostPct.toString(),
+    defaultProfitPct: p.defaultProfitPct.toString(),
     notes: p.notes,
     isActive: p.isActive,
     createdAt: p.createdAt.toISOString(),
@@ -331,6 +418,7 @@ const saleMovementSelect = {
   unitCost: true,
   salePrice: true,
   partnerPayable: true,
+  partnerCostPart: true,
 } as const;
 
 // All partners. Sales figures cover `range`; balance and capital figures are the
@@ -341,6 +429,9 @@ export async function getPartnersWithStats(
   range: AnalyticsRange,
 ): Promise<PartnerDTO[]> {
   const { from, toExclusive } = rangeBounds(range);
+  // Payout dates are a date-only column, so they need calendar-date bounds.
+  const { from: dateFrom, toExclusive: dateToExclusive } =
+    dateOnlyBounds(range);
 
   const [
     partners,
@@ -373,12 +464,15 @@ export async function getPartnersWithStats(
     }),
     prisma.partnerPayout.groupBy({
       by: ["partnerId"],
-      where: { deletedAt: null, paidOn: { gte: from, lt: toExclusive } },
+      where: {
+        deletedAt: null,
+        paidOn: { gte: dateFrom, lt: dateToExclusive },
+      },
       _sum: { amount: true },
     }),
     prisma.partnerPayout.groupBy({
       by: ["partnerId"],
-      where: { deletedAt: null, paidOn: { lt: toExclusive } },
+      where: { deletedAt: null, paidOn: { lt: dateToExclusive } },
       _sum: { amount: true },
     }),
     prisma.inventoryItem.findMany({
@@ -459,6 +553,9 @@ export async function getPartnerDetail(
   if (!partner) return null;
 
   const { from, toExclusive } = rangeBounds(range);
+  // Payout dates are a date-only column, so they need calendar-date bounds.
+  const { from: dateFrom, toExclusive: dateToExclusive } =
+    dateOnlyBounds(range);
 
   const [
     rangeRows,
@@ -491,12 +588,12 @@ export async function getPartnerDetail(
       where: {
         partnerId,
         deletedAt: null,
-        paidOn: { gte: from, lt: toExclusive },
+        paidOn: { gte: dateFrom, lt: dateToExclusive },
       },
     }),
     prisma.partnerPayout.aggregate({
       _sum: { amount: true },
-      where: { partnerId, deletedAt: null, paidOn: { lt: toExclusive } },
+      where: { partnerId, deletedAt: null, paidOn: { lt: dateToExclusive } },
     }),
     prisma.inventoryItem.findMany({
       where: { partnerId, deletedAt: null },
@@ -555,6 +652,8 @@ export async function getPartnerDetail(
 
   const itemPerformance: PartnerItemPerformanceDTO[] = items.map((item) => {
     const totals = sumSaleMovements(rowsByItem.get(item.itemId) ?? []);
+    // Measured against the stock's cost, exactly as toMoneyDTO does, so these
+    // rows add up to the header figures at any pair of rates.
     const partnerShare = totals.accrued.minus(totals.costOfSales);
     const grossProfit = totals.revenue.minus(totals.costOfSales);
     return {

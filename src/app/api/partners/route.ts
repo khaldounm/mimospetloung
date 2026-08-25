@@ -49,7 +49,8 @@ export async function POST(request: Request) {
       data: {
         name: data.name,
         phone: data.phone,
-        defaultSharePct: data.defaultSharePct,
+        defaultCostPct: data.defaultCostPct,
+        defaultProfitPct: data.defaultProfitPct,
         notes: data.notes,
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
       },

@@ -65,8 +65,11 @@ export async function PATCH(
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
         ...(data.phone !== undefined ? { phone: data.phone } : {}),
-        ...(data.defaultSharePct !== undefined
-          ? { defaultSharePct: data.defaultSharePct }
+        ...(data.defaultCostPct !== undefined
+          ? { defaultCostPct: data.defaultCostPct }
+          : {}),
+        ...(data.defaultProfitPct !== undefined
+          ? { defaultProfitPct: data.defaultProfitPct }
           : {}),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),

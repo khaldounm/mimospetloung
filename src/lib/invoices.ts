@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { applyStockMovementTx, isStockCheckViolation } from "@/lib/inventory";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
-import { computePartnerPayable, effectiveSharePct } from "@/lib/partners";
+import { computePartnerPayable, effectiveRates } from "@/lib/partners";
 import { toDateOnly } from "@/utils/format";
 import { INVOICE_STATUSES, SIGNED_TX_TYPES } from "@/types/enums";
 import type {
@@ -493,18 +493,31 @@ export function resolveLine(
 // item and not the line, so duplicate lines for one item pair up in order:
 // issueInvoice writes them in line order, and the nth movement for an item
 // belongs to the nth line for it. Same pairing voidInvoice relies on.
+// The Sold movement a return line gives back, carrying what was frozen on it at
+// the time of sale.
+interface OriginMovement {
+  transactionId: number;
+  unitCost: Prisma.Decimal | null;
+  quantity: Prisma.Decimal;
+  partnerPayable: Prisma.Decimal | null;
+  partnerCostPart: Prisma.Decimal | null;
+  // How much of the sold line had already come back on earlier, already-issued
+  // returns. Lets each return reverse the difference between the cumulative
+  // share and the share already reversed, so the parts telescope to exactly the
+  // original accrual however many returns it takes.
+  priorReturnedQty: Prisma.Decimal;
+}
+
 async function originSoldMovements(
   tx: Tx,
+  invoiceId: number,
   lines: {
     lineItemId: number;
     quantity: Prisma.Decimal;
     returnedFromLineId: number | null;
   }[],
 ) {
-  const byReturnLine = new Map<
-    number,
-    { transactionId: number; unitCost: Prisma.Decimal | null }
-  >();
+  const byReturnLine = new Map<number, OriginMovement>();
   const returns = lines.filter(
     (l) => l.quantity.lessThan(0) && l.returnedFromLineId != null,
   );
@@ -518,7 +531,7 @@ async function originSoldMovements(
 
   const bySourceLine = new Map<
     number,
-    { transactionId: number; unitCost: Prisma.Decimal | null }
+    Omit<OriginMovement, "priorReturnedQty">
   >();
   for (const sourceInvoiceId of new Set(sources.map((s) => s.invoiceId))) {
     const [sold, sourceLines] = await Promise.all([
@@ -529,7 +542,17 @@ async function originSoldMovements(
           type: "Sold",
         },
         orderBy: { transactionId: "asc" },
-        select: { transactionId: true, itemId: true, unitCost: true },
+        select: {
+          transactionId: true,
+          itemId: true,
+          unitCost: true,
+          // The frozen consignment figures and the quantity they were accrued
+          // over, so a return can give back a proportion of what was actually
+          // owed rather than re-pricing the goods at today's rates.
+          quantity: true,
+          partnerPayable: true,
+          partnerCostPart: true,
+        },
       }),
       tx.invoiceLineItem.findMany({
         where: { invoiceId: sourceInvoiceId, quantity: { gt: 0 } },
@@ -550,12 +573,75 @@ async function originSoldMovements(
     }
   }
 
+  // What each sold line had already given back before this document. Only
+  // invoices that are actually standing count: a draft has booked nothing yet,
+  // and a voided one has been reversed.
+  const priorGroups = await tx.invoiceLineItem.groupBy({
+    by: ["returnedFromLineId"],
+    where: {
+      returnedFromLineId: { in: returns.map((l) => l.returnedFromLineId!) },
+      invoiceId: { not: invoiceId },
+      invoice: { status: { notIn: ["Draft", "Void"] } },
+    },
+    _sum: { quantity: true },
+  });
+  const priorBySourceLine = new Map(
+    priorGroups.map((g) => [
+      g.returnedFromLineId!,
+      (g._sum.quantity ?? new Prisma.Decimal(0)).abs(),
+    ]),
+  );
+
   for (const l of returns) {
     const source = sourceById.get(l.returnedFromLineId!);
     const move = source ? bySourceLine.get(source.lineItemId) : undefined;
-    if (move) byReturnLine.set(l.lineItemId, move);
+    if (move) {
+      byReturnLine.set(l.lineItemId, {
+        ...move,
+        priorReturnedQty:
+          priorBySourceLine.get(l.returnedFromLineId!) ?? new Prisma.Decimal(0),
+      });
+    }
   }
   return byReturnLine;
+}
+
+// The share of a sale's frozen consignment accrual that a return gives back.
+//
+// Scaled by quantity rather than lifted whole, so returning 1 of 3 cancels a
+// third. Returns null when the sale cannot be traced or carried no accrual, and
+// the caller falls back to pricing the line directly.
+//
+// `returnedQty` arrives positive (the movement's magnitude); the origin's own
+// quantity is negative, being stock that left, so its magnitude is taken too.
+function originAccrual(
+  origin: OriginMovement | undefined,
+  returnedQty: Prisma.Decimal,
+): { payable: Prisma.Decimal; costPart: Prisma.Decimal } | null {
+  if (!origin || origin.partnerPayable == null) return null;
+  const soldQty = origin.quantity.abs();
+  if (soldQty.isZero()) return null;
+
+  const prior = origin.priorReturnedQty;
+  const cumulative = prior.plus(returnedQty.abs());
+
+  // Reverse the difference between the cumulative share and the share already
+  // reversed, rather than this return's share on its own. Rounding each return
+  // independently would strand a fraction of a cent on the balance whenever the
+  // accrual does not divide evenly by the quantity: three single-unit returns of
+  // a $10.00 accrual would give back $3.33 each and leave a penny owed forever.
+  // Taking the difference of two rounded cumulative figures makes the parts
+  // telescope, and the last one lands on the original accrual exactly.
+  const slice = (whole: Prisma.Decimal) => {
+    const upTo = (qty: Prisma.Decimal) =>
+      whole.times(qty).dividedBy(soldQty).toDecimalPlaces(2);
+    return upTo(cumulative).minus(upTo(prior));
+  };
+
+  return {
+    payable: slice(origin.partnerPayable).negated(),
+    costPart: slice(origin.partnerCostPart ?? new Prisma.Decimal(0)).negated(),
+  };
 }
 
 // Put a return line's goods back, and bin them again if they came back unfit.
@@ -582,11 +668,15 @@ async function applyReturnLineTx(
       item: {
         lastCost: Prisma.Decimal | null;
         partnerId: number | null;
-        partnerSharePct: Prisma.Decimal | null;
-        partner: { defaultSharePct: Prisma.Decimal } | null;
+        partnerCostPct: Prisma.Decimal | null;
+        partnerProfitPct: Prisma.Decimal | null;
+        partner: {
+          defaultCostPct: Prisma.Decimal;
+          defaultProfitPct: Prisma.Decimal;
+        } | null;
       } | null;
     };
-    origin?: { transactionId: number; unitCost: Prisma.Decimal | null };
+    origin?: OriginMovement;
     performedBy: number | null;
   },
 ) {
@@ -605,17 +695,32 @@ async function applyReturnLineTx(
   // returning 1 of 3 cancels a third of it.
   let partnerId: number | null = null;
   let partnerPayable: Prisma.Decimal | null = null;
+  let partnerCostPart: Prisma.Decimal | null = null;
   if (line.item?.partnerId != null) {
     partnerId = line.item.partnerId;
-    partnerPayable = computePartnerPayable(
-      quantity,
-      line.unitPrice,
-      unitCost ?? 0,
-      effectiveSharePct(
-        line.item.partnerSharePct,
-        line.item.partner?.defaultSharePct,
-      ),
-    ).negated();
+    const accrued = originAccrual(origin, quantity);
+    if (accrued) {
+      // Give back a proportion of what the sale actually accrued, taken from the
+      // frozen figures on its own movement. Re-pricing the goods here instead
+      // would quietly use whatever rates are in force today, so renegotiating a
+      // deal between a sale and its return would cancel an amount that was never
+      // owed and leave the balance permanently adrift. Void already reverses the
+      // frozen figures; this makes a counter return agree with it.
+      partnerPayable = accrued.payable;
+      partnerCostPart = accrued.costPart;
+    } else {
+      // No traceable sale (a legacy line, or stock sold before movements were
+      // kept). Pricing it at the current rates is the only option left, and is
+      // better than giving the goods back for nothing.
+      const payable = computePartnerPayable(
+        quantity,
+        line.unitPrice,
+        unitCost ?? 0,
+        effectiveRates(line.item, line.item.partner),
+      );
+      partnerPayable = payable.total.negated();
+      partnerCostPart = payable.costPart.negated();
+    }
   }
 
   const { transaction } = await applyStockMovementTx(tx, {
@@ -628,6 +733,7 @@ async function applyReturnLineTx(
     salePrice: line.unitPrice,
     partnerId,
     partnerPayable,
+    partnerCostPart,
     referenceType: "invoice",
     referenceId: invoiceId,
     notes: `Returned on ${formatInvoiceNumber(invoiceId)}`,
@@ -680,8 +786,11 @@ export async function issueInvoice(
                   name: true,
                   lastCost: true,
                   partnerId: true,
-                  partnerSharePct: true,
-                  partner: { select: { defaultSharePct: true } },
+                  partnerCostPct: true,
+                  partnerProfitPct: true,
+                  partner: {
+                    select: { defaultCostPct: true, defaultProfitPct: true },
+                  },
                 },
               },
             },
@@ -706,7 +815,11 @@ export async function issueInvoice(
       // takes the same figure off COGS that the sale put on. Resolved in one
       // pass because return lines on one invoice can point at several different
       // sales.
-      const origins = await originSoldMovements(tx, invoice.lineItems);
+      const origins = await originSoldMovements(
+        tx,
+        invoiceId,
+        invoice.lineItems,
+      );
 
       for (const line of invoice.lineItems) {
         if (line.itemId == null) continue;
@@ -743,17 +856,17 @@ export async function issueInvoice(
         // frozen for COGS. Clinic-owned lines leave these null.
         let partnerId: number | null = null;
         let partnerPayable: Prisma.Decimal | null = null;
+        let partnerCostPart: Prisma.Decimal | null = null;
         if (item?.partnerId != null) {
           partnerId = item.partnerId;
-          partnerPayable = computePartnerPayable(
+          const payable = computePartnerPayable(
             line.quantity,
             line.unitPrice,
             item.lastCost ?? 0,
-            effectiveSharePct(
-              item.partnerSharePct,
-              item.partner?.defaultSharePct,
-            ),
+            effectiveRates(item, item.partner),
           );
+          partnerPayable = payable.total;
+          partnerCostPart = payable.costPart;
         }
 
         await applyStockMovementTx(tx, {
@@ -768,6 +881,7 @@ export async function issueInvoice(
           salePrice: line.unitPrice,
           partnerId,
           partnerPayable,
+          partnerCostPart,
           referenceType: "invoice",
           referenceId: invoiceId,
           notes: `Sold on ${formatInvoiceNumber(invoiceId)}`,
@@ -869,6 +983,7 @@ export async function voidInvoice(
           salePrice: true,
           partnerId: true,
           partnerPayable: true,
+          partnerCostPart: true,
         },
       });
 
@@ -897,6 +1012,7 @@ export async function voidInvoice(
           salePrice: m.salePrice,
           partnerId: m.partnerId,
           partnerPayable: m.partnerPayable?.negated(),
+          partnerCostPart: m.partnerCostPart?.negated(),
           referenceType: "invoice",
           referenceId: invoiceId,
           notes: `Reversed by voiding ${formatInvoiceNumber(invoiceId)}`,

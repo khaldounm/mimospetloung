@@ -6,6 +6,7 @@ import {
   defaultRange,
   pickGranularity,
   rangeBounds,
+  dateOnlyBounds,
   priorRange,
   type Bucket,
   type Granularity,
@@ -243,6 +244,9 @@ async function getProfitSection(
   range: AnalyticsRange,
 ): Promise<ProfitAnalytics> {
   const { from, toExclusive, granularity, buckets } = prepare(range);
+  // incurredOn is a date-only column and needs calendar-date bounds.
+  const { from: dateFrom, toExclusive: dateToExclusive } =
+    dateOnlyBounds(range);
 
   const [
     costAgg,
@@ -255,15 +259,24 @@ async function getProfitSection(
   ] = await Promise.all([
     prisma.runningCost.aggregate({
       _sum: { amount: true },
-      where: { deletedAt: null, incurredOn: { gte: from, lt: toExclusive } },
+      where: {
+        deletedAt: null,
+        incurredOn: { gte: dateFrom, lt: dateToExclusive },
+      },
     }),
     prisma.runningCost.findMany({
-      where: { deletedAt: null, incurredOn: { gte: from, lt: toExclusive } },
+      where: {
+        deletedAt: null,
+        incurredOn: { gte: dateFrom, lt: dateToExclusive },
+      },
       select: { incurredOn: true, amount: true },
     }),
     prisma.runningCost.groupBy({
       by: ["category"],
-      where: { deletedAt: null, incurredOn: { gte: from, lt: toExclusive } },
+      where: {
+        deletedAt: null,
+        incurredOn: { gte: dateFrom, lt: dateToExclusive },
+      },
       _sum: { amount: true },
       orderBy: { _sum: { amount: "desc" } },
       take: 8,
@@ -798,7 +811,11 @@ async function getInventorySnapshot(): Promise<InventoryAnalytics> {
 async function getPurchasesSection(
   range: AnalyticsRange,
 ): Promise<PurchasesAnalytics> {
-  const { from, toExclusive, granularity, buckets } = prepare(range);
+  // Every date this section filters on (billedOn, paidOn) is a date-only column,
+  // so it needs calendar-date bounds throughout and never the timestamp ones.
+  const { granularity, buckets } = prepare(range);
+  const { from: dateFrom, toExclusive: dateToExclusive } =
+    dateOnlyBounds(range);
 
   const [billedOrders, payments, allOrders, allPayments] = await Promise.all([
     // An order is billed on the date it reached Received, which is what billedOn
@@ -808,7 +825,7 @@ async function getPurchasesSection(
       where: {
         deletedAt: null,
         status: "Received",
-        billedOn: { gte: from, lt: toExclusive },
+        billedOn: { gte: dateFrom, lt: dateToExclusive },
       },
       select: {
         billedOn: true,
@@ -820,7 +837,10 @@ async function getPurchasesSection(
       },
     }),
     prisma.supplierPayment.findMany({
-      where: { deletedAt: null, paidOn: { gte: from, lt: toExclusive } },
+      where: {
+        deletedAt: null,
+        paidOn: { gte: dateFrom, lt: dateToExclusive },
+      },
       select: { paidOn: true, amount: true },
     }),
     // Everything, for the as-of-now position: balances are a point in time, so

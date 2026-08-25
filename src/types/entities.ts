@@ -138,7 +138,8 @@ export interface InventoryItemDTO {
   // profit-share %, which falls back to the partner default when unset.
   partnerId: number | null;
   partnerName: string | null;
-  partnerSharePct: string | null;
+  partnerCostPct: string | null; // per-item override, null = use partner default
+  partnerProfitPct: string | null; // per-item override, null = use partner default
   // Purchasing: the company this item is usually reordered from. Advisory only
   // and independent of the partner fields.
   supplierId: number | null;
@@ -837,7 +838,11 @@ export interface PartnerDTO {
   partnerId: number;
   name: string;
   phone: string | null;
-  defaultSharePct: string; // percentage as a string, e.g. "20.00"
+  // The two halves of the deal, each a percentage as a string. Cost is what
+  // share of the item's cost returns to the partner (100 = their outlay back,
+  // above 100 = an agreed uplift); profit is their cut of the sale's upside.
+  defaultCostPct: string; // e.g. "100.00"
+  defaultProfitPct: string; // e.g. "20.00"
   notes: string | null;
   isActive: boolean;
   itemCount?: number; // consigned items sourced from this partner

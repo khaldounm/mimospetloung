@@ -167,8 +167,8 @@ export default function PartnersTable({
         )}
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        People who fund stock for the clinic. When their items sell they get
-        their capital back plus an agreed share of the profit.
+        People who fund stock for the clinic. When their items sell they get an
+        agreed share of their capital back plus an agreed share of the profit.
       </Typography>
 
       <PartnerGlossary />
@@ -259,7 +259,7 @@ export default function PartnersTable({
           <TableHead>
             <TableRow>
               <TableCell>Partner</TableCell>
-              <TableCell align="right">Share</TableCell>
+              <TableCell align="right">Deal</TableCell>
               <TableCell align="right">Sold</TableCell>
               <TableCell align="right">Revenue</TableCell>
               <TableCell align="right">Cost</TableCell>
@@ -307,7 +307,10 @@ export default function PartnersTable({
                       {p.phone ? ` · ${p.phone}` : ""}
                     </Typography>
                   </TableCell>
-                  <TableCell align="right">{p.defaultSharePct}%</TableCell>
+                  {/* Both halves, so a deal is never read as just one rate. */}
+                  <TableCell align="right">
+                    {p.defaultCostPct}% + {p.defaultProfitPct}%
+                  </TableCell>
                   <TableCell align="right">{p.money?.unitsSold ?? 0}</TableCell>
                   <TableCell align="right">
                     {formatMoney(p.money?.revenue)}

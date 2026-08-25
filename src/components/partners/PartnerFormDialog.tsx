@@ -15,6 +15,7 @@ import {
   TextField,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
+import PayoutPreview from "@/components/ui/PayoutPreview";
 import type { PartnerDTO } from "@/types/entities";
 
 interface Props {
@@ -45,8 +46,11 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
   const editing = Boolean(partner);
   const [name, setName] = useState(partner?.name ?? "");
   const [phone, setPhone] = useState(partner?.phone ?? "");
-  const [defaultSharePct, setDefaultSharePct] = useState(
-    partner?.defaultSharePct ?? "",
+  const [defaultCostPct, setDefaultCostPct] = useState(
+    partner?.defaultCostPct ?? "100",
+  );
+  const [defaultProfitPct, setDefaultProfitPct] = useState(
+    partner?.defaultProfitPct ?? "",
   );
   const [notes, setNotes] = useState(partner?.notes ?? "");
   const [isActive, setIsActive] = useState(partner?.isActive ?? true);
@@ -62,7 +66,14 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
     }
     setSaving(true);
     try {
-      const body = { name, phone, defaultSharePct, notes, isActive };
+      const body = {
+        name,
+        phone,
+        defaultCostPct,
+        defaultProfitPct,
+        notes,
+        isActive,
+      };
       if (editing) {
         await apiRequest(`/api/partners/${partner!.partnerId}`, {
           method: "PATCH",
@@ -93,18 +104,36 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
             required
             fullWidth
           />
+          <TextField
+            label="Phone"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            fullWidth
+          />
           <Stack direction="row" spacing={2}>
             <TextField
-              label="Phone"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              label="Default cost share"
+              type="number"
+              value={defaultCostPct}
+              onChange={(e) => setDefaultCostPct(e.target.value)}
+              slotProps={{
+                // Above 100 on purpose: that is how an agreed uplift on cost is
+                // entered, so the spinner must not stop at 100.
+                htmlInput: { min: 0, max: 999.99, step: "0.01" },
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">%</InputAdornment>
+                  ),
+                },
+              }}
+              helperText="100 returns their cost. Over 100 adds an uplift"
               fullWidth
             />
             <TextField
               label="Default profit share"
               type="number"
-              value={defaultSharePct}
-              onChange={(e) => setDefaultSharePct(e.target.value)}
+              value={defaultProfitPct}
+              onChange={(e) => setDefaultProfitPct(e.target.value)}
               slotProps={{
                 htmlInput: { min: 0, max: 100, step: "0.01" },
                 input: {
@@ -113,10 +142,14 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
                   ),
                 },
               }}
-              helperText="Their cut of the profit on items they source"
+              helperText="Their cut of anything the sale makes over cost"
               fullWidth
             />
           </Stack>
+          <PayoutPreview
+            costPct={defaultCostPct}
+            profitPct={defaultProfitPct}
+          />
           <TextField
             label="Notes"
             value={notes}

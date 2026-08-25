@@ -46,7 +46,7 @@ function Row({
 
 // The one figure the clinic acts on, split into the two things it is actually
 // made of. Reported as a single number, it reads as if the whole amount were the
-// partner's earnings, when most of it is usually their own capital coming back.
+// partner's earnings, when most of it is usually the cost half coming back.
 export default function OwedBreakdownCard({
   balance,
   capitalOwed,
@@ -82,7 +82,7 @@ export default function OwedBreakdownCard({
         <Row
           label="Their capital"
           value={capitalOwed}
-          hint="Their own money, going back to them"
+          hint="The cost half of the deal, going back to them"
         />
         <Row
           label="Their profit"

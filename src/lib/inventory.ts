@@ -24,7 +24,8 @@ type ItemRow = {
   salePrice: Prisma.Decimal | null;
   lastCost: Prisma.Decimal | null;
   partnerId: number | null;
-  partnerSharePct: Prisma.Decimal | null;
+  partnerCostPct: Prisma.Decimal | null;
+  partnerProfitPct: Prisma.Decimal | null;
   supplierId: number | null;
   // Present only when the query includes the relation; absent on the bare rows
   // returned by create/update, so both stay optional.
@@ -111,7 +112,8 @@ export function toInventoryItemDTO(
     lastCost: canSeeCost && i.lastCost ? i.lastCost.toString() : null,
     partnerId: i.partnerId,
     partnerName: i.partner?.name ?? null,
-    partnerSharePct: i.partnerSharePct ? i.partnerSharePct.toString() : null,
+    partnerCostPct: i.partnerCostPct ? i.partnerCostPct.toString() : null,
+    partnerProfitPct: i.partnerProfitPct ? i.partnerProfitPct.toString() : null,
     supplierId: i.supplierId,
     supplierName: i.supplier?.name ?? null,
     expiryDate: toDateOnly(effectiveExpiry(i)),
@@ -213,6 +215,7 @@ export interface StockMovementParams {
   salePrice?: Prisma.Decimal | number | null;
   partnerId?: number | null;
   partnerPayable?: Prisma.Decimal | number | null;
+  partnerCostPart?: Prisma.Decimal | number | null;
   referenceType?: string;
   referenceId?: number;
   notes?: string;
@@ -403,6 +406,7 @@ export async function applyStockMovementTx(
       salePrice: params.salePrice ?? undefined,
       partnerId: params.partnerId ?? undefined,
       partnerPayable: params.partnerPayable ?? undefined,
+      partnerCostPart: params.partnerCostPart ?? undefined,
       referenceType: params.referenceType,
       referenceId: params.referenceId,
       notes: params.notes,

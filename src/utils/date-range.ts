@@ -35,6 +35,29 @@ export function rangeBounds(range: AnalyticsRange): {
   return { from, toExclusive };
 }
 
+// The same range for a date-only column (Prisma `@db.Date`), as UTC midnights.
+//
+// rangeBounds above is right for timestamp columns, where local midnight is the
+// real instant a day starts. It is wrong for a date-only column: Postgres holds
+// no time there, and the driver reduces the bound to a calendar date in UTC. In
+// a timezone ahead of UTC, local midnight is the previous day once converted, so
+// both ends of the window silently slide a day earlier and a row dated today
+// falls outside a range that ends today.
+//
+// Building the bounds at UTC midnight makes the comparison land on the calendar
+// dates actually asked for, in any timezone.
+export function dateOnlyBounds(range: AnalyticsRange): {
+  from: Date;
+  toExclusive: Date;
+} {
+  const to = parseLocalDate(range.to);
+  const next = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1);
+  return {
+    from: new Date(`${range.from}T00:00:00.000Z`),
+    toExclusive: new Date(`${formatLocalDate(next)}T00:00:00.000Z`),
+  };
+}
+
 // ---- bucketing ----
 
 export type Granularity = "day" | "month";

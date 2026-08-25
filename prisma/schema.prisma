@@ -453,17 +453,17 @@ model PurchaseOrderLine {
 // INVENTORY
 // ============================================================
 model InventoryItem {
-  itemId          Int       @id @default(autoincrement()) @map("item_id")
+  itemId           Int       @id @default(autoincrement()) @map("item_id")
   // Primary key from the old Access system. See Client.legacyId.
   // See Client.needsReview.
-  needsReview     Boolean   @default(false) @map("needs_review")
-  reviewNote      String?   @map("review_note") @db.Text
-  legacyId        Int?      @unique @map("legacy_id")
-  name            String    @db.VarChar(255)
-  category        String?   @db.VarChar(100)
-  barcode         String?   @unique @db.VarChar(100)
-  unit            String?   @db.VarChar(50)
-  currentStock    Decimal   @default(0) @map("current_stock") @db.Decimal(10, 3)
+  needsReview      Boolean   @default(false) @map("needs_review")
+  reviewNote       String?   @map("review_note") @db.Text
+  legacyId         Int?      @unique @map("legacy_id")
+  name             String    @db.VarChar(255)
+  category         String?   @db.VarChar(100)
+  barcode          String?   @unique @db.VarChar(100)
+  unit             String?   @db.VarChar(50)
+  currentStock     Decimal   @default(0) @map("current_stock") @db.Decimal(10, 3)
   // Loose selling: a pack that gets broken open and sold by weight or volume
   // (a 20kg sack scooped by the kilo, a vial drawn by the ml). Stock stays in
   // packs; these only describe how a part-pack is asked for and priced.
@@ -477,26 +477,29 @@ model InventoryItem {
   // Perishable. Only tracked items capture a lot and expiry at goods receipt
   // and pick first-expiring-first on sale, so nobody is asked for a lot number
   // on a nylon harness. Untracked items keep expiryDate below as a plain field.
-  tracksExpiry    Boolean   @default(false) @map("tracks_expiry")
-  looseUnit       String?   @map("loose_unit") @db.VarChar(20)
-  loosePerUnit    Decimal?  @map("loose_per_unit") @db.Decimal(10, 3)
-  loosePrice      Decimal?  @map("loose_price") @db.Decimal(12, 2)
-  reorderLevel    Int       @default(0) @map("reorder_level")
-  salePrice       Decimal?  @map("sale_price") @db.Decimal(12, 2)
-  lastCost        Decimal?  @map("last_cost") @db.Decimal(12, 2)
+  tracksExpiry     Boolean   @default(false) @map("tracks_expiry")
+  looseUnit        String?   @map("loose_unit") @db.VarChar(20)
+  loosePerUnit     Decimal?  @map("loose_per_unit") @db.Decimal(10, 3)
+  loosePrice       Decimal?  @map("loose_price") @db.Decimal(12, 2)
+  reorderLevel     Int       @default(0) @map("reorder_level")
+  salePrice        Decimal?  @map("sale_price") @db.Decimal(12, 2)
+  lastCost         Decimal?  @map("last_cost") @db.Decimal(12, 2)
   // Consignment: when partnerId is set, this item is sourced from a partner who
-  // fronted its cost. partnerSharePct overrides the partner default when set.
-  partnerId       Int?      @map("partner_id")
-  partnerSharePct Decimal?  @map("partner_share_pct") @db.Decimal(5, 2)
+  // fronted its cost. Either rate overrides the partner default when set, and
+  // they override independently: an item may take a custom cost rate while
+  // still using the partner's default profit rate.
+  partnerId        Int?      @map("partner_id")
+  partnerCostPct   Decimal?  @map("partner_cost_pct") @db.Decimal(5, 2)
+  partnerProfitPct Decimal?  @map("partner_profit_pct") @db.Decimal(5, 2)
   // Purchasing: the company this item is usually reordered from. Independent of
   // partnerId (an item can have both, either, or neither) and advisory only, so
   // it groups the reorder basket without constraining who an order goes to.
-  supplierId      Int?      @map("supplier_id")
-  expiryDate      DateTime? @map("expiry_date") @db.Date
-  notes           String?   @db.Text
-  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  supplierId       Int?      @map("supplier_id")
+  expiryDate       DateTime? @map("expiry_date") @db.Date
+  notes            String?   @db.Text
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   partner      Partner?               @relation(fields: [partnerId], references: [partnerId], onDelete: SetNull)
   supplier     Supplier?              @relation(fields: [supplierId], references: [supplierId], onDelete: SetNull)
@@ -512,26 +515,34 @@ model InventoryItem {
 }
 
 model InventoryTransaction {
-  transactionId  Int                      @id @default(autoincrement()) @map("transaction_id")
-  itemId         Int                      @map("item_id")
-  performedBy    Int?                     @map("performed_by")
-  type           String                   @db.VarChar(20)
-  quantity       Decimal                  @db.Decimal(10, 3)
-  unitCost       Decimal?                 @map("unit_cost") @db.Decimal(12, 2)
+  transactionId   Int                      @id @default(autoincrement()) @map("transaction_id")
+  itemId          Int                      @map("item_id")
+  performedBy     Int?                     @map("performed_by")
+  type            String                   @db.VarChar(20)
+  quantity        Decimal                  @db.Decimal(10, 3)
+  unitCost        Decimal?                 @map("unit_cost") @db.Decimal(12, 2)
   // Frozen sale price per unit on a Sold movement (and carried onto its void
   // reversal), mirroring unitCost. With both frozen here, revenue, cost and
   // profit are all readable from this table alone, with no join back to the
   // invoice and no risk of an item's later reassignment rewriting history.
-  salePrice      Decimal?                 @map("sale_price") @db.Decimal(12, 2)
-  referenceType  String?                  @map("reference_type") @db.VarChar(50)
-  referenceId    Int?                     @map("reference_id")
+  salePrice       Decimal?                 @map("sale_price") @db.Decimal(12, 2)
+  referenceType   String?                  @map("reference_type") @db.VarChar(50)
+  referenceId     Int?                     @map("reference_id")
   // Consignment: on a Sold movement of a partner item, the frozen amount owed to
-  // the partner (cost back + share of profit). Negated on a void reversal.
-  partnerId      Int?                     @map("partner_id")
-  partnerPayable Decimal?                 @map("partner_payable") @db.Decimal(12, 2)
-  notes          String?                  @db.Text
-  performedAt    DateTime                 @default(now()) @map("performed_at") @db.Timestamptz(6)
-  batchMovements InventoryBatchMovement[]
+  // the partner (their share of cost + their share of profit). Negated on a void
+  // reversal.
+  //
+  // partnerCostPart is how much of that total was the cost half. Frozen rather
+  // than derived, because with a free-form cost rate the payable no longer
+  // implies it: at 90% the clinic owes less than the item cost, and subtracting
+  // cost from the payable would report a negative profit share. Storing it keeps
+  // the capital/profit split exact and immune to a later rate change.
+  partnerId       Int?                     @map("partner_id")
+  partnerPayable  Decimal?                 @map("partner_payable") @db.Decimal(12, 2)
+  partnerCostPart Decimal?                 @map("partner_cost_part") @db.Decimal(12, 2)
+  notes           String?                  @db.Text
+  performedAt     DateTime                 @default(now()) @map("performed_at") @db.Timestamptz(6)
+  batchMovements  InventoryBatchMovement[]
 
   item      InventoryItem @relation(fields: [itemId], references: [itemId], onDelete: Restrict)
   performer User?         @relation(fields: [performedBy], references: [userId], onDelete: SetNull)
@@ -546,7 +557,7 @@ model InventoryTransaction {
 // PARTNERS (outsourced / consignment inventory)
 // ============================================================
 // A partner (e.g. a family member) fronts the purchase cost of certain items.
-// When such an item sells, the clinic owes the partner their cost back plus an
+// When such an item sells, the clinic owes the partner a share of their cost plus an
 // agreed share of the profit. Soft-deleted so historical balances stay
 // reproducible; DB CHECK keeps default_share_pct in 0..100.
 // One delivery of a perishable item: what arrived, under which lot, expiring
@@ -626,15 +637,22 @@ model InventoryBatchMovement {
 }
 
 model Partner {
-  partnerId       Int       @id @default(autoincrement()) @map("partner_id")
-  name            String    @db.VarChar(120)
-  phone           String?   @db.VarChar(40)
-  defaultSharePct Decimal   @default(0) @map("default_share_pct") @db.Decimal(5, 2)
-  notes           String?   @db.Text
-  isActive        Boolean   @default(true) @map("is_active")
-  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  partnerId        Int       @id @default(autoincrement()) @map("partner_id")
+  name             String    @db.VarChar(120)
+  phone            String?   @db.VarChar(40)
+  // The two halves of the payout deal, each a free-form percentage.
+  // defaultCostPct is what share of the item's cost comes back to the partner:
+  // 100 returns their outlay exactly, and above 100 is an agreed uplift on cost
+  // (120 means cost plus 20%). defaultProfitPct is their cut of whatever the
+  // sale made over cost. Either can be zero, so a cost-only or profit-only deal
+  // needs no special case.
+  defaultCostPct   Decimal   @default(100) @map("default_cost_pct") @db.Decimal(5, 2)
+  defaultProfitPct Decimal   @default(0) @map("default_profit_pct") @db.Decimal(5, 2)
+  notes            String?   @db.Text
+  isActive         Boolean   @default(true) @map("is_active")
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   items        InventoryItem[]
   transactions InventoryTransaction[]

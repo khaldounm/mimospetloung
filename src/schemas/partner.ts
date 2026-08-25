@@ -2,18 +2,32 @@ import { z } from "zod";
 import { optionalString } from "./common";
 
 // Profit-share percentage (0..100). Blank / absent -> 0.
-const sharePct = z.preprocess(
+const profitPct = z.preprocess(
   (v) => (v === "" || v === null || v === undefined ? 0 : v),
   z.coerce
-    .number({ message: "Share must be a number" })
-    .min(0, "Share must be 0 or more")
-    .max(100, "Share must be 100 or less"),
+    .number({ message: "Profit share must be a number" })
+    .min(0, "Profit share must be 0 or more")
+    .max(100, "Profit share must be 100 or less"),
+);
+
+// Cost-share percentage. Deliberately allowed above 100, which is how an agreed
+// uplift on cost is expressed (120 = cost plus 20%); capping it at 100 would
+// make that deal unrepresentable. Blank / absent -> 100, so saying nothing about
+// cost returns the partner their outlay. The ceiling is the column's own limit,
+// Decimal(5,2).
+const costPct = z.preprocess(
+  (v) => (v === "" || v === null || v === undefined ? 100 : v),
+  z.coerce
+    .number({ message: "Cost share must be a number" })
+    .min(0, "Cost share must be 0 or more")
+    .max(999.99, "Cost share must be 999.99 or less"),
 );
 
 export const partnerCreateSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
   phone: optionalString(40),
-  defaultSharePct: sharePct,
+  defaultCostPct: costPct,
+  defaultProfitPct: profitPct,
   notes: optionalString(5000),
   isActive: z.coerce.boolean().optional(),
 });

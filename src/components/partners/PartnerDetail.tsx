@@ -144,7 +144,8 @@ export default function PartnerDetail({
             {!partner.isActive && <Chip label="Inactive" />}
           </Stack>
           <Typography color="text.secondary">
-            {partner.defaultSharePct}% default profit share
+            {partner.defaultCostPct}% of cost + {partner.defaultProfitPct}% of
+            profit
             {partner.phone ? ` · ${partner.phone}` : ""}
           </Typography>
         </Box>
@@ -209,7 +210,7 @@ export default function PartnerDetail({
         <StatCard
           label="Cost of sales"
           value={formatMoney(money?.costOfSales)}
-          hint="Their capital, coming back"
+          hint="What the stock cost them"
         />
         <StatCard
           label="Gross profit"

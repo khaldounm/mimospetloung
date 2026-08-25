@@ -28,11 +28,21 @@ const optionalLinkId = z
   )
   .optional();
 
-// Optional per-item profit-share override (0..100). Blank -> null.
-const optionalSharePct = z
+// Optional per-item profit-share override (0..100). Blank -> null, meaning the
+// item follows the partner's default.
+const optionalProfitPct = z
   .preprocess(
     (v) => (v === "" || v === null ? null : v),
     z.coerce.number().min(0).max(100).nullable(),
+  )
+  .optional();
+
+// Optional per-item cost-share override. Allowed above 100 for the same reason
+// as the partner default: that is how an uplift on cost is written.
+const optionalCostPct = z
+  .preprocess(
+    (v) => (v === "" || v === null ? null : v),
+    z.coerce.number().min(0).max(999.99).nullable(),
   )
   .optional();
 
@@ -72,7 +82,8 @@ const inventoryItemCreateFields = z.object({
   salePrice: optionalMoney,
   lastCost: optionalMoney,
   partnerId: optionalLinkId,
-  partnerSharePct: optionalSharePct,
+  partnerCostPct: optionalCostPct,
+  partnerProfitPct: optionalProfitPct,
   supplierId: optionalLinkId,
   expiryDate: optionalDate,
   // Perishable: capture a lot and expiry at each delivery, and pick

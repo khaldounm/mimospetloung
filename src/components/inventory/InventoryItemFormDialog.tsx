@@ -21,6 +21,7 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import QrCode2Icon from "@mui/icons-material/QrCode2";
 // import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import { apiRequest } from "@/utils/api-client";
+import PayoutPreview from "@/components/ui/PayoutPreview";
 import { INVENTORY_CATEGORIES } from "@/constants/inventory";
 import { isValidEan13 } from "@/utils/barcode";
 // import { downloadBarcodeLabelImage } from "@/utils/barcode-label";
@@ -88,14 +89,18 @@ function InventoryItemForm({
   const [partnerId, setPartnerId] = useState(
     item?.partnerId != null ? String(item.partnerId) : "",
   );
-  const [partnerSharePct, setPartnerSharePct] = useState(
-    item?.partnerSharePct ?? "",
+  const [partnerCostPct, setPartnerCostPct] = useState(
+    item?.partnerCostPct ?? "",
   );
-  // Whether the share was typed by hand. An existing per-item override counts as
-  // hand-set so editing the item does not silently overwrite it. Until touched,
-  // the share tracks the picked partner's default.
+  const [partnerProfitPct, setPartnerProfitPct] = useState(
+    item?.partnerProfitPct ?? "",
+  );
+  // Whether either rate was typed by hand. An existing per-item override counts
+  // as hand-set so editing the item does not silently overwrite it. Until
+  // touched, both rates track the picked partner's defaults.
   const [shareTouched, setShareTouched] = useState(
-    item?.partnerSharePct != null && item.partnerSharePct !== "",
+    (item?.partnerCostPct != null && item.partnerCostPct !== "") ||
+      (item?.partnerProfitPct != null && item.partnerProfitPct !== ""),
   );
   const [partners, setPartners] = useState<PartnerDTO[]>([]);
   const [supplierId, setSupplierId] = useState(
@@ -177,17 +182,19 @@ function InventoryItemForm({
 
   // Track the picked partner's default share until the user overrides it, so
   // switching partners follows the newly-picked default (rather than keeping the
-  // previous partner's). Clearing the partner resets the share and the override.
+  // previous partner's). Clearing the partner resets both rates and the override.
   function handlePartnerChange(value: string) {
     setPartnerId(value);
     if (!value) {
-      setPartnerSharePct("");
+      setPartnerCostPct("");
+      setPartnerProfitPct("");
       setShareTouched(false);
       return;
     }
     if (!shareTouched) {
       const picked = partners.find((p) => String(p.partnerId) === value);
-      setPartnerSharePct(picked ? picked.defaultSharePct : "");
+      setPartnerCostPct(picked ? picked.defaultCostPct : "");
+      setPartnerProfitPct(picked ? picked.defaultProfitPct : "");
     }
   }
 
@@ -208,6 +215,19 @@ function InventoryItemForm({
     }
   }
 
+  // The rates in force for the preview: the typed override when there is one,
+  // otherwise the selected partner's default. Mirrors effectiveRates on the
+  // server, which is what actually prices the sale.
+  const pickedPartner = partners.find((p) => String(p.partnerId) === partnerId);
+  const effectiveCostPct =
+    partnerCostPct !== ""
+      ? partnerCostPct
+      : (pickedPartner?.defaultCostPct ?? "100");
+  const effectiveProfitPct =
+    partnerProfitPct !== ""
+      ? partnerProfitPct
+      : (pickedPartner?.defaultProfitPct ?? "0");
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -222,7 +242,8 @@ function InventoryItemForm({
         salePrice,
         lastCost,
         partnerId,
-        partnerSharePct,
+        partnerCostPct,
+        partnerProfitPct,
         // Omitted entirely for staff without purchasing access, so saving the
         // form never clears a supplier they were not shown.
         ...(canViewSuppliers ? { supplierId } : {}),
@@ -396,11 +417,35 @@ function InventoryItemForm({
                 ))}
               </TextField>
               <TextField
+                label="Cost share"
+                type="number"
+                value={partnerCostPct}
+                onChange={(e) => {
+                  setPartnerCostPct(e.target.value);
+                  setShareTouched(true);
+                }}
+                disabled={!partnerId}
+                slotProps={{
+                  htmlInput: { min: 0, max: 999.99, step: "0.01" },
+                  input: {
+                    endAdornment: (
+                      <InputAdornment position="end">%</InputAdornment>
+                    ),
+                  },
+                }}
+                helperText={
+                  partnerId
+                    ? "Overrides the partner default"
+                    : "Pick a partner first"
+                }
+                fullWidth
+              />
+              <TextField
                 label="Profit share"
                 type="number"
-                value={partnerSharePct}
+                value={partnerProfitPct}
                 onChange={(e) => {
-                  setPartnerSharePct(e.target.value);
+                  setPartnerProfitPct(e.target.value);
                   setShareTouched(true);
                 }}
                 disabled={!partnerId}
@@ -421,10 +466,19 @@ function InventoryItemForm({
               />
             </Stack>
             {partnerId && (
-              <Alert severity="info" sx={{ py: 0 }}>
-                On sale, this partner is owed their cost back plus the share of
-                profit above. Set a Last cost so the split is accurate.
-              </Alert>
+              <>
+                {/* Preview the rates that would actually apply. A blank
+                    override means "use the partner default", so passing the
+                    raw field would read it as 0% and understate the payout. */}
+                <PayoutPreview
+                  costPct={effectiveCostPct}
+                  profitPct={effectiveProfitPct}
+                />
+                <Alert severity="info" sx={{ py: 0 }}>
+                  Set a Last cost so the split is accurate: both halves of the
+                  payout are worked out from it.
+                </Alert>
+              </>
             )}
             <FormControlLabel
               control={

@@ -84,8 +84,11 @@ export async function PATCH(
           ...(data.partnerId !== undefined
             ? { partnerId: data.partnerId }
             : {}),
-          ...(data.partnerSharePct !== undefined
-            ? { partnerSharePct: data.partnerSharePct }
+          ...(data.partnerCostPct !== undefined
+            ? { partnerCostPct: data.partnerCostPct }
+            : {}),
+          ...(data.partnerProfitPct !== undefined
+            ? { partnerProfitPct: data.partnerProfitPct }
             : {}),
           ...(data.supplierId !== undefined
             ? { supplierId: data.supplierId }
