@@ -369,6 +369,10 @@ export interface UpcomingBookingDTO {
   bookingStatus: BookingStatus;
   reminderStatus: NotificationStatus | null;
   reminderNotificationId: number | null;
+  // The booking's free-text note. Carried so the Upcoming tab can read a
+  // SENDAT marker out of it (see parseSendAtNote) and show the send time the
+  // note asks for next to the Send button.
+  notes: string | null;
 }
 
 // A past booking that was never completed (still Scheduled / Confirmed, or a

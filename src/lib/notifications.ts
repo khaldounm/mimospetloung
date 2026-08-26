@@ -479,6 +479,7 @@ export async function listUpcomingBookings(): Promise<UpcomingBookingDTO[]> {
       bookingStatus: b.status as BookingStatus,
       reminderStatus: reminder ? (reminder.status as NotificationStatus) : null,
       reminderNotificationId: reminder?.notificationId ?? null,
+      notes: b.notes,
     };
   });
 }
