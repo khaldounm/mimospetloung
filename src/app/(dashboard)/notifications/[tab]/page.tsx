@@ -5,6 +5,7 @@ import { hasPermission } from "@/lib/permissions";
 import {
   listMissedBookings,
   listUpcomingBookings,
+  UPCOMING_PAGE_SIZE,
   notificationInclude,
   toNotificationDTO,
   toTemplateDTO,
@@ -105,7 +106,15 @@ export default async function NotificationsTabPage({
 
   if (tab === "upcoming") {
     const upcoming = await listUpcomingBookings();
-    return <UpcomingTable initialUpcoming={upcoming} canWrite={canWrite} />;
+    return (
+      <UpcomingTable
+        initialUpcoming={upcoming.bookings}
+        initialTotal={upcoming.total}
+        initialPendingTimed={upcoming.pendingTimed}
+        pageSize={UPCOMING_PAGE_SIZE}
+        canWrite={canWrite}
+      />
+    );
   }
 
   if (tab === "missed") {

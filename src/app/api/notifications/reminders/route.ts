@@ -8,12 +8,22 @@ import {
 import { writeAudit } from "@/lib/audit";
 import { reminderActionSchema } from "@/schemas/notification";
 
-// Upcoming bookings inside the reminder window, with their reminder status.
-export async function GET() {
+// One page of upcoming bookings inside the reminder window, with their
+// reminder status. Filtered and paged in SQL: the tab is a worklist, and a busy
+// week of bookings is not something to hand to the browser in one piece.
+export async function GET(request: Request) {
   return handle(async () => {
     await requirePermission("notifications:read");
-    const bookings = await listUpcomingBookings();
-    return NextResponse.json({ bookings });
+
+    const sp = new URL(request.url).searchParams;
+    const pageRaw = sp.get("page")?.trim();
+    const page = await listUpcomingBookings({
+      q: sp.get("q")?.trim() || undefined,
+      pendingOnly: sp.get("pending") === "1",
+      page: pageRaw ? Number(pageRaw) : 1,
+    });
+
+    return NextResponse.json(page);
   });
 }
 

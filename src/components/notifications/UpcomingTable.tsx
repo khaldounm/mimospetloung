@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   Chip,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -14,6 +15,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -24,11 +26,21 @@ import { apiRequest } from "@/utils/api-client";
 import { formatDateTime } from "@/utils/format";
 import { hasSendAtNote, parseSendAtNote } from "@/utils/booking-notes";
 import { NOTIFICATION_STATUS_COLOR } from "@/constants/notification";
+import TablePaginationBar from "@/components/ui/TablePaginationBar";
 import type { NotificationDTO, UpcomingBookingDTO } from "@/types/entities";
 
 interface Props {
   initialUpcoming: UpcomingBookingDTO[];
+  initialTotal: number;
+  initialPendingTimed: number;
+  pageSize: number;
   canWrite: boolean;
+}
+
+interface UpcomingPageResponse {
+  bookings: UpcomingBookingDTO[];
+  total: number;
+  pendingTimed: number;
 }
 
 // A reminder that has already gone out. The Send button is closed off for
@@ -37,23 +49,73 @@ function alreadySent(b: UpcomingBookingDTO): boolean {
   return b.reminderStatus === "Sent" || b.reminderStatus === "Delivered";
 }
 
-export default function UpcomingTable({ initialUpcoming, canWrite }: Props) {
+export default function UpcomingTable({
+  initialUpcoming,
+  initialTotal,
+  initialPendingTimed,
+  pageSize,
+  canWrite,
+}: Props) {
   const [bookings, setBookings] = useState(initialUpcoming);
+  const [total, setTotal] = useState(initialTotal);
+  // Counted over the whole window by the server, not over what is on screen:
+  // Generate reminders is not limited to the page or the filter either.
+  const [pendingTimed, setPendingTimed] = useState(initialPendingTimed);
+  const [page, setPage] = useState(0); // MUI pagination is zero-based
+  const [query, setQuery] = useState("");
+  const [pendingOnly, setPendingOnly] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const firstRender = useRef(true);
 
-  // Bookings still waiting on a reminder whose note names a time to send it.
-  const timed = bookings.filter(
-    (b) => !alreadySent(b) && hasSendAtNote(b.notes),
-  );
+  // Every filter runs in SQL, so the browser only ever holds one page.
+  async function load(q: string, pending: boolean, p: number) {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set("q", q.trim());
+    if (pending) params.set("pending", "1");
+    params.set("page", String(p + 1));
+    setLoading(true);
+    try {
+      const data = await apiRequest<UpcomingPageResponse>(
+        `/api/notifications/reminders?${params}`,
+      );
+      // Sending the last row on a late page empties it. Stepping back rather
+      // than showing nothing matters most at the end of a long worklist, which
+      // is exactly where someone has been working for a while.
+      if (data.bookings.length === 0 && p > 0 && data.total > 0) {
+        setPage(p - 1);
+        return;
+      }
+      setBookings(data.bookings);
+      setTotal(data.total);
+      setPendingTimed(data.pendingTimed);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    const t = setTimeout(() => void load(query, pendingOnly, page), 200);
+    return () => clearTimeout(t);
+    // load is recreated each render; the three values below are the real inputs.
+  }, [query, pendingOnly, page]);
+
+  // A changed filter invalidates the current offset: page 3 of everything is
+  // not page 3 of what is still to send.
+  function changeFilter(next: () => void) {
+    setPage(0);
+    next();
+  }
 
   async function refresh() {
-    const data = await apiRequest<{ bookings: UpcomingBookingDTO[] }>(
-      "/api/notifications/reminders",
-    );
-    setBookings(data.bookings);
+    await load(query, pendingOnly, page);
   }
 
   async function sendOne(bookingId: number) {
@@ -76,6 +138,10 @@ export default function UpcomingTable({ initialUpcoming, canWrite }: Props) {
             : b,
         ),
       );
+      // Patched in place first so the row answers immediately, then reloaded:
+      // the totals and the send-time count are the server's to know, and with
+      // "Still to send" on, the row has just left the worklist.
+      void refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send reminder");
     } finally {
@@ -143,18 +209,53 @@ export default function UpcomingTable({ initialUpcoming, canWrite }: Props) {
           pressed, which is exactly what a note asking for a specific time is
           trying to prevent. Saying so here is the difference between the note
           being honoured and it being quietly overrun. */}
-      {canWrite && timed.length > 0 && (
+      {canWrite && pendingTimed > 0 && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          {timed.length === 1
+          {pendingTimed === 1
             ? "One booking asks for its reminder at a set time."
-            : `${timed.length} bookings ask for their reminders at a set time.`}{" "}
+            : `${pendingTimed} bookings ask for their reminders at a set time.`}{" "}
           Generate reminders sends all of them now. Use Send on the row when the
           time comes instead.
         </Alert>
       )}
 
+      <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: "wrap" }}>
+        <TextField
+          label="Search client or patient"
+          value={query}
+          onChange={(e) => changeFilter(() => setQuery(e.target.value))}
+          size="small"
+          sx={{ minWidth: 260 }}
+        />
+        <TextField
+          select
+          label="Show"
+          value={pendingOnly ? "pending" : "all"}
+          onChange={(e) =>
+            changeFilter(() => setPendingOnly(e.target.value === "pending"))
+          }
+          size="small"
+          sx={{ minWidth: 200 }}
+        >
+          <MenuItem value="all">All bookings</MenuItem>
+          <MenuItem value="pending">Still to send</MenuItem>
+        </TextField>
+      </Stack>
+
       <TableContainer component={Paper}>
-        <Table size="small">
+        <Table
+          size="small"
+          sx={{
+            // Banded, because this is a worklist read across six columns to a
+            // button at the far right, and a mis-read row sends the wrong
+            // client a message.
+            "& tbody tr:nth-of-type(odd)": { backgroundColor: "action.hover" },
+            // Restated at the same specificity, and after the band, or the
+            // pointer would stop registering on every second row: the band is
+            // already painted in the hover colour.
+            "& tbody tr:hover": { backgroundColor: "action.selected" },
+          }}
+        >
           <TableHead>
             <TableRow>
               <TableCell>When</TableCell>
@@ -170,7 +271,9 @@ export default function UpcomingTable({ initialUpcoming, canWrite }: Props) {
               <TableRow>
                 <TableCell colSpan={canWrite ? 6 : 5} align="center">
                   <Typography color="text.secondary" sx={{ py: 2 }}>
-                    No upcoming bookings in the next 7 days.
+                    {query.trim() || pendingOnly
+                      ? "No bookings match these filters."
+                      : "No upcoming bookings in the next 7 days."}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -262,6 +365,14 @@ export default function UpcomingTable({ initialUpcoming, canWrite }: Props) {
             )}
           </TableBody>
         </Table>
+        <TablePaginationBar
+          page={page}
+          count={total}
+          pageSize={pageSize}
+          onChange={setPage}
+          loading={loading}
+          noun="bookings"
+        />
       </TableContainer>
     </Box>
   );
