@@ -39,6 +39,9 @@ const HELP: Record<InventoryTxType, string> = {
     "Raised from the invoice a customer is bringing goods back against.",
   ReturnedToSupplier:
     "Raised from the purchase order the goods are going back on.",
+  Opening:
+    "The stock this item was carried into the system with. Written once by " +
+    "the import and never raised by hand.",
 };
 
 export default function StockMovementDialog({ open, onClose, ...rest }: Props) {

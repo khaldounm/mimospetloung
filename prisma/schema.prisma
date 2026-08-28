@@ -975,6 +975,10 @@ model Notification {
 // so historical profit reports stay reproducible.
 model RunningCost {
   costId      Int       @id @default(autoincrement()) @map("cost_id")
+  // Primary key from the old Access system (ExDetails.ID). See Client.legacyId.
+  // Null on a cost typed into this app, which is what keeps a re-import from
+  // touching anything staff entered themselves.
+  legacyId    Int?      @unique @map("legacy_id")
   category    String    @db.VarChar(100)
   description String    @db.VarChar(200)
   amount      Decimal   @db.Decimal(12, 2)

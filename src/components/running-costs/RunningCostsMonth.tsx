@@ -91,6 +91,20 @@ export default function RunningCostsMonth({
     const byCategory = new Map<string, CategoryTab>();
     let total = 0;
 
+    // Every known category gets a tab whether or not this month used it, so the
+    // strip reads as the full set of places a cost can go rather than as a
+    // list of what happened to be spent. A month with one category otherwise
+    // renders a single tab beside "All categories" showing the same figure
+    // twice, which looks like a bug. Empty ones sit at zero and stay clickable.
+    for (const category of RUNNING_COST_CATEGORIES) {
+      byCategory.set(categoryTabSlug(category), {
+        slug: categoryTabSlug(category),
+        label: category,
+        total: 0,
+        count: 0,
+      });
+    }
+
     for (const c of costs) {
       const amount = Number(c.amount) || 0;
       total += amount;
@@ -115,7 +129,8 @@ export default function RunningCostsMonth({
     );
 
     // A category filtered on but absent this month keeps its tab, so moving
-    // between months never drops the tab under the reader's feet.
+    // between months never drops the tab under the reader's feet. Only reachable
+    // for a category typed in by hand: the standard ones are all seeded above.
     if (tab !== ALL_CATEGORIES_SLUG && !byCategory.has(tab)) {
       rest.push({
         slug: tab,

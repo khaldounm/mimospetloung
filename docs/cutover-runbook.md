@@ -95,6 +95,7 @@ pnpm legacy:import -- --mdb ~/Desktop/GT_Data<new>.mdb
 ./prisma/seed-data/refresh-from-mdb.sh ~/Desktop/GT_Data<new>.mdb
 pnpm seed:clients
 pnpm seed:inventory
+pnpm seed:ledger
 pnpm review:export
 ```
 
@@ -118,6 +119,16 @@ while the client list looks perfectly current.
 - `seed:clients` and `seed:inventory` upsert on `legacyId` and reconcile: rows a
   previous import invented are removed when nothing references them, and flagged
   when they already have history.
+- `seed:ledger` turns the imported invoices and purchase orders into the stock
+  movements they imply, so cost of goods sold and profit are readable at all.
+  Without it the analytics report an imported year of trading at a near-100%
+  margin, because COGS is derived from `Sold` movements and there are none.
+  **It has to run after `seed:inventory`**, which rewrites `current_stock` from
+  the curated JSON: each item gets one `Opening` movement sized so the ledger
+  foots to that count, and a ledger built before the seed lands would be sized
+  against the loader's own heuristic stock instead. It never changes
+  `current_stock` itself. `pnpm seed:ledger -- --check` reports what it would
+  write without writing it.
 - `review:export` writes `prisma/seed-data/review-worklist.csv`, the list of
   everything a human needs to confirm, ordered so the decisions that affect
   money come first.

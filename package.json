@@ -14,6 +14,7 @@
     "legacy:import": "tsx --env-file=.env src/lib/legacy-import/run.ts",
     "seed:clients": "tsx --env-file=.env prisma/seed-clients.ts",
     "seed:inventory": "tsx --env-file=.env prisma/seed-inventory.ts",
+    "seed:ledger": "tsx --env-file=.env prisma/seed-stock-ledger.ts",
     "review:export": "tsx --env-file=.env prisma/review-export.ts",
     "db:backup": "tsx --env-file=.env src/lib/db-transfer.ts",
     "db:restore": "tsx --env-file=.env src/lib/db-transfer.ts --restore",

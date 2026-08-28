@@ -9,7 +9,19 @@ export const RUNNING_COST_CATEGORIES = [
   "Salaries",
   "Perishable medication",
   "Ops items",
+  // Equipment the clinic is paying for: an x-ray, an MRI, a blood test
+  // machine. Kept apart from Ops items because these are lumpy and one month's
+  // figure says nothing about the run rate, so a reader who cannot separate
+  // them reads a machine purchase as the clinic suddenly bleeding money.
+  "Hardware",
   "Other",
+  // Everything imported from the old Access system. Its own expense types were
+  // a mix of departments (vet, grooming, pet shop) and cost kinds, with most of
+  // the detail in free-text Arabic, so re-filing it into the categories above
+  // would mean guessing. One honest bucket with correct dates instead: the
+  // totals and the trend are right, and staff can re-file individual rows in
+  // the app whenever they care to.
+  "Legacy",
 ] as const;
 
 export type RunningCostCategory = (typeof RUNNING_COST_CATEGORIES)[number];
@@ -22,7 +34,9 @@ export const RUNNING_COST_ITEM_SUGGESTIONS: Record<string, string[]> = {
   Salaries: ["Salaries"],
   "Perishable medication": ["Betadine", "Iodine", "Alcohol"],
   "Ops items": ["Gloves", "Pads", "Syringes"],
+  Hardware: ["X-ray", "MRI", "Blood test machine"],
   Other: [],
+  Legacy: [],
 };
 
 // Where a hidden invoice line files itself when the invoice is issued. Gloves,

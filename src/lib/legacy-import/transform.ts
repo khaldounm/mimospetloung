@@ -10,6 +10,8 @@ import {
   LEGACY_BALANCE_EPSILON,
   LEGACY_CATEGORY_NAMES,
   LEGACY_DISCOUNT_SERVICE_ID,
+  LEGACY_EXPENSE_AMOUNT_NOTE,
+  LEGACY_EXPENSE_CATEGORY,
   LEGACY_OPENING_BALANCE_DATE,
   LEGACY_OPENING_BALANCE_SOURCE,
   LEGACY_PACK_SIZE,
@@ -932,6 +934,68 @@ export async function transform() {
     ["supplier_id", "amount", "paid_on", "reference"],
   );
   report.push(`supplier pays   ${supPayRows.length}`);
+
+  // ── Running costs ──────────────────────────────────────────────────────
+  // The operating-expense ledger. Everything lands in one category; the
+  // reasoning is on LEGACY_EXPENSE_CATEGORY, and the short version is that the
+  // old system's expense types describe departments as often as cost kinds and
+  // cannot be trusted even where they look right.
+  const expTypes = new Map<string, string>();
+  for (const t of await q(`SELECT * FROM staging.extype`)) {
+    const name = s(t.ExpenseType);
+    if (name) expTypes.set(String(num(t.ID)), name);
+  }
+
+  const expenses = await q(`SELECT * FROM staging.exdetails`);
+  const costRows: unknown[][] = [];
+  let zeroCosts = 0;
+  for (const e of expenses) {
+    // ExpAmount is the USD figure and already resolves the currency split; see
+    // LEGACY_EXPENSE_AMOUNT_NOTE. Dollar and LL are the two tenders behind it
+    // and must never be summed on their own.
+    const amount = money(e.ExpAmount);
+    // A zero-amount row is not a cost. Two exist, both with no type and no
+    // description, and importing them would put empty rows in the cost list
+    // for the clinic to wonder about.
+    if (amount === 0) {
+      zeroCosts += 1;
+      continue;
+    }
+    const when = stamp(e.ExpDate);
+    if (!when) continue;
+
+    const legacyType = expTypes.get(String(num(e.Expense))) ?? null;
+    // description is NOT NULL and is what staff actually read in the cost list.
+    // Most rows carry a hand-typed note; where they do not, the old expense
+    // type is the only thing left that says anything at all.
+    const description =
+      s(e.Details).slice(0, 200) || legacyType || "Legacy expense";
+
+    costRows.push([
+      num(e.ID),
+      LEGACY_EXPENSE_CATEGORY,
+      description,
+      amount,
+      when.date,
+      // The legacy type is kept here rather than dropped: it is the only handle
+      // on which part of the business spent the money, and re-filing these by
+      // hand later is impossible without it.
+      `${LEGACY_EXPENSE_AMOUNT_NOTE} #${num(e.ID)}. ` +
+        (legacyType
+          ? `Old expense type: ${legacyType}.`
+          : "No expense type recorded."),
+    ]);
+  }
+  await upsert(
+    "running_costs",
+    ["legacy_id", "category", "description", "amount", "incurred_on", "notes"],
+    costRows,
+    ["category", "description", "amount", "incurred_on", "notes"],
+  );
+  report.push(
+    `running costs   ${costRows.length}` +
+      (zeroCosts > 0 ? ` (${zeroCosts} zero-amount rows skipped)` : ""),
+  );
 
   // ── Reconciliation ─────────────────────────────────────────────────────
   // The source stored prices as float32, so a handful of invoices do not sum

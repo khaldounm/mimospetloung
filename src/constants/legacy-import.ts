@@ -16,6 +16,12 @@ export const LEGACY_TABLES = [
   "Invoice Details",
   "Suppliers",
   "SupPayments",
+  // The operating-expense ledger and its type lookup. 488 rows of rent,
+  // salaries, fuel and sundries that nothing else in the file carries: without
+  // them the analytics show a year of trading with almost no operating costs
+  // and a profit figure well over double the truth.
+  "ExDetails",
+  "ExType",
 ] as const;
 
 export type LegacyTable = (typeof LEGACY_TABLES)[number];
@@ -128,6 +134,28 @@ export const LEGACY_OPENING_BALANCE_SOURCE =
   "GT_Data Access system, Suppliers.BBack";
 export const LEGACY_OPENING_BALANCE_SOURCE_CLIENT =
   "GT_Data Access system, CustomerWholesale.BBack";
+
+// ── Running costs ────────────────────────────────────────────────────────
+// Every imported expense lands in one category rather than being sorted into
+// the app's own. The old system's ExType is a mix of two axes: "Salary" and
+// "Rent" are cost kinds, but "vet Expenses", "Grooming Expenese" and "pet shop
+// expenese" are departments, and their contents are mixed (an x-ray sits beside
+// syringes). Worse, the type field is not even reliable for the kinds: all 11
+// rent payments are filed under "pet shop expenese" and "Salary", and the
+// "Rent" type has zero rows, so mapping by type would report a clinic that pays
+// no rent. The detail that would settle it is free-text transliterated Arabic
+// on only 255 of 488 rows.
+//
+// So: one bucket, correctly dated, nothing invented. The period totals and the
+// trend are exactly right, which is what the profit figure needs, and staff can
+// re-file any row in the app.
+export const LEGACY_EXPENSE_CATEGORY = "Legacy";
+
+// ExDetails.ExpAmount is the USD figure and already resolves the currency:
+// verified as Dollar + LL/DollarRate on all 488 rows, the clinic having paid
+// some expenses in cash LBP at 90,000. Never sum Dollar and LL directly.
+export const LEGACY_EXPENSE_AMOUNT_NOTE =
+  "Imported from the Access system, ExDetails";
 
 // Below this, the old system's balance columns are floating-point residue like
 // -5.4e-06 rather than money. Anything smaller is treated as zero.

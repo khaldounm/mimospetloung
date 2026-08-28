@@ -23,10 +23,9 @@ export const BOOKING_STATUSES = [
 ] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 
-// Every type states what happened, and its direction follows from that. Only
-// Adjusted carries a sign, because only a count correction can go either way:
-// the shelf says 7, the system says 9, and the fix is -2. Everything else is a
-// magnitude, so no caller has to remember which way to write the number.
+// Every type states what happened, and its direction follows from that. Only a
+// few carry a sign (see SIGNED_TX_TYPES); the rest are a magnitude, so no
+// caller has to remember which way to write the number.
 export const INVENTORY_TX_TYPES = [
   "Received",
   "Used",
@@ -41,11 +40,15 @@ export const INVENTORY_TX_TYPES = [
   "ReturnedToSupplier",
   // Written off as unsellable, including a return that came back damaged.
   "Damaged",
+  // The position an item was carried into this system with. Written once by the
+  // legacy import so the ledger foots to a stock count that predates it, and
+  // never afterwards: nothing in the app can open a second time.
+  "Opening",
 ] as const;
 export type InventoryTxType = (typeof INVENTORY_TX_TYPES)[number];
 
-// The two types whose quantity carries a sign. Everything else is a magnitude
-// whose direction the type already fixes.
+// The types whose quantity carries a sign. Everything else is a magnitude whose
+// direction the type already fixes.
 //
 // Adjusted is signed because a count correction is the only movement that can
 // genuinely go either way. Returned and Damaged are signed because a document
@@ -58,6 +61,10 @@ export const SIGNED_TX_TYPES: readonly InventoryTxType[] = [
   "Adjusted",
   "Returned",
   "Damaged",
+  // Signed because an opening can be negative: where the old system recorded
+  // more sales than purchases for an item, the honest carried-in position is
+  // below zero and saying so is what flags the gap.
+  "Opening",
 ];
 
 // What the manual stock dialog offers.
