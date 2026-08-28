@@ -23,7 +23,9 @@ interface Props {
   open: boolean;
   cost?: RunningCostDTO | null;
   onClose: () => void;
-  onSaved: () => void;
+  // Handed the saved row so the caller can land on the period it belongs to,
+  // which is not necessarily the one being viewed when it was logged.
+  onSaved: (cost: RunningCostDTO) => void;
 }
 
 // Today as "YYYY-MM-DD" in local time, for the date input default.
@@ -82,15 +84,16 @@ function RunningCostForm({ cost, onClose, onSaved }: FormProps) {
     setSaving(true);
     try {
       const body = { category, description, amount, incurredOn, notes };
-      if (editing) {
-        await apiRequest(`/api/running-costs/${cost!.costId}`, {
-          method: "PATCH",
-          body,
-        });
-      } else {
-        await apiRequest("/api/running-costs", { method: "POST", body });
-      }
-      onSaved();
+      const saved = editing
+        ? await apiRequest<{ cost: RunningCostDTO }>(
+            `/api/running-costs/${cost!.costId}`,
+            { method: "PATCH", body },
+          )
+        : await apiRequest<{ cost: RunningCostDTO }>("/api/running-costs", {
+            method: "POST",
+            body,
+          });
+      onSaved(saved.cost);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");

@@ -33,3 +33,52 @@ export const CLINIC_USE_COST_CATEGORY = "Ops items";
 // What the register's cash draws are called on the running-costs list, so a
 // figure that appeared without anyone typing it says where it came from.
 export const REGISTER_DRAW_NOTE = "Drawn from the register";
+
+// ---- Period navigation ----
+//
+// The list is one calendar month at a time, addressed by URL:
+// /running-costs/<year>/<month>/<category>. Month slugs are the full lowercase
+// names so the address stays readable, and the category segment is a slug of
+// the free-text category (see @/utils/slug) with ALL_CATEGORIES_SLUG meaning
+// "no category filter".
+
+export const MONTH_SLUGS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+] as const;
+
+// Short labels for the month rail, same order as MONTH_SLUGS.
+export const MONTH_LABELS_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+// Reserved category segment: the tab that applies no category filter. A real
+// category slugging to "all" would collide, which is why it is spelled out here
+// rather than left implicit.
+export const ALL_CATEGORIES_SLUG = "all";
+
+// Guard rails for a year taken off the URL. Wide enough for any real ledger,
+// narrow enough that a junk segment 404s instead of building a date from it.
+export const MIN_COST_YEAR = 2000;
+export const MAX_COST_YEAR = 2100;

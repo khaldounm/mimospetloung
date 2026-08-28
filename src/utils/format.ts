@@ -60,6 +60,24 @@ export function formatMoney(value: string | number | null | undefined): string {
   });
 }
 
+// Money in as little width as possible, for dense controls like the running-cost
+// month rail where twelve figures sit side by side. Rounds to a short form
+// ("$2K", "$1.5K") rather than wrapping or truncating; anything that needs to be
+// read to the cent uses formatMoney instead.
+export function formatMoneyCompact(
+  value: string | number | null | undefined,
+): string {
+  if (value === null || value === undefined || value === "") return "-";
+  const n = typeof value === "string" ? Number(value) : value;
+  if (Number.isNaN(n)) return "-";
+  return n.toLocaleString(undefined, {
+    style: "currency",
+    currency: CURRENCY.code,
+    notation: "compact",
+    maximumFractionDigits: Math.abs(n) < 1000 ? 0 : 1,
+  });
+}
+
 // Human-friendly date for display, from a "YYYY-MM-DD" string.
 export function formatDate(value: string | null | undefined): string {
   if (!value) return "";

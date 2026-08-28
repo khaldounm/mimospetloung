@@ -671,6 +671,16 @@ export interface RunningCostDTO {
   createdAt: string;
 }
 
+// One calendar month that has running costs logged, for the period rail above
+// the list. Totals come from the same grouped query that finds the months, so
+// the rail can show what each month cost without a second pass.
+export interface CostMonthDTO {
+  year: number;
+  month: number; // 0-11, matching Date's month index
+  total: string; // money as a string (Decimal convention)
+  count: number;
+}
+
 // ── Partners (outsourced / consignment inventory) ─────────
 // A partner fronts the cost of certain inventory items; on sale the clinic owes
 // them their cost back plus a share of the profit. Stats (earned/paid/balance)

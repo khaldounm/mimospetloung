@@ -3,25 +3,9 @@ import type { InventoryItemDTO } from "@/types/entities";
 // Heading used for items saved without a category.
 export const UNCATEGORISED = "Uncategorised";
 
-// URL segment for a category. Categories are free text in the database, so the
-// slug is derived rather than stored, and resolved back by comparing slugs
-// instead of trusting the URL to spell the category exactly.
-export function categorySlug(category: string): string {
-  return category
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-/** The category whose slug matches, or null when nothing does. */
-export function categoryFromSlug(
-  slug: string,
-  categories: readonly string[],
-): string | null {
-  const wanted = slug.toLowerCase();
-  return categories.find((c) => categorySlug(c) === wanted) ?? null;
-}
+// Category slugs are shared with the other free-text-category modules; kept
+// re-exported here so existing `@/utils/inventory` imports keep working.
+export { categorySlug, categoryFromSlug } from "@/utils/slug";
 
 // Starting quantity offered when an item is pushed into a future order: enough
 // to reach twice its reorder level, so it clears the low-stock threshold with

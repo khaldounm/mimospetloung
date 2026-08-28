@@ -1,23 +1,11 @@
-import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { hasPermission } from "@/lib/permissions";
-import { runningCostInclude, toRunningCostDTO } from "@/lib/running-cost";
-import RunningCostsTable from "@/components/running-costs/RunningCostsTable";
+import { redirect } from "next/navigation";
+import { listCostMonths } from "@/lib/running-cost";
+import { defaultPeriod, periodPath } from "@/utils/running-cost";
 
-// Costs change as they are logged; always render the current list.
-export const dynamic = "force-dynamic";
-
-export default async function RunningCostsPage() {
-  const session = await auth();
-  const canWrite = hasPermission(session?.user, "costs:write");
-
-  const costs = await prisma.runningCost.findMany({
-    where: { deletedAt: null },
-    include: runningCostInclude,
-    orderBy: [{ incurredOn: "desc" }, { costId: "desc" }],
-  });
-
-  const initialCosts = costs.map(toRunningCostDTO);
-
-  return <RunningCostsTable initialCosts={initialCosts} canWrite={canWrite} />;
+// Bare /running-costs lands on the month worth opening: the current one when it
+// has costs in it, otherwise the most recent one that does. The month list is
+// the same cached query the layout uses, so this costs nothing extra.
+export default async function RunningCostsIndexPage() {
+  const months = await listCostMonths();
+  redirect(periodPath(defaultPeriod(months)));
 }
