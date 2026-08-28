@@ -25,8 +25,10 @@ export async function GET(request: Request) {
   });
 }
 
-// Creates an empty order by hand. The usual route into an order is the low-stock
-// basket (POST /api/orders/add-items), which creates drafts on demand.
+// Creates an empty order by hand, for stock the basket cannot reach: a one-off
+// buy, or items the catalogue does not have yet. The other route in is the
+// low-stock basket (POST /api/orders/add-items), which creates drafts on demand
+// per supplier and shelf.
 export async function POST(request: Request) {
   return handle(async () => {
     const session = await requirePermission("orders:write");
@@ -35,6 +37,7 @@ export async function POST(request: Request) {
     const order = await prisma.purchaseOrder.create({
       data: {
         supplierId: data.supplierId ?? null,
+        category: data.category ?? null,
         reference: data.reference,
         notes: data.notes,
         createdBy: session.user.userId,

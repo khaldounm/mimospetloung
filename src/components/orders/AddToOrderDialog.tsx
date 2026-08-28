@@ -21,13 +21,17 @@ import {
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
 import { suggestedReorderQuantity } from "@/utils/inventory";
-import { NO_SUPPLIER_LABEL } from "@/constants/order";
+import {
+  NO_SUPPLIER_LABEL,
+  UNCATEGORISED_ORDER_LABEL,
+} from "@/constants/order";
 import type { InventoryItemDTO } from "@/types/entities";
 
 interface FutureOrderResult {
   orderId: number;
   supplierId: number | null;
   supplierName: string | null;
+  category: string | null;
   itemsAdded: number;
 }
 
@@ -65,23 +69,43 @@ function AddToOrderForm({ items, onClose, onAdded }: FormProps) {
   const [saving, setSaving] = useState(false);
 
   // Preview of the routing the server will do, so it is obvious up front which
-  // items land where and which have no supplier to land with.
+  // items land where and which have no supplier to land with. Grouped by
+  // supplier AND shelf, matching draftBucketKey on the server: the two have to
+  // agree or the dialog promises a layout the save does not produce.
   const groups = useMemo(() => {
-    const map = new Map<string, { label: string; items: InventoryItemDTO[] }>();
+    const map = new Map<
+      string,
+      {
+        supplierLabel: string;
+        category: string | null;
+        needsSupplier: boolean;
+        items: InventoryItemDTO[];
+      }
+    >();
     for (const item of items) {
-      const key = item.supplierId == null ? "none" : String(item.supplierId);
+      const category = item.category?.trim() ? item.category : null;
+      const key = `${item.supplierId ?? "none"}::${category ?? "none"}`;
       const group = map.get(key);
       if (group) group.items.push(item);
       else {
         map.set(key, {
-          label: item.supplierName ?? NO_SUPPLIER_LABEL,
+          supplierLabel: item.supplierName ?? NO_SUPPLIER_LABEL,
+          category,
+          needsSupplier: item.supplierId == null,
           items: [item],
         });
       }
     }
     return [...map.entries()]
-      .sort(([a], [b]) => (a === "none" ? -1 : b === "none" ? 1 : 0))
-      .map(([key, value]) => ({ key, ...value }));
+      .map(([key, value]) => ({ key, ...value }))
+      .sort(
+        (a, b) =>
+          // Everything that still needs a supplier floats to the top, since it
+          // is the only thing here that blocks placing an order.
+          Number(b.needsSupplier) - Number(a.needsSupplier) ||
+          a.supplierLabel.localeCompare(b.supplierLabel) ||
+          (a.category ?? "").localeCompare(b.category ?? ""),
+      );
   }, [items]);
 
   const unassigned = items.filter((i) => i.supplierId == null).length;
@@ -122,8 +146,10 @@ function AddToOrderForm({ items, onClose, onAdded }: FormProps) {
       <DialogTitle>Add to future order</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
-          Each item joins the open draft for its supplier, or starts one. Adding
-          an item already on that draft increases its quantity.
+          Each item joins the open draft for its supplier and its shelf, or
+          starts one, so food and medication from the same company stay on
+          separate sheets for the rep who handles them. Adding an item already
+          on that draft increases its quantity.
         </DialogContentText>
 
         {error && (
@@ -148,8 +174,15 @@ function AddToOrderForm({ items, onClose, onAdded }: FormProps) {
                 spacing={1}
                 sx={{ alignItems: "center", mb: 1 }}
               >
-                <Typography sx={{ fontWeight: 600 }}>{group.label}</Typography>
-                {group.key === "none" && (
+                <Typography sx={{ fontWeight: 600 }}>
+                  {group.supplierLabel}
+                </Typography>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={group.category ?? UNCATEGORISED_ORDER_LABEL}
+                />
+                {group.needsSupplier && (
                   <Chip size="small" color="warning" label="Needs a supplier" />
                 )}
               </Stack>

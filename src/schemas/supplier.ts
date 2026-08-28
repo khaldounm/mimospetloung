@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  DEFAULT_SETTLEMENT_KIND,
+  SUPPLIER_SETTLEMENT_KINDS,
+} from "@/constants/supplier";
 import { optionalString } from "./common";
 import { INVENTORY_CATEGORIES } from "@/constants/inventory";
 
@@ -77,10 +81,61 @@ export const supplierPaymentCreateSchema = z.object({
   orderId: optionalOrderId,
   amount: money,
   paidOn,
+  kind: z.enum(SUPPLIER_SETTLEMENT_KINDS).default(DEFAULT_SETTLEMENT_KIND),
   method: optionalString(50),
   reference: optionalString(100),
   notes: optionalString(5000),
 });
+
+// A credit note spent across the account in one go: the note's own total, and
+// where each part of it goes. The clinic is handed one document for 500 and puts
+// 281 against one order and the rest against another or the account, so the
+// allocations arrive together and are written together.
+//
+// The total is sent as well as the parts, and the server checks they agree. It
+// could be derived, but then a mis-keyed allocation would silently redefine the
+// value of the note instead of being rejected.
+export const supplierCreditSchema = z
+  .object({
+    amount: money,
+    paidOn,
+    reference: optionalString(100),
+    notes: optionalString(5000),
+    allocations: z
+      .array(
+        z.object({
+          orderId: optionalOrderId,
+          amount: money,
+        }),
+      )
+      .min(1, "Say where the credit goes"),
+  })
+  .refine(
+    (d) =>
+      Math.abs(d.allocations.reduce((sum, a) => sum + a.amount, 0) - d.amount) <
+      0.005,
+    {
+      message: "The allocations have to add up to the credit note total",
+      path: ["allocations"],
+    },
+  )
+  // One order can only be settled once by a single note. Two rows against the
+  // same bill are the same allocation typed twice, and merging them silently
+  // would hide the double entry rather than surface it.
+  .refine(
+    (d) => {
+      const orderIds = d.allocations
+        .map((a) => a.orderId)
+        .filter((id): id is number => id != null);
+      return new Set(orderIds).size === orderIds.length;
+    },
+    {
+      message: "The same order appears twice. Combine those into one line.",
+      path: ["allocations"],
+    },
+  );
+
+export type SupplierCreditInput = z.infer<typeof supplierCreditSchema>;
 
 export type SupplierCreateInput = z.infer<typeof supplierCreateSchema>;
 export type SupplierContactInput = z.infer<typeof supplierContactSchema>;

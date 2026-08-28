@@ -42,8 +42,19 @@ interface Props {
   item?: InventoryItemDTO | null;
   canViewSuppliers: boolean;
   canCreateSuppliers: boolean;
+  // Pre-filled on a new item only, for a form opened from somewhere that
+  // already knows part of the answer. Goods receipt is the case: the order says
+  // which shelf and which supplier, so asking again would be asking twice.
+  defaults?: { category?: string | null; supplierId?: number | null };
+  // Whether the form offers to seed stock at creation. Off wherever the caller
+  // is about to book a stock movement of its own: goods receipt puts the units
+  // on the shelf when the delivery is received, and an opening stock typed here
+  // as well would count the same carton twice.
+  allowOpeningStock?: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  // The saved item comes back so a caller that needs it (goods receipt puts it
+  // straight onto the order) does not have to go looking for what it just made.
+  onSaved: (item: InventoryItemDTO) => void;
 }
 
 export default function InventoryItemFormDialog({
@@ -72,12 +83,16 @@ function InventoryItemForm({
   item,
   canViewSuppliers,
   canCreateSuppliers,
+  defaults,
+  allowOpeningStock = true,
   onClose,
   onSaved,
 }: FormProps) {
   const editing = Boolean(item);
   const [name, setName] = useState(item?.name ?? "");
-  const [category, setCategory] = useState(item?.category ?? "");
+  const [category, setCategory] = useState(
+    item?.category ?? defaults?.category ?? "",
+  );
   const [unit, setUnit] = useState(item?.unit ?? "");
   const [barcode, setBarcode] = useState(item?.barcode ?? "");
   const [reorderLevel, setReorderLevel] = useState(
@@ -104,7 +119,11 @@ function InventoryItemForm({
   );
   const [partners, setPartners] = useState<PartnerDTO[]>([]);
   const [supplierId, setSupplierId] = useState(
-    item?.supplierId != null ? String(item.supplierId) : "",
+    item?.supplierId != null
+      ? String(item.supplierId)
+      : defaults?.supplierId != null
+        ? String(defaults.supplierId)
+        : "",
   );
   const [suppliers, setSuppliers] = useState<SupplierDTO[]>([]);
   const [supplierDialogOpen, setSupplierDialogOpen] = useState(false);
@@ -256,17 +275,19 @@ function InventoryItemForm({
         loosePrice: sellsLoose ? loosePrice : null,
         notes,
         // Opening stock only seeds a new item; edits move stock via movements.
-        ...(editing ? {} : { openingStock }),
+        // Also skipped when the caller is about to book its own receipt.
+        ...(editing || !allowOpeningStock ? {} : { openingStock }),
       };
-      if (editing) {
-        await apiRequest(`/api/inventory/${item!.itemId}`, {
-          method: "PATCH",
-          body,
-        });
-      } else {
-        await apiRequest("/api/inventory", { method: "POST", body });
-      }
-      onSaved();
+      const res = editing
+        ? await apiRequest<{ item: InventoryItemDTO }>(
+            `/api/inventory/${item!.itemId}`,
+            { method: "PATCH", body },
+          )
+        : await apiRequest<{ item: InventoryItemDTO }>("/api/inventory", {
+            method: "POST",
+            body,
+          });
+      onSaved(res.item);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
@@ -350,7 +371,7 @@ function InventoryItemForm({
                 fullWidth
               />
             </Stack>
-            {!editing && (
+            {!editing && allowOpeningStock && (
               <TextField
                 label="Opening stock"
                 type="number"

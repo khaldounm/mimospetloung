@@ -76,6 +76,7 @@ export async function POST(
         orderId: data.orderId ?? null,
         amount: data.amount,
         paidOn: data.paidOn,
+        kind: data.kind,
         method: data.method,
         reference: data.reference,
         notes: data.notes,

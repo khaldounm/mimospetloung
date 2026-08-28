@@ -32,3 +32,8 @@ export const ORDER_STATUS_COLOR: Record<
   Received: "success",
   Cancelled: "error",
 };
+
+// Heading for the bucket that collects items with no category set. Like
+// NO_SUPPLIER_LABEL it reads as a state rather than a shelf name, because that
+// is what it is: nobody has said which product line these belong to.
+export const UNCATEGORISED_ORDER_LABEL = "No category";

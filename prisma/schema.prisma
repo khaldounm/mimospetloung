@@ -325,19 +325,30 @@ model SupplierContact {
   @@map("supplier_contacts")
 }
 
-// Money actually paid to a supplier. The clinic pays both on the spot and on
-// credit, so what was ordered and what has been settled are different figures
-// and neither can be derived from the other.
+// One settlement against a supplier account. The clinic settles both on the
+// spot and on credit, so what was ordered and what has been settled are
+// different figures and neither can be derived from the other.
 //
-// orderId is optional on purpose: paying a specific bill links to that order,
-// while a lump sum paid against the account links to nothing and just reduces
-// the balance. Soft-deleted so a corrected entry leaves the history intact.
+// orderId is optional on purpose: settling a specific bill links to that order,
+// while a lump sum against the account links to nothing and just reduces the
+// balance. Soft-deleted so a corrected entry leaves the history intact.
 model SupplierPayment {
   paymentId  Int       @id @default(autoincrement()) @map("payment_id")
   // Primary key from the old Access system. See Client.legacyId.
   legacyId   Int?      @unique @map("legacy_id")
   supplierId Int       @map("supplier_id")
   orderId    Int?      @map("order_id")
+  // Payment or Credit, from SUPPLIER_SETTLEMENT_KINDS. Both reduce what the
+  // clinic owes, which is why they share this table, but only a Payment is cash
+  // leaving the clinic: a Credit is the supplier writing something off (a return
+  // they accepted, a billing error, a rebate). Reporting them as one figure
+  // would overstate what was actually spent, so anything answering "how much did
+  // we pay" filters on this column while anything answering "what do we owe"
+  // does not.
+  //
+  // A credit note is often spent across several orders at once, which is stored
+  // as one row per allocation sharing the note's number in `reference`.
+  kind       String    @default("Payment") @db.VarChar(20)
   amount     Decimal   @db.Decimal(12, 2)
   paidOn     DateTime  @map("paid_on") @db.Date
   method     String?   @db.VarChar(50)
@@ -354,13 +365,15 @@ model SupplierPayment {
 
   @@index([supplierId], map: "idx_supplier_payments_supplier")
   @@index([paidOn], map: "idx_supplier_payments_paid")
+  @@index([kind], map: "idx_supplier_payments_kind")
   @@map("supplier_payments")
 }
 
-// A reorder sheet for one supplier. Starts as a Draft (the "future order" the
-// low-stock basket fills), becomes Placed once sent, then Received when the
-// stock arrives. supplierId is nullable so items with no usual supplier still
-// have somewhere to collect; a draft cannot leave Draft until one is set.
+// A reorder sheet for one supplier and one product line. Starts as a Draft (the
+// "future order" the low-stock basket fills), becomes Placed once sent, then
+// Received when the stock arrives. supplierId is nullable so items with no usual
+// supplier still have somewhere to collect; a draft cannot leave Draft until one
+// is set.
 //
 // Deliberately carries no payment fields: under the clinic's accrual model an
 // order never touches profit, since cost reaches the P&L as COGS when the stock
@@ -370,6 +383,15 @@ model PurchaseOrder {
   // Primary key from the old Access system. See Client.legacyId.
   legacyId       Int?      @unique @map("legacy_id")
   supplierId     Int?      @map("supplier_id")
+  // Which shelf this order is for, from INVENTORY_CATEGORIES. The clinic deals
+  // with a different rep per product line at the same company (see
+  // SupplierContact.categories), so a food order and a medication order go to
+  // different people and cannot share a sheet. The basket keys its open draft on
+  // supplier AND category for that reason.
+  //
+  // Nullable: an order created by hand need not commit to one shelf, and every
+  // order that predates this column has none.
+  category       String?   @db.VarChar(100)
   status         String    @default("Draft") @db.VarChar(20)
   reference      String?   @db.VarChar(100)
   orderedOn      DateTime? @map("ordered_on") @db.Date
@@ -403,6 +425,8 @@ model PurchaseOrder {
 
   @@index([supplierId], map: "idx_purchase_orders_supplier")
   @@index([status], map: "idx_purchase_orders_status")
+  // The basket's draft lookup: one open draft per supplier per category.
+  @@index([status, supplierId, category], map: "idx_purchase_orders_draft_bucket")
   @@map("purchase_orders")
 }
 

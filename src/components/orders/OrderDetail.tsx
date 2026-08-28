@@ -34,7 +34,9 @@ import {
   DEFAULT_VAT_RATE,
   NO_SUPPLIER_LABEL,
   ORDER_STATUS_COLOR,
+  UNCATEGORISED_ORDER_LABEL,
 } from "@/constants/order";
+import { INVENTORY_CATEGORIES } from "@/constants/inventory";
 import type {
   InventoryItemDTO,
   PurchaseOrderDTO,
@@ -437,6 +439,25 @@ export default function OrderDetail({
             {suppliers.map((s) => (
               <MenuItem key={s.supplierId} value={String(s.supplierId)}>
                 {s.name}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            label="Category"
+            size="small"
+            value={order.category ?? ""}
+            onChange={(e) =>
+              void patchOrder({ category: e.target.value || null })
+            }
+            disabled={!canEdit || busy}
+            helperText="Which rep this sheet goes to"
+            sx={{ minWidth: 200 }}
+          >
+            <MenuItem value="">{UNCATEGORISED_ORDER_LABEL}</MenuItem>
+            {INVENTORY_CATEGORIES.map((c) => (
+              <MenuItem key={c} value={c}>
+                {c}
               </MenuItem>
             ))}
           </TextField>

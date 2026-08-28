@@ -64,6 +64,7 @@ export async function PATCH(
         ...(data.supplierId !== undefined
           ? { supplierId: data.supplierId }
           : {}),
+        ...(data.category !== undefined ? { category: data.category } : {}),
         ...(data.reference !== undefined ? { reference: data.reference } : {}),
         ...(data.orderedOn !== undefined ? { orderedOn: data.orderedOn } : {}),
         ...(data.discountAmount !== undefined

@@ -53,8 +53,20 @@ const optionalSupplierId = z
   )
   .optional();
 
+// Which shelf an order covers. Blank -> null, meaning an order that is not tied
+// to one product line. Not restricted to INVENTORY_CATEGORIES on purpose: the
+// column is free text on the item too, and rejecting a category the catalogue
+// already uses would block an order for stock that exists.
+const optionalCategory = z
+  .preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? null : v),
+    z.string().trim().max(100).nullable(),
+  )
+  .optional();
+
 export const purchaseOrderCreateSchema = z.object({
   supplierId: optionalSupplierId,
+  category: optionalCategory,
   reference: optionalString(100),
   notes: optionalString(5000),
 });
@@ -64,6 +76,7 @@ export const purchaseOrderCreateSchema = z.object({
 export const purchaseOrderUpdateSchema = z
   .object({
     supplierId: optionalSupplierId,
+    category: optionalCategory,
     reference: optionalString(100),
     orderedOn: optionalDate,
     discountAmount: optionalCharge,

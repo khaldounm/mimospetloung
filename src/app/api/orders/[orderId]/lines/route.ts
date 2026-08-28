@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   ApiError,
@@ -9,14 +10,33 @@ import {
 } from "@/lib/api";
 import {
   getOrderDetail,
-  isEditable,
+  isReceivable,
   resolvePurchaseLine,
 } from "@/lib/purchase-orders";
 import { writeAudit } from "@/lib/audit";
 import { purchaseOrderLineCreateSchema } from "@/schemas/purchase-order";
 
+// Everything a line needs off the item: what it last cost, and how it is sold
+// loose so a quantity keyed in kilos can be converted to packs.
+const lineItemSelect = {
+  itemId: true,
+  lastCost: true,
+  looseUnit: true,
+  loosePerUnit: true,
+  loosePrice: true,
+} satisfies Prisma.InventoryItemSelect;
+
+type PurchaseLineItem = Prisma.InventoryItemGetPayload<{
+  select: typeof lineItemSelect;
+}>;
+
 // Adds one item to an existing order. The line's cost defaults to what the item
 // last cost, matching how the low-stock basket seeds it.
+//
+// Items are only ever referenced here, never created: a product that arrived
+// without being ordered is keyed into the ordinary item form first (which is
+// what gives it a partner, its expiry handling and how it sells loose), and
+// lands here by id like anything else.
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ orderId: string }> },
@@ -31,22 +51,20 @@ export async function POST(
       select: { orderId: true, status: true },
     });
     if (!order) throw new ApiError(404, "Purchase order not found");
-    if (!isEditable(order.status)) {
+    // Receivable rather than editable: adding a line neither rewrites a
+    // delivered quantity nor a booked cost, which is what the stricter rule on
+    // line EDITS exists to protect. A second delivery that brings something new
+    // has to be bookable against the order it arrived on.
+    if (!isReceivable(order.status)) {
       throw new ApiError(
         409,
-        `This order is ${order.status.toLowerCase()} and can no longer be edited.`,
+        `This order is ${order.status.toLowerCase()} and can no longer take lines.`,
       );
     }
 
-    const item = await prisma.inventoryItem.findFirst({
+    const item: PurchaseLineItem | null = await prisma.inventoryItem.findFirst({
       where: { itemId: data.itemId, deletedAt: null },
-      select: {
-        itemId: true,
-        lastCost: true,
-        looseUnit: true,
-        loosePerUnit: true,
-        loosePrice: true,
-      },
+      select: lineItemSelect,
     });
     if (!item) throw new ApiError(404, "Inventory item not found");
 
@@ -85,7 +103,7 @@ export async function POST(
       entity: "purchase_order",
       entityId: orderId,
       changes: {
-        addedItem: data.itemId,
+        addedItem: item.itemId,
         quantity: resolved.quantity,
         ...(resolved.looseQty != null
           ? { looseQty: resolved.looseQty, looseUnit: resolved.looseUnit }

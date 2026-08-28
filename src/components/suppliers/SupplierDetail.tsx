@@ -23,9 +23,11 @@ import {
 import EditIcon from "@mui/icons-material/Edit";
 import PaymentsIcon from "@mui/icons-material/Payments";
 import DeleteIcon from "@mui/icons-material/Delete";
+import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney } from "@/utils/format";
 import { ORDER_STATUS_COLOR } from "@/constants/order";
+import { SETTLEMENT_KIND_LABEL } from "@/constants/supplier";
 import StatCard from "@/components/ui/StatCard";
 import type {
   PurchaseOrderDTO,
@@ -34,6 +36,7 @@ import type {
 } from "@/types/entities";
 import SupplierFormDialog from "./SupplierFormDialog";
 import SupplierPaymentFormDialog from "./SupplierPaymentFormDialog";
+import SupplierCreditFormDialog from "./SupplierCreditFormDialog";
 
 interface Props {
   supplier: SupplierDTO;
@@ -53,6 +56,7 @@ export default function SupplierDetail({
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
+  const [creditOpen, setCreditOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Read straight from props rather than seeding state from them. Copying a prop
@@ -62,9 +66,11 @@ export default function SupplierDetail({
   const balance = Number(money?.balance ?? 0);
   const inCredit = balance < 0;
   const broughtForward = Number(money?.openingBalance ?? 0);
+  const credited = Number(money?.credited ?? 0);
 
   async function deletePayment(payment: SupplierPaymentDTO) {
-    if (!window.confirm(`Delete the ${formatMoney(payment.amount)} payment?`)) {
+    const what = payment.kind === "Credit" ? "credit note entry" : "payment";
+    if (!window.confirm(`Delete the ${formatMoney(payment.amount)} ${what}?`)) {
       return;
     }
     setError(null);
@@ -111,6 +117,13 @@ export default function SupplierDetail({
             </Button>
             <Button
               variant="outlined"
+              startIcon={<ReceiptLongIcon />}
+              onClick={() => setCreditOpen(true)}
+            >
+              Record credit
+            </Button>
+            <Button
+              variant="outlined"
               startIcon={<EditIcon />}
               onClick={() => setEditOpen(true)}
             >
@@ -134,7 +147,7 @@ export default function SupplierDetail({
           gridTemplateColumns: {
             xs: "1fr",
             sm: "repeat(2, 1fr)",
-            md: broughtForward !== 0 ? "repeat(5, 1fr)" : "repeat(4, 1fr)",
+            md: `repeat(${4 + (broughtForward !== 0 ? 1 : 0) + (credited !== 0 ? 1 : 0)}, 1fr)`,
           },
         }}
       >
@@ -158,6 +171,15 @@ export default function SupplierDetail({
           hint={`${money?.orderCount ?? 0} delivered order(s)`}
         />
         <StatCard label="Paid" value={formatMoney(money?.paid)} />
+        {/* Only shown once a credit note exists. On an account that has never
+            had one the card would be a permanent zero explaining nothing. */}
+        {credited !== 0 && (
+          <StatCard
+            label="Credited"
+            value={formatMoney(money?.credited)}
+            hint="Settled by credit note, not cash"
+          />
+        )}
         {/* A negative balance is money paid with no bill to match it, which is a
             credit rather than a debt. Shown as such and flagged, not coloured
             green: unmatched cash needs looking at, it is not "settled". */}
@@ -167,10 +189,12 @@ export default function SupplierDetail({
           accent={inCredit ? "info" : balance > 0 ? "warning" : "success"}
           hint={
             broughtForward !== 0
-              ? "Opening balance plus billed, less paid"
+              ? "Opening balance plus billed, less settled"
               : inCredit
-                ? "Paid more than has been billed"
-                : "Billed minus paid"
+                ? "Settled more than has been billed"
+                : credited !== 0
+                  ? "Billed, less paid and credited"
+                  : "Billed minus paid"
           }
         />
         <StatCard
@@ -339,6 +363,7 @@ export default function SupplierDetail({
           <TableHead>
             <TableRow>
               <TableCell>Date</TableCell>
+              <TableCell>Kind</TableCell>
               <TableCell align="right">Amount</TableCell>
               <TableCell>Against</TableCell>
               <TableCell>Method</TableCell>
@@ -350,9 +375,9 @@ export default function SupplierDetail({
           <TableBody>
             {payments.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={canWrite ? 7 : 6} align="center">
+                <TableCell colSpan={canWrite ? 8 : 7} align="center">
                   <Typography color="text.secondary" sx={{ py: 2 }}>
-                    No payments recorded yet.
+                    Nothing settled yet.
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -360,6 +385,14 @@ export default function SupplierDetail({
               payments.map((p) => (
                 <TableRow key={p.paymentId} hover>
                   <TableCell>{formatDate(p.paidOn)}</TableCell>
+                  <TableCell>
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      color={p.kind === "Credit" ? "info" : "default"}
+                      label={SETTLEMENT_KIND_LABEL[p.kind]}
+                    />
+                  </TableCell>
                   <TableCell align="right">{formatMoney(p.amount)}</TableCell>
                   <TableCell>
                     {p.orderId ? (
@@ -407,6 +440,15 @@ export default function SupplierDetail({
         balance={money?.balance ?? "0"}
         payableOrders={payableOrders}
         onClose={() => setPayOpen(false)}
+        onSaved={() => router.refresh()}
+      />
+      <SupplierCreditFormDialog
+        open={creditOpen}
+        supplierId={supplier.supplierId}
+        supplierName={supplier.name}
+        balance={money?.balance ?? "0"}
+        payableOrders={payableOrders}
+        onClose={() => setCreditOpen(false)}
         onSaved={() => router.refresh()}
       />
     </Box>

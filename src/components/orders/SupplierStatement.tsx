@@ -118,7 +118,7 @@ export default function SupplierStatement({ statement }: Props) {
           gridTemplateColumns: {
             xs: "1fr",
             sm: "repeat(2, 1fr)",
-            md: "repeat(4, 1fr)",
+            md: `repeat(${Number(totals.credited) !== 0 ? 5 : 4}, 1fr)`,
           },
         }}
       >
@@ -137,11 +137,25 @@ export default function SupplierStatement({ statement }: Props) {
           value={formatMoney(totals.paid)}
           hint="Cash out in the period"
         />
+        {/* Only on a period that actually had one. A permanent zero here would
+            be a column of explanation for something that never happens on most
+            accounts. */}
+        {Number(totals.credited) !== 0 && (
+          <StatCard
+            label="Credits"
+            value={formatMoney(totals.credited)}
+            hint="Settled by credit note, not cash"
+          />
+        )}
         <StatCard
           label="Closing balance"
           value={formatMoney(totals.closingBalance)}
           accent={Number(totals.closingBalance) > 0 ? "warning" : "success"}
-          hint="Opening plus charges less payments"
+          hint={
+            Number(totals.credited) !== 0
+              ? "Opening plus charges, less payments and credits"
+              : "Opening plus charges less payments"
+          }
         />
       </Box>
 
@@ -234,6 +248,9 @@ export default function SupplierStatement({ statement }: Props) {
                 <Figure label="Opening" value={s.openingBalance} />
                 <Figure label="Charges" value={s.billed} />
                 <Figure label="Payments" value={s.paid} />
+                {Number(s.credited) !== 0 && (
+                  <Figure label="Credits" value={s.credited} />
+                )}
                 <Figure label="Closing" value={s.closingBalance} bold />
               </Stack>
             </AccordionSummary>

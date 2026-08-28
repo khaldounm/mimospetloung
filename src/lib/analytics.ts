@@ -1120,9 +1120,15 @@ async function getPurchasesSection(
         lines: { select: { quantityOrdered: true, unitCost: true } },
       },
     }),
+    // Cash only. A credit note settles a bill without any money leaving the
+    // clinic, so counting it here would report a month as having spent what the
+    // supplier actually wrote off. The balance figures below deliberately do NOT
+    // make this distinction: a credit reduces what is owed exactly as a payment
+    // does.
     prisma.supplierPayment.findMany({
       where: {
         deletedAt: null,
+        kind: { not: "Credit" },
         paidOn: { gte: dateFrom, lt: dateToExclusive },
       },
       select: { paidOn: true, amount: true },
@@ -1140,6 +1146,8 @@ async function getPurchasesSection(
         lines: { select: { quantityOrdered: true, unitCost: true } },
       },
     }),
+    // Every kind, unlike the range-scoped query above: this one builds what is
+    // owed, and a credit note settles a bill just as a payment does.
     prisma.supplierPayment.groupBy({
       by: ["supplierId"],
       where: { deletedAt: null },

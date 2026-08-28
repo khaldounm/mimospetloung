@@ -23,10 +23,16 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import DescriptionIcon from "@mui/icons-material/Description";
+import AddIcon from "@mui/icons-material/Add";
 import { formatDate, formatMoney } from "@/utils/format";
 import StatCard from "@/components/ui/StatCard";
-import { ORDER_STATUS_COLOR, NO_SUPPLIER_LABEL } from "@/constants/order";
-import type { PurchaseOrderDTO } from "@/types/entities";
+import NewOrderDialog from "./NewOrderDialog";
+import {
+  ORDER_STATUS_COLOR,
+  NO_SUPPLIER_LABEL,
+  UNCATEGORISED_ORDER_LABEL,
+} from "@/constants/order";
+import type { PurchaseOrderDTO, SupplierDTO } from "@/types/entities";
 import type { PurchaseOrderStatus } from "@/types/enums";
 
 type Filter = "Open" | PurchaseOrderStatus;
@@ -38,6 +44,7 @@ const OPEN_STATUSES: PurchaseOrderStatus[] = ["Draft", "Placed", "Partial"];
 
 interface Props {
   initialOrders: PurchaseOrderDTO[];
+  suppliers: SupplierDTO[];
 }
 
 interface SupplierGroup {
@@ -47,7 +54,8 @@ interface SupplierGroup {
   value: number;
 }
 
-export default function OrdersTable({ initialOrders }: Props) {
+export default function OrdersTable({ initialOrders, suppliers }: Props) {
+  const [creating, setCreating] = useState(false);
   // "Open" is the working view: everything still in flight. The terminal
   // statuses are one click away rather than cluttering the default.
   const [filter, setFilter] = useState<Filter>("Open");
@@ -109,18 +117,28 @@ export default function OrdersTable({ initialOrders }: Props) {
         sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.5 }}
       >
         <Typography variant="h4">Orders</Typography>
-        <Button
-          component={Link}
-          href="/orders/statement"
-          variant="outlined"
-          startIcon={<DescriptionIcon />}
-        >
-          Statement
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            component={Link}
+            href="/orders/statement"
+            variant="outlined"
+            startIcon={<DescriptionIcon />}
+          >
+            Statement
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setCreating(true)}
+          >
+            New order
+          </Button>
+        </Stack>
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Reorder sheets grouped by supplier. Add low-stock items from Inventory,
-        then place the order and receive it when the stock arrives.
+        Reorder sheets, one per supplier and product line, so each rep gets the
+        sheet they handle. Add low-stock items from Inventory or start an order
+        by hand, then place it and receive it when the stock arrives.
       </Typography>
 
       <Box
@@ -160,7 +178,7 @@ export default function OrdersTable({ initialOrders }: Props) {
         <Paper variant="outlined" sx={{ p: 4 }}>
           <Typography color="text.secondary" align="center">
             No orders here yet. Tick low-stock items in Inventory and choose Add
-            to future order.
+            to future order, or start one by hand with New order.
           </Typography>
         </Paper>
       ) : (
@@ -212,6 +230,7 @@ export default function OrdersTable({ initialOrders }: Props) {
                   <TableHead>
                     <TableRow>
                       <TableCell>Order</TableCell>
+                      <TableCell>Category</TableCell>
                       <TableCell>Status</TableCell>
                       <TableCell>Started</TableCell>
                       <TableCell>Placed</TableCell>
@@ -227,6 +246,19 @@ export default function OrdersTable({ initialOrders }: Props) {
                           <Link href={`/orders/${o.orderId}`}>
                             {o.reference || `Order #${o.orderId}`}
                           </Link>
+                        </TableCell>
+                        <TableCell>
+                          {o.category ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={o.category}
+                            />
+                          ) : (
+                            <Typography variant="body2" color="text.secondary">
+                              {UNCATEGORISED_ORDER_LABEL}
+                            </Typography>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Chip
@@ -255,6 +287,12 @@ export default function OrdersTable({ initialOrders }: Props) {
           </Accordion>
         ))
       )}
+
+      <NewOrderDialog
+        open={creating}
+        suppliers={suppliers}
+        onClose={() => setCreating(false)}
+      />
     </Box>
   );
 }

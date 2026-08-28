@@ -54,6 +54,7 @@ const paymentSelect = {
   orderId: true,
   amount: true,
   paidOn: true,
+  kind: true,
   method: true,
   reference: true,
 } as const;
@@ -195,6 +196,7 @@ export async function getStatement(
       openingBalance: "0.00",
       billed: "0.00",
       paid: "0.00",
+      credited: "0.00",
       closingBalance: "0.00",
       ties: true,
       aging: agingToStrings(
@@ -208,7 +210,10 @@ export async function getStatement(
   // Running sums, split at the period boundary.
   const opening = new Map<number, Prisma.Decimal>();
   const billed = new Map<number, Prisma.Decimal>();
+  // Settled in the period, split by how. Both come off the balance; only one of
+  // them was money, and the statement has to be able to say which.
   const paid = new Map<number, Prisma.Decimal>();
+  const credited = new Map<number, Prisma.Decimal>();
   const paidToDate = new Map<number, Prisma.Decimal>();
   const add = (m: Map<number, Prisma.Decimal>, k: number, v: Prisma.Decimal) =>
     m.set(k, (m.get(k) ?? D(0)).plus(v));
@@ -288,14 +293,21 @@ export async function getStatement(
     if (payment.paidOn < from) {
       add(opening, supplierId, payment.amount.negated());
     } else {
-      add(paid, supplierId, payment.amount);
+      // A credit note settles the account exactly as cash does, so it belongs
+      // on the payment side of the ledger and the balance arithmetic needs no
+      // special case. It is tallied separately alongside, because a reader
+      // reconciling this against their bank statement has to be able to tell
+      // which of it was money.
+      const isCredit = payment.kind === "Credit";
+      add(isCredit ? credited : paid, supplierId, payment.amount);
+      const label = isCredit ? "Credit note" : "Payment";
       pushLine(supplierId, payment.paidOn, {
         kind: "payment",
         date: toDateOnly(payment.paidOn) ?? "",
-        reference: payment.reference || (payment.method ?? "Payment"),
+        reference: payment.reference || (payment.method ?? label),
         description: payment.orderId
-          ? `Payment against order #${payment.orderId}`
-          : "Payment on account",
+          ? `${label} against order #${payment.orderId}`
+          : `${label} on account`,
         charge: "0.00",
         payment: payment.amount.toFixed(2),
         href: payment.orderId ? `/orders/${payment.orderId}` : null,
@@ -308,7 +320,9 @@ export async function getStatement(
   for (const [supplierId, row] of bySupplier) {
     const open = opening.get(supplierId) ?? D(0);
     const charged = billed.get(supplierId) ?? D(0);
-    const settled = paid.get(supplierId) ?? D(0);
+    const cash = paid.get(supplierId) ?? D(0);
+    const credit = credited.get(supplierId) ?? D(0);
+    const settled = cash.plus(credit);
     const closing = open.plus(charged).minus(settled);
 
     const sorted = (inPeriodLines.get(supplierId) ?? []).sort((a, b) => {
@@ -331,7 +345,8 @@ export async function getStatement(
 
     row.openingBalance = open.toFixed(2);
     row.billed = charged.toFixed(2);
-    row.paid = settled.toFixed(2);
+    row.paid = cash.toFixed(2);
+    row.credited = credit.toFixed(2);
     row.closingBalance = closing.toFixed(2);
     // The running balance must land exactly on the closing figure. If it does
     // not, a line was dropped, and the statement says so rather than hiding it.
@@ -351,7 +366,8 @@ export async function getStatement(
     (r) =>
       Number(r.openingBalance) !== 0 ||
       Number(r.billed) !== 0 ||
-      Number(r.paid) !== 0,
+      Number(r.paid) !== 0 ||
+      Number(r.credited) !== 0,
   );
 
   const sumOf = (pick: (r: StatementSupplierDTO) => string) =>
@@ -360,16 +376,21 @@ export async function getStatement(
   const totalOpening = sumOf((r) => r.openingBalance);
   const totalBilled = sumOf((r) => r.billed);
   const totalPaid = sumOf((r) => r.paid);
+  const totalCredited = sumOf((r) => r.credited);
   const totalClosing = sumOf((r) => r.closingBalance);
 
   const totals: StatementTotalsDTO = {
     openingBalance: totalOpening.toFixed(2),
     billed: totalBilled.toFixed(2),
     paid: totalPaid.toFixed(2),
+    credited: totalCredited.toFixed(2),
     closingBalance: totalClosing.toFixed(2),
     ties:
-      totalOpening.plus(totalBilled).minus(totalPaid).equals(totalClosing) &&
-      rows.every((r) => r.ties),
+      totalOpening
+        .plus(totalBilled)
+        .minus(totalPaid)
+        .minus(totalCredited)
+        .equals(totalClosing) && rows.every((r) => r.ties),
     aging: Object.fromEntries(
       AGING_BUCKETS.map((b) => [
         b.id,

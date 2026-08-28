@@ -12,6 +12,7 @@ import type {
   PurchaseOrderStatus,
   RecordType,
 } from "./enums";
+import type { SupplierSettlementKind } from "@/constants/supplier";
 
 export interface ClientDTO {
   clientId: number;
@@ -675,8 +676,12 @@ export interface SupplierMoneyDTO {
   // no opening balance to date.
   openingBalanceAsOf: string | null;
   invoiced: string; // total of Received orders
-  paid: string; // total of recorded payments
-  balance: string; // opening plus invoiced minus paid, what is still owed
+  paid: string; // cash paid to the supplier
+  // Settled by credit note rather than cash: goods sent back, a billing error,
+  // a rebate. Reduces the balance exactly as a payment does, and is reported
+  // apart from it because no money moved.
+  credited: string;
+  balance: string; // opening plus invoiced minus everything settled
   inProgress: string; // value of Draft / Placed / Partial orders, not yet owed
   orderCount: number; // Received orders
   openOrderCount: number; // Draft / Placed / Partial
@@ -741,7 +746,10 @@ export interface StatementSupplierDTO {
   supplierName: string;
   openingBalance: string;
   billed: string;
-  paid: string;
+  paid: string; // cash out in the period
+  // Settled by credit note in the period. Comes off the balance exactly as a
+  // payment does, and is reported apart from it because no money moved.
+  credited: string;
   closingBalance: string;
   // False if the running balance across the lines does not land on the closing
   // figure, which would mean a document is missing. Surfaced, never hidden.
@@ -756,6 +764,7 @@ export interface StatementTotalsDTO {
   openingBalance: string;
   billed: string;
   paid: string;
+  credited: string;
   closingBalance: string;
   ties: boolean;
   aging: Record<string, string>;
@@ -781,6 +790,9 @@ export interface SupplierPaymentDTO {
   orderReference: string | null;
   amount: string;
   paidOn: string;
+  // Cash out, or a credit note the supplier issued. See
+  // SUPPLIER_SETTLEMENT_KINDS.
+  kind: SupplierSettlementKind;
   method: string | null;
   reference: string | null;
   notes: string | null;
@@ -845,6 +857,10 @@ export interface PurchaseOrderDTO {
   orderId: number;
   supplierId: number | null;
   supplierName: string | null;
+  // The shelf this sheet is for, from INVENTORY_CATEGORIES. Null on an order
+  // created by hand that covers no single product line, and on every order that
+  // predates the split. See PurchaseOrder.category.
+  category: string | null;
   status: PurchaseOrderStatus;
   reference: string | null;
   orderedOn: string | null;

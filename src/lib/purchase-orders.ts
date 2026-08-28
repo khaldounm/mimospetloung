@@ -129,6 +129,7 @@ export function toPurchaseOrderDTO(
     orderId: o.orderId,
     supplierId: o.supplierId,
     supplierName: o.supplier?.name ?? null,
+    category: o.category,
     status: o.status as PurchaseOrderStatus,
     reference: o.reference,
     orderedOn: toDateOnly(o.orderedOn),
@@ -189,13 +190,30 @@ export interface FutureOrderResult {
   orderId: number;
   supplierId: number | null;
   supplierName: string | null;
+  category: string | null;
   itemsAdded: number;
 }
 
-// Push items into their supplier's open draft, creating that draft on first use.
-// Items with no usual supplier collect in the single null-supplier draft, which
-// is the "No supplier" bucket. Adding an item already on the draft bumps its
-// quantity rather than duplicating the line.
+// Which open draft an item belongs in: its usual supplier AND its shelf. The
+// clinic buys each product line from a different rep at the same company (see
+// SupplierContact.categories), so food and medication from one supplier are two
+// conversations and two sheets. Keying on supplier alone, as this used to,
+// dropped both onto whichever draft happened to be open.
+//
+// Both halves can be null. An item with no usual supplier collects in the "No
+// supplier" bucket as before; an uncategorised item collects in its supplier's
+// uncategorised draft rather than being forced onto a shelf it does not belong
+// to.
+function draftBucketKey(
+  supplierId: number | null,
+  category: string | null,
+): string {
+  return `${supplierId ?? "none"}::${category ?? "none"}`;
+}
+
+// Push items into the open draft for their supplier and shelf, creating that
+// draft on first use. Adding an item already on the draft bumps its quantity
+// rather than duplicating the line.
 //
 // One transaction for the whole basket: a partial push would leave the clinic
 // guessing which half of the selection actually landed.
@@ -204,22 +222,30 @@ export async function addToFutureOrder(
   performedBy: number | null,
 ): Promise<FutureOrderResult[]> {
   return prisma.$transaction(async (tx) => {
-    // Cache the draft per supplier so a basket spanning ten items of the same
-    // supplier does not race itself into ten separate drafts.
-    const draftBySupplier = new Map<number | "none", number>();
+    // Cache the draft per bucket so a basket spanning ten items of the same
+    // supplier and shelf does not race itself into ten separate drafts.
+    const draftByBucket = new Map<string, number>();
     const added = new Map<number, number>();
 
     for (const line of lines) {
       const item = await tx.inventoryItem.findFirst({
         where: { itemId: line.itemId, deletedAt: null },
-        select: { itemId: true, supplierId: true, lastCost: true },
+        select: {
+          itemId: true,
+          supplierId: true,
+          category: true,
+          lastCost: true,
+        },
       });
       if (!item) {
         throw new ApiError(404, `Inventory item ${line.itemId} not found`);
       }
 
-      const key = item.supplierId ?? "none";
-      let orderId = draftBySupplier.get(key);
+      // An empty category string is the same absence as null; normalising here
+      // keeps one bucket for both rather than two that look identical on screen.
+      const category = item.category?.trim() ? item.category : null;
+      const key = draftBucketKey(item.supplierId, category);
+      let orderId = draftByBucket.get(key);
 
       if (orderId === undefined) {
         const existing = await tx.purchaseOrder.findFirst({
@@ -227,6 +253,7 @@ export async function addToFutureOrder(
             deletedAt: null,
             status: "Draft",
             supplierId: item.supplierId,
+            category,
           },
           orderBy: { orderId: "desc" },
           select: { orderId: true },
@@ -235,12 +262,16 @@ export async function addToFutureOrder(
           orderId = existing.orderId;
         } else {
           const created = await tx.purchaseOrder.create({
-            data: { supplierId: item.supplierId, createdBy: performedBy },
+            data: {
+              supplierId: item.supplierId,
+              category,
+              createdBy: performedBy,
+            },
             select: { orderId: true },
           });
           orderId = created.orderId;
         }
-        draftBySupplier.set(key, orderId);
+        draftByBucket.set(key, orderId);
       }
 
       // The unique index on (order_id, item_id) makes this an upsert: a repeat
@@ -269,6 +300,7 @@ export async function addToFutureOrder(
       orderId: o.orderId,
       supplierId: o.supplierId,
       supplierName: o.supplier?.name ?? null,
+      category: o.category,
       itemsAdded: added.get(o.orderId) ?? 0,
     }));
   });

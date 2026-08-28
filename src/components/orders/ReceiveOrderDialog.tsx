@@ -23,6 +23,7 @@ import {
   Typography,
 } from "@mui/material";
 import QrCodeScannerIcon from "@mui/icons-material/QrCodeScanner";
+import AddIcon from "@mui/icons-material/Add";
 import { apiRequest } from "@/utils/api-client";
 import {
   DEFAULT_DISCOUNT_UNIT,
@@ -36,7 +37,12 @@ import { toDateOnly } from "@/utils/format";
 import { toGtin14 } from "@/utils/barcode";
 import { beepAccept, beepReject } from "@/utils/beep";
 import { parseGs1, scannedLookupCode } from "@/utils/gs1";
-import type { PurchaseOrderDTO, PurchaseOrderLineDTO } from "@/types/entities";
+import InventoryItemFormDialog from "@/components/inventory/InventoryItemFormDialog";
+import type {
+  InventoryItemDTO,
+  PurchaseOrderDTO,
+  PurchaseOrderLineDTO,
+} from "@/types/entities";
 
 interface Props {
   open: boolean;
@@ -110,13 +116,29 @@ type FormProps = Omit<Props, "open">;
 
 function ReceiveForm({ order, onClose, onReceived }: FormProps) {
   // Only lines with something still expected can take a delivery.
-  const outstanding = (order.lines ?? []).filter(
+  const orderedLines = (order.lines ?? []).filter(
     (l) => Number(l.quantityOutstanding) > 0,
   );
+  // Lines added from inside this dialog, for goods that turned up without being
+  // ordered. Held here rather than re-seeding the whole form from a refreshed
+  // order: a delivery can be dozens of lines of typing, and remounting to pick
+  // up one new row would throw all of it away.
+  const [addedLines, setAddedLines] = useState<PurchaseOrderLineDTO[]>([]);
+  const [addingItem, setAddingItem] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  // A product just created from inside this dialog, waiting to be told how much
+  // of it turned up. The item form does not ask: it describes what a product IS,
+  // and how many came in this particular carton is not a property of the
+  // product. It matters here because the line is created at that quantity, and
+  // a delivery cannot book more than its line says is outstanding.
+  const [pendingItem, setPendingItem] = useState<InventoryItemDTO | null>(null);
+  const [pendingQty, setPendingQty] = useState("");
+  const [pendingCost, setPendingCost] = useState("");
+  const outstanding = [...orderedLines, ...addedLines];
 
   const [quantities, setQuantities] = useState<Record<number, string>>(() =>
     Object.fromEntries(
-      outstanding.map((l) => {
+      orderedLines.map((l) => {
         const loose =
           l.looseUnit != null &&
           l.looseQty != null &&
@@ -135,7 +157,7 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
   // against the delivery note, so the figure booked is the one invoiced.
   const [costs, setCosts] = useState<Record<number, string>>(() =>
     Object.fromEntries(
-      outstanding.map((l) => {
+      orderedLines.map((l) => {
         // On a loose line the cost is quoted per loose unit, so the stored
         // per-pack figure is divided back down to be edited in the same terms.
         const perUnit =
@@ -171,9 +193,13 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
   const [scan, setScan] = useState("");
   const [scanNote, setScanNote] = useState<string | null>(null);
   // The line a scan last landed on. Kept until the next scan so the eye can
-  // find it again after the table has scrolled, and stamped with the time so
-  // scanning the same carton twice still re-triggers the jump.
+  // find it again after the table has scrolled, and stamped with a sequence
+  // number so scanning the same carton twice still re-triggers the jump.
   const [hit, setHit] = useState<{ lineId: number; at: number } | null>(null);
+  // A counter, not a clock: `at` exists only to make the scroll effect re-run
+  // when the same carton is scanned twice, and a monotonic number does that
+  // without reading the wall clock during a render pass.
+  const scanSeq = useRef(0);
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
 
   // Laid out before the browser paints, and instantly rather than smoothly. A
@@ -273,6 +299,50 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
     );
   }
 
+  // What this line is worth on the delivery: what is being received, at what it
+  // will book at. Both a loose line and a plain one multiply straight through,
+  // because a loose line is keyed and costed in the same loose unit.
+  function valueOf(line: PurchaseOrderLineDTO): number | null {
+    const typed = Number(quantities[line.lineId]);
+    const net = netOf(line);
+    if (!Number.isFinite(typed) || typed <= 0 || net == null) return null;
+    return typed * net;
+  }
+
+  // The delivery against the order, side by side. This is the check whoever is
+  // at the door actually performs: the supplier's invoice in one hand, and what
+  // is about to be booked on the screen. Without it a mistyped cost or a missed
+  // line only shows up later as a supplier balance nobody can explain.
+  //
+  // Order-level discount, delivery and VAT are deliberately absent: they belong
+  // to the whole bill and are set on the order, so adding them to a part
+  // delivery would invent a total the supplier never charged.
+  const totals = entered.reduce(
+    (acc, l) => {
+      const value = valueOf(l);
+      const typed = Number(quantities[l.lineId]);
+      // What the same quantity would have cost at the price the order was
+      // raised at, so the difference is a repricing and never a quantity change.
+      const loose = looseOf(l);
+      const orderedUnit =
+        l.unitCost == null
+          ? null
+          : loose
+            ? Number(l.unitCost) / loose.perUnit
+            : Number(l.unitCost);
+      return {
+        value: acc.value + (value ?? 0),
+        expected:
+          acc.expected +
+          (orderedUnit != null && Number.isFinite(typed)
+            ? typed * orderedUnit
+            : 0),
+      };
+    },
+    { value: 0, expected: 0 },
+  );
+  const totalsDiffer = Math.abs(totals.value - totals.expected) >= 0.01;
+
   const anyMissingCost = outstanding.some(missingCost);
   const anyBadDiscount = outstanding.some(badDiscount);
   // The lot and expiry column only appears when something on this delivery
@@ -336,7 +406,58 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
           : `${target.itemName} matched.`,
     );
     setScan("");
-    setHit({ lineId: target.lineId, at: Date.now() });
+    setHit({ lineId: target.lineId, at: ++scanSeq.current });
+  }
+
+  // A product that turned up without being ordered. It is created through the
+  // ordinary item form, so it gets everything a product needs (its partner, its
+  // expiry handling, how it sells loose) rather than a cut-down version that
+  // would quietly leave those unset. Here it only has to be put on the order.
+  //
+  // The line is seeded at one unit and no cost: what actually arrived and what
+  // it was billed at get typed into the delivery table like any other line.
+  async function addPendingItem() {
+    if (!pendingItem) return;
+    if (!(Number(pendingQty) > 0)) {
+      setAddError("Enter how many arrived.");
+      return;
+    }
+    setAddError(null);
+    try {
+      const res = await apiRequest<{ order: PurchaseOrderDTO }>(
+        `/api/orders/${order.orderId}/lines`,
+        {
+          method: "POST",
+          body: {
+            itemId: pendingItem.itemId,
+            // The line is raised at what arrived. Nobody ordered this, so there
+            // is no earlier figure it could be measured against: what was agreed
+            // and what turned up are the same thing.
+            quantityOrdered: pendingQty,
+            unitCost: pendingCost,
+          },
+        },
+      );
+      const line = (res.order.lines ?? []).find(
+        (l) => l.itemId === pendingItem.itemId,
+      );
+      if (!line) {
+        setAddError(
+          `${pendingItem.name} was created but could not be put on this order. Add it from the order page.`,
+        );
+        return;
+      }
+      setAddedLines((prev) => [...prev, line]);
+      setQuantities((prev) => ({ ...prev, [line.lineId]: pendingQty }));
+      setCosts((prev) => ({ ...prev, [line.lineId]: pendingCost }));
+      setPendingItem(null);
+      setPendingQty("");
+      setPendingCost("");
+    } catch (err) {
+      setAddError(
+        err instanceof Error ? err.message : "Failed to add the item",
+      );
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -400,414 +521,607 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit}>
-      <DialogTitle>Receive delivery</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ mb: 2 }}>
-          Enter what actually turned up, and the cost the supplier invoiced.
-          Anything left short stays outstanding, and you can receive against
-          this order again when the rest arrives.
-        </DialogContentText>
+    <>
+      <form onSubmit={handleSubmit}>
+        <DialogTitle>Receive delivery</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Enter what actually turned up, and the cost the supplier invoiced.
+            Anything left short stays outstanding, and you can receive against
+            this order again when the rest arrives.
+          </DialogContentText>
 
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          )}
 
-        {anyMissingCost && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            Every line arriving needs a unit cost. It becomes the item&apos;s
-            cost price and is what the profit report charges when that stock
-            sells.
-          </Alert>
-        )}
+          {anyMissingCost && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Every line arriving needs a unit cost. It becomes the item&apos;s
+              cost price and is what the profit report charges when that stock
+              sells.
+            </Alert>
+          )}
 
-        {anyBadDiscount && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            A discount is larger than the cost it comes off. Check whether a
-            rate was typed as an amount, or the other way round.
-          </Alert>
-        )}
+          {anyBadDiscount && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              A discount is larger than the cost it comes off. Check whether a
+              rate was typed as an amount, or the other way round.
+            </Alert>
+          )}
 
-        {repriced.length > 0 && (
-          <Alert severity="info" sx={{ mb: 2 }}>
-            {repriced.length === 1
-              ? "One line is priced differently to the order."
-              : `${repriced.length} lines are priced differently to the order.`}{" "}
-            The order total and what this supplier is owed will follow what you
-            enter here.
-          </Alert>
-        )}
+          {repriced.length > 0 && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {repriced.length === 1
+                ? "One line is priced differently to the order."
+                : `${repriced.length} lines are priced differently to the order.`}{" "}
+              The order total and what this supplier is owed will follow what
+              you enter here.
+            </Alert>
+          )}
 
-        <Stack spacing={2}>
-          <TextField
-            label="Scan or search"
-            value={scan}
-            onChange={(e) => {
-              setScan(e.target.value);
-              setScanNote(null);
-            }}
-            onKeyDown={(e) => {
-              // Scanners type the code then send Enter. Intercept it so the
-              // scan resolves the line instead of submitting the delivery.
-              if (e.key === "Enter") {
-                e.preventDefault();
-                applyScan(scan);
+          <Stack spacing={2}>
+            <TextField
+              label="Scan or search"
+              value={scan}
+              onChange={(e) => {
+                setScan(e.target.value);
+                setScanNote(null);
+              }}
+              onKeyDown={(e) => {
+                // Scanners type the code then send Enter. Intercept it so the
+                // scan resolves the line instead of submitting the delivery.
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  applyScan(scan);
+                }
+              }}
+              placeholder="Scan a carton, or type part of an item name"
+              helperText={
+                scanNote ??
+                (anyPerishable
+                  ? "A scan jumps to that line and fills its lot and expiry. Typing narrows the list."
+                  : "A scan jumps to that line. Typing narrows the list.")
               }
-            }}
-            placeholder="Scan a carton, or type part of an item name"
-            helperText={
-              scanNote ??
-              (anyPerishable
-                ? "A scan jumps to that line and fills its lot and expiry. Typing narrows the list."
-                : "A scan jumps to that line. Typing narrows the list.")
-            }
-            autoFocus
-            fullWidth
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <QrCodeScannerIcon />
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
+              autoFocus
+              fullWidth
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <QrCodeScannerIcon />
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
 
-          <TextField
-            label="Delivery date"
-            type="date"
-            size="small"
-            value={receivedOn}
-            onChange={(e) => setReceivedOn(e.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            sx={{ width: 200 }}
-          />
+            <TextField
+              label="Delivery date"
+              type="date"
+              size="small"
+              value={receivedOn}
+              onChange={(e) => setReceivedOn(e.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={{ width: 200 }}
+            />
 
-          {/* A last-resort escape hatch on a narrow screen: the table scrolls
+            {/* A last-resort escape hatch on a narrow screen: the table scrolls
               inside its own box rather than dragging the dialog, the alerts
               and the buttons sideways with it. */}
-          <Box sx={{ overflowX: "auto" }}>
-            <Table
-              size="small"
-              sx={{
-                // Table cells align on their first text baseline, so a row
-                // whose cells are different heights comes out staggered: the
-                // item name and the quantity sit level with the lot field
-                // while the expiry hangs below them. Everything centres on the
-                // row instead.
-                "& .MuiTableCell-root": { verticalAlign: "middle" },
-              }}
-            >
-              <TableHead>
-                <TableRow>
-                  <TableCell>Item</TableCell>
-                  <TableCell align="right">Outstanding</TableCell>
-                  <TableCell align="right">Receiving now</TableCell>
-                  <TableCell align="right">Unit cost</TableCell>
-                  <TableCell align="right">Discount</TableCell>
-                  {anyPerishable && <TableCell>Lot / expiry</TableCell>}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {visible.length === 0 ? (
+            <Box sx={{ overflowX: "auto" }}>
+              <Table
+                size="small"
+                sx={{
+                  // Table cells align on their first text baseline, so a row
+                  // whose cells are different heights comes out staggered: the
+                  // item name and the quantity sit level with the lot field
+                  // while the expiry hangs below them. Everything centres on the
+                  // row instead.
+                  "& .MuiTableCell-root": { verticalAlign: "middle" },
+                }}
+              >
+                <TableHead>
                   <TableRow>
-                    <TableCell colSpan={anyPerishable ? 6 : 5} align="center">
-                      <Typography color="text.secondary" sx={{ py: 2 }}>
-                        {outstanding.length === 0
-                          ? "Everything on this order has already been received."
-                          : "Nothing on this order matches what you typed."}
-                      </Typography>
-                    </TableCell>
+                    <TableCell>Item</TableCell>
+                    <TableCell align="right">Outstanding</TableCell>
+                    <TableCell align="right">Receiving now</TableCell>
+                    <TableCell align="right">Unit cost</TableCell>
+                    <TableCell align="right">Discount</TableCell>
+                    <TableCell align="right">Line total</TableCell>
+                    {anyPerishable && <TableCell>Lot / expiry</TableCell>}
                   </TableRow>
-                ) : (
-                  visible.map((l, index) => {
-                    const loose = looseOf(l);
-                    const perUnit = loose?.perUnit ?? 1;
-                    const suffix = loose ? ` ${loose.unit}` : "";
-                    const net = netOf(l);
-                    const discounted = discountOf(l) > 0;
-                    return (
-                      <TableRow
-                        key={l.lineId}
-                        ref={(el) => {
-                          rowRefs.current[l.lineId] = el;
-                        }}
-                        // Banded, because a delivery is a long column of
-                        // near-identical rows and a quantity has to be carried
-                        // across five columns of inputs without losing the line
-                        // it belongs to. A scanned line is tinted harder than
-                        // the banding so it still reads as picked out on a
-                        // shaded row as well as a plain one. Both are set here
-                        // rather than by a nth-child rule on the table, which
-                        // would outrank the row's own colour and swallow it.
-                        sx={{
-                          backgroundColor:
-                            hit?.lineId === l.lineId
-                              ? "action.selected"
-                              : index % 2 === 1
-                                ? "action.hover"
-                                : undefined,
-                        }}
-                      >
-                        <TableCell sx={{ minWidth: 160 }}>
-                          <DeliveryCell
-                            align="flex-start"
-                            caption={
-                              loose ? `ordered by the ${loose.unit}` : undefined
-                            }
-                          >
-                            <Box>
-                              {l.itemName}
-                              {l.unit && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                >
-                                  {` (${l.unit})`}
-                                </Typography>
-                              )}
-                            </Box>
-                          </DeliveryCell>
-                        </TableCell>
-                        {/* Ordered, already in and outstanding were three
+                </TableHead>
+                <TableBody>
+                  {visible.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={anyPerishable ? 7 : 6} align="center">
+                        <Typography color="text.secondary" sx={{ py: 2 }}>
+                          {outstanding.length === 0
+                            ? "Everything on this order has already been received."
+                            : "Nothing on this order matches what you typed."}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    visible.map((l, index) => {
+                      const loose = looseOf(l);
+                      const perUnit = loose?.perUnit ?? 1;
+                      const suffix = loose ? ` ${loose.unit}` : "";
+                      const net = netOf(l);
+                      const discounted = discountOf(l) > 0;
+                      const lineValue = valueOf(l);
+                      return (
+                        <TableRow
+                          key={l.lineId}
+                          ref={(el) => {
+                            rowRefs.current[l.lineId] = el;
+                          }}
+                          // Banded, because a delivery is a long column of
+                          // near-identical rows and a quantity has to be carried
+                          // across five columns of inputs without losing the line
+                          // it belongs to. A scanned line is tinted harder than
+                          // the banding so it still reads as picked out on a
+                          // shaded row as well as a plain one. Both are set here
+                          // rather than by a nth-child rule on the table, which
+                          // would outrank the row's own colour and swallow it.
+                          sx={{
+                            backgroundColor:
+                              hit?.lineId === l.lineId
+                                ? "action.selected"
+                                : index % 2 === 1
+                                  ? "action.hover"
+                                  : undefined,
+                          }}
+                        >
+                          <TableCell sx={{ minWidth: 160 }}>
+                            <DeliveryCell
+                              align="flex-start"
+                              caption={
+                                loose
+                                  ? `ordered by the ${loose.unit}`
+                                  : undefined
+                              }
+                            >
+                              <Box>
+                                {l.itemName}
+                                {l.unit && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                  >
+                                    {` (${l.unit})`}
+                                  </Typography>
+                                )}
+                              </Box>
+                            </DeliveryCell>
+                          </TableCell>
+                          {/* Ordered, already in and outstanding were three
                             columns of the same fact: on a first delivery two of
                             them are the ordered quantity and a zero. Outstanding
                             is the one that governs what can be booked, so it
                             leads, and the other two sit under it as context. */}
-                        <TableCell align="right">
-                          <DeliveryCell
-                            caption={
-                              Number(l.quantityReceived) > 0
-                                ? `of ${Number(l.quantityOrdered) * perUnit}, ${Number(l.quantityReceived) * perUnit} in`
-                                : `of ${Number(l.quantityOrdered) * perUnit} ordered`
-                            }
-                          >
-                            <Typography variant="body2">
-                              {`${Number(l.quantityOutstanding) * perUnit}${suffix}`}
-                            </Typography>
-                          </DeliveryCell>
-                        </TableCell>
-                        <TableCell align="right">
-                          <DeliveryCell>
-                            <TextField
-                              type="number"
-                              size="small"
-                              value={quantities[l.lineId] ?? ""}
-                              onChange={(e) =>
-                                setQuantities((prev) => ({
-                                  ...prev,
-                                  [l.lineId]: e.target.value,
-                                }))
+                          <TableCell align="right">
+                            <DeliveryCell
+                              caption={
+                                Number(l.quantityReceived) > 0
+                                  ? `of ${Number(l.quantityOrdered) * perUnit}, ${Number(l.quantityReceived) * perUnit} in`
+                                  : `of ${Number(l.quantityOrdered) * perUnit} ordered`
                               }
-                              slotProps={{
-                                htmlInput: {
-                                  min: 0,
-                                  max: Number(l.quantityOutstanding) * perUnit,
-                                  step: "0.001",
-                                  "aria-label": `Receiving now for ${l.itemName}`,
-                                },
-                              }}
-                              sx={{ width: 110 }}
-                            />
-                          </DeliveryCell>
-                        </TableCell>
-                        <TableCell align="right">
-                          <DeliveryCell
-                            caption={loose ? `per ${loose.unit}` : undefined}
-                          >
-                            <TextField
-                              type="number"
-                              size="small"
-                              value={costs[l.lineId] ?? ""}
-                              onChange={(e) =>
-                                setCosts((prev) => ({
-                                  ...prev,
-                                  [l.lineId]: e.target.value,
-                                }))
-                              }
-                              error={missingCost(l)}
-                              placeholder="0.00"
-                              slotProps={{
-                                htmlInput: {
-                                  min: 0,
-                                  step: "0.01",
-                                  "aria-label": `Unit cost for ${l.itemName}`,
-                                },
-                              }}
-                              sx={{ width: 110 }}
-                            />
-                          </DeliveryCell>
-                        </TableCell>
-                        {/* The net used to be a column of its own, which on an
-                            undiscounted line simply repeated the unit cost next
-                            to it. It belongs under the field that moves it. */}
-                        <TableCell align="right">
-                          <DeliveryCell
-                            caption={
-                              <Typography
-                                variant="caption"
-                                color={
-                                  discounted ? "text.primary" : "text.secondary"
-                                }
-                                sx={{
-                                  fontWeight: discounted ? 700 : 400,
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {net == null || missingCost(l)
-                                  ? "net -"
-                                  : `net ${formatMoney(net)}${loose ? ` per ${loose.unit}` : ""}`}
+                            >
+                              <Typography variant="body2">
+                                {`${Number(l.quantityOutstanding) * perUnit}${suffix}`}
                               </Typography>
-                            }
-                          >
-                            <Stack direction="row" spacing={1}>
+                            </DeliveryCell>
+                          </TableCell>
+                          <TableCell align="right">
+                            <DeliveryCell>
                               <TextField
                                 type="number"
                                 size="small"
-                                value={discounts[l.lineId] ?? ""}
+                                value={quantities[l.lineId] ?? ""}
                                 onChange={(e) =>
-                                  setDiscounts((prev) => ({
+                                  setQuantities((prev) => ({
                                     ...prev,
                                     [l.lineId]: e.target.value,
                                   }))
                                 }
-                                error={badDiscount(l)}
-                                placeholder="0"
+                                slotProps={{
+                                  htmlInput: {
+                                    min: 0,
+                                    max:
+                                      Number(l.quantityOutstanding) * perUnit,
+                                    step: "0.001",
+                                    "aria-label": `Receiving now for ${l.itemName}`,
+                                  },
+                                }}
+                                sx={{ width: 110 }}
+                              />
+                            </DeliveryCell>
+                          </TableCell>
+                          <TableCell align="right">
+                            <DeliveryCell
+                              caption={loose ? `per ${loose.unit}` : undefined}
+                            >
+                              <TextField
+                                type="number"
+                                size="small"
+                                value={costs[l.lineId] ?? ""}
+                                onChange={(e) =>
+                                  setCosts((prev) => ({
+                                    ...prev,
+                                    [l.lineId]: e.target.value,
+                                  }))
+                                }
+                                error={missingCost(l)}
+                                placeholder="0.00"
                                 slotProps={{
                                   htmlInput: {
                                     min: 0,
                                     step: "0.01",
-                                    "aria-label": `Discount for ${l.itemName}`,
+                                    "aria-label": `Unit cost for ${l.itemName}`,
                                   },
                                 }}
-                                sx={{ width: 80 }}
+                                sx={{ width: 110 }}
                               />
-                              <ToggleButtonGroup
-                                exclusive
-                                size="small"
-                                value={unitOf(l)}
-                                onChange={(_, next: DiscountUnit | null) =>
-                                  next &&
-                                  setDiscountUnits((prev) => ({
-                                    ...prev,
-                                    [l.lineId]: next,
-                                  }))
-                                }
-                                aria-label={`Discount unit for ${l.itemName}`}
-                              >
-                                {DISCOUNT_UNITS.map((u) => (
-                                  <ToggleButton
-                                    key={u}
-                                    value={u}
-                                    sx={{ px: 1.25 }}
-                                    aria-label={
-                                      u === "percent" ? "percent" : "amount"
-                                    }
-                                  >
-                                    {u === "percent" ? "%" : CURRENCY.symbol}
-                                  </ToggleButton>
-                                ))}
-                              </ToggleButtonGroup>
-                            </Stack>
-                          </DeliveryCell>
-                        </TableCell>
-                        {anyPerishable && (
-                          <TableCell>
-                            <DeliveryCell align="flex-start">
-                              {l.tracksExpiry ? (
-                                // Stacked rather than side by side: two fields on
-                                // one row cost 260px of table width, which is what
-                                // pushed the last column off the dialog.
-                                <Stack spacing={0.5} sx={{ width: 150 }}>
-                                  <TextField
-                                    size="small"
-                                    placeholder="Lot"
-                                    value={lots[l.lineId] ?? ""}
-                                    onChange={(e) =>
-                                      setLots((prev) => ({
-                                        ...prev,
-                                        [l.lineId]: e.target.value,
-                                      }))
-                                    }
-                                    slotProps={{
-                                      htmlInput: {
-                                        "aria-label": `Lot number for ${l.itemName}`,
-                                      },
-                                    }}
-                                  />
-                                  <TextField
-                                    size="small"
-                                    type="date"
-                                    value={expiries[l.lineId] ?? ""}
-                                    onChange={(e) =>
-                                      setExpiries((prev) => ({
-                                        ...prev,
-                                        [l.lineId]: e.target.value,
-                                      }))
-                                    }
-                                    slotProps={{
-                                      inputLabel: { shrink: true },
-                                      htmlInput: {
-                                        "aria-label": `Expiry date for ${l.itemName}`,
-                                      },
-                                    }}
-                                  />
-                                </Stack>
-                              ) : (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                >
-                                  not perishable
-                                </Typography>
-                              )}
                             </DeliveryCell>
                           </TableCell>
-                        )}
-                      </TableRow>
-                    );
-                  })
+                          {/* The net used to be a column of its own, which on an
+                            undiscounted line simply repeated the unit cost next
+                            to it. It belongs under the field that moves it. */}
+                          <TableCell align="right">
+                            <DeliveryCell
+                              caption={
+                                <Typography
+                                  variant="caption"
+                                  color={
+                                    discounted
+                                      ? "text.primary"
+                                      : "text.secondary"
+                                  }
+                                  sx={{
+                                    fontWeight: discounted ? 700 : 400,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {net == null || missingCost(l)
+                                    ? "net -"
+                                    : `net ${formatMoney(net)}${loose ? ` per ${loose.unit}` : ""}`}
+                                </Typography>
+                              }
+                            >
+                              <Stack direction="row" spacing={1}>
+                                <TextField
+                                  type="number"
+                                  size="small"
+                                  value={discounts[l.lineId] ?? ""}
+                                  onChange={(e) =>
+                                    setDiscounts((prev) => ({
+                                      ...prev,
+                                      [l.lineId]: e.target.value,
+                                    }))
+                                  }
+                                  error={badDiscount(l)}
+                                  placeholder="0"
+                                  slotProps={{
+                                    htmlInput: {
+                                      min: 0,
+                                      step: "0.01",
+                                      "aria-label": `Discount for ${l.itemName}`,
+                                    },
+                                  }}
+                                  sx={{ width: 80 }}
+                                />
+                                <ToggleButtonGroup
+                                  exclusive
+                                  size="small"
+                                  value={unitOf(l)}
+                                  onChange={(_, next: DiscountUnit | null) =>
+                                    next &&
+                                    setDiscountUnits((prev) => ({
+                                      ...prev,
+                                      [l.lineId]: next,
+                                    }))
+                                  }
+                                  aria-label={`Discount unit for ${l.itemName}`}
+                                >
+                                  {DISCOUNT_UNITS.map((u) => (
+                                    <ToggleButton
+                                      key={u}
+                                      value={u}
+                                      sx={{ px: 1.25 }}
+                                      aria-label={
+                                        u === "percent" ? "percent" : "amount"
+                                      }
+                                    >
+                                      {u === "percent" ? "%" : CURRENCY.symbol}
+                                    </ToggleButton>
+                                  ))}
+                                </ToggleButtonGroup>
+                              </Stack>
+                            </DeliveryCell>
+                          </TableCell>
+                          <TableCell align="right">
+                            <DeliveryCell
+                              caption={
+                                lineValue != null && Number(l.unitCost) > 0
+                                  ? `order ${formatMoney(
+                                      Number(quantities[l.lineId]) *
+                                        (loose
+                                          ? Number(l.unitCost) / loose.perUnit
+                                          : Number(l.unitCost)),
+                                    )}`
+                                  : undefined
+                              }
+                            >
+                              <Typography
+                                variant="body2"
+                                sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
+                              >
+                                {lineValue == null
+                                  ? "-"
+                                  : formatMoney(lineValue)}
+                              </Typography>
+                            </DeliveryCell>
+                          </TableCell>
+                          {anyPerishable && (
+                            <TableCell>
+                              <DeliveryCell align="flex-start">
+                                {l.tracksExpiry ? (
+                                  // Stacked rather than side by side: two fields on
+                                  // one row cost 260px of table width, which is what
+                                  // pushed the last column off the dialog.
+                                  <Stack spacing={0.5} sx={{ width: 150 }}>
+                                    <TextField
+                                      size="small"
+                                      placeholder="Lot"
+                                      value={lots[l.lineId] ?? ""}
+                                      onChange={(e) =>
+                                        setLots((prev) => ({
+                                          ...prev,
+                                          [l.lineId]: e.target.value,
+                                        }))
+                                      }
+                                      slotProps={{
+                                        htmlInput: {
+                                          "aria-label": `Lot number for ${l.itemName}`,
+                                        },
+                                      }}
+                                    />
+                                    <TextField
+                                      size="small"
+                                      type="date"
+                                      value={expiries[l.lineId] ?? ""}
+                                      onChange={(e) =>
+                                        setExpiries((prev) => ({
+                                          ...prev,
+                                          [l.lineId]: e.target.value,
+                                        }))
+                                      }
+                                      slotProps={{
+                                        inputLabel: { shrink: true },
+                                        htmlInput: {
+                                          "aria-label": `Expiry date for ${l.itemName}`,
+                                        },
+                                      }}
+                                    />
+                                  </Stack>
+                                ) : (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                  >
+                                    not perishable
+                                  </Typography>
+                                )}
+                              </DeliveryCell>
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </Box>
+
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={2}
+              sx={{
+                p: 2,
+                borderRadius: 1,
+                border: 1,
+                borderColor: "divider",
+                alignItems: { sm: "center" },
+                justifyContent: "space-between",
+              }}
+            >
+              <Stack direction="row" spacing={3} sx={{ flexWrap: "wrap" }}>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Lines arriving
+                  </Typography>
+                  <Typography variant="h6">
+                    {entered.length} of {outstanding.length}
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">
+                    Goods on this delivery
+                  </Typography>
+                  <Typography variant="h6">
+                    {formatMoney(totals.value)}
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.secondary">
+                    At the order&apos;s costs
+                  </Typography>
+                  <Typography variant="h6" color="text.secondary">
+                    {formatMoney(totals.expected)}
+                  </Typography>
+                </Box>
+                {totalsDiffer && (
+                  <Box>
+                    <Typography variant="caption" color="text.secondary">
+                      Difference
+                    </Typography>
+                    <Typography
+                      variant="h6"
+                      color={
+                        totals.value > totals.expected
+                          ? "error.main"
+                          : "success.main"
+                      }
+                    >
+                      {totals.value > totals.expected ? "+" : ""}
+                      {formatMoney(totals.value - totals.expected)}
+                    </Typography>
+                  </Box>
                 )}
-              </TableBody>
-            </Table>
-          </Box>
+              </Stack>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ maxWidth: 320 }}
+              >
+                Goods only. Any discount, delivery charge or VAT the supplier
+                puts on the whole bill is set on the order, not here.
+              </Typography>
+            </Stack>
 
-          {hiddenCount > 0 && (
-            <Alert severity="info">
-              Showing {visible.length} of {outstanding.length} lines. Receiving
-              still books every line that has a quantity, not only the ones on
-              screen.
-            </Alert>
-          )}
+            {pendingItem ? (
+              <Box
+                sx={{
+                  p: 2,
+                  border: 1,
+                  borderColor: "primary.main",
+                  borderRadius: 1,
+                }}
+              >
+                <Typography sx={{ fontWeight: 600 }}>
+                  {pendingItem.name}
+                </Typography>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mb: 2 }}
+                >
+                  Added to the catalogue. How much of it turned up?
+                </Typography>
+                {addError && (
+                  <Alert severity="error" sx={{ mb: 2 }}>
+                    {addError}
+                  </Alert>
+                )}
+                <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap" }}>
+                  <TextField
+                    label="Quantity"
+                    type="number"
+                    size="small"
+                    value={pendingQty}
+                    onChange={(e) => setPendingQty(e.target.value)}
+                    slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
+                    sx={{ width: 130 }}
+                    autoFocus
+                  />
+                  <TextField
+                    label="Unit cost"
+                    type="number"
+                    size="small"
+                    value={pendingCost}
+                    onChange={(e) => setPendingCost(e.target.value)}
+                    slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
+                    sx={{ width: 140 }}
+                  />
+                  <Button
+                    onClick={() => {
+                      setPendingItem(null);
+                      setAddError(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="contained"
+                    onClick={() => void addPendingItem()}
+                  >
+                    Put on this delivery
+                  </Button>
+                </Stack>
+              </Box>
+            ) : (
+              <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
+                <Button
+                  variant="outlined"
+                  startIcon={<AddIcon />}
+                  onClick={() => setAddingItem(true)}
+                >
+                  Item not on this order
+                </Button>
+                {addError && <Alert severity="error">{addError}</Alert>}
+              </Stack>
+            )}
 
-          {partial && entered.length > 0 && (
-            <Alert severity="info">
-              This is a part delivery. The order stays open at Partial with the
-              shortfall still outstanding.
-            </Alert>
-          )}
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} disabled={saving}>
-          Cancel
-        </Button>
-        <Button
-          type="submit"
-          variant="contained"
-          disabled={
-            saving ||
-            outstanding.length === 0 ||
-            anyMissingCost ||
-            anyBadDiscount
-          }
-        >
-          {saving ? "Receiving…" : "Receive"}
-        </Button>
-      </DialogActions>
-    </form>
+            {hiddenCount > 0 && (
+              <Alert severity="info">
+                Showing {visible.length} of {outstanding.length} lines.
+                Receiving still books every line that has a quantity, not only
+                the ones on screen.
+              </Alert>
+            )}
+
+            {partial && entered.length > 0 && (
+              <Alert severity="info">
+                This is a part delivery. The order stays open at Partial with
+                the shortfall still outstanding.
+              </Alert>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="contained"
+            disabled={
+              saving ||
+              outstanding.length === 0 ||
+              anyMissingCost ||
+              anyBadDiscount
+            }
+          >
+            {saving ? "Receiving…" : "Receive"}
+          </Button>
+        </DialogActions>
+      </form>
+
+      {/* Outside the delivery form, never inside it. The item dialog carries a
+          <form> of its own, and React propagates events up the component tree
+          rather than the DOM tree, so a portalled form nested in this one has
+          its Save submit the delivery as well: saving the product would book
+          the whole receipt. */}
+      <InventoryItemFormDialog
+        open={addingItem}
+        canViewSuppliers
+        canCreateSuppliers={false}
+        defaults={{ category: order.category, supplierId: order.supplierId }}
+        // The delivery about to be booked is what puts the stock on the shelf.
+        // Offering an opening stock here as well would count the same carton
+        // twice, once at creation and again on receipt.
+        allowOpeningStock={false}
+        onClose={() => setAddingItem(false)}
+        onSaved={(created) => {
+          setPendingItem(created);
+          setPendingCost(created.lastCost ?? "");
+          setAddError(null);
+        }}
+      />
+    </>
   );
 }

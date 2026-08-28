@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { ApiError } from "@/lib/api";
 import { orderInclude, toPurchaseOrderDTO } from "@/lib/purchase-orders";
 import { toDateOnly } from "@/utils/format";
 import type {
@@ -9,7 +10,11 @@ import type {
   SupplierMoneyDTO,
   SupplierPaymentDTO,
 } from "@/types/entities";
-import type { SupplierContactInput } from "@/schemas/supplier";
+import type {
+  SupplierContactInput,
+  SupplierCreditInput,
+} from "@/schemas/supplier";
+import type { SupplierSettlementKind } from "@/constants/supplier";
 
 const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
 
@@ -113,6 +118,9 @@ export function toSupplierPaymentDTO(p: PaymentRow): SupplierPaymentDTO {
       : null,
     amount: p.amount.toFixed(2),
     paidOn: toDateOnly(p.paidOn) ?? "",
+    kind: (p.kind === "Credit"
+      ? "Credit"
+      : "Payment") as SupplierSettlementKind,
     method: p.method,
     reference: p.reference,
     notes: p.notes,
@@ -247,7 +255,7 @@ type BalanceOrderRow = Prisma.PurchaseOrderGetPayload<{
 // "in credit" when an opening balance of 937.53 means 617.68 is owed.
 function toMoneyDTO(
   orders: BalanceOrderRow[],
-  paid: Prisma.Decimal,
+  settled: { paid: Prisma.Decimal; credited: Prisma.Decimal },
   opening: Prisma.Decimal,
   openingAsOf: Date | null,
 ): SupplierMoneyDTO {
@@ -268,12 +276,19 @@ function toMoneyDTO(
     // Cancelled orders are neither: nothing was delivered and nothing is owed.
   }
 
+  // Both kinds settle the account, so both come off the balance. They are
+  // reported apart because only one of them was money: a credit note reduces
+  // what is owed without anything leaving the bank, and adding it to "paid"
+  // would have the clinic believe it spent what the supplier wrote off.
+  const settledTotal = settled.paid.plus(settled.credited);
+
   return {
     openingBalance: opening.toFixed(2),
     openingBalanceAsOf: openingAsOf ? toDateOnly(openingAsOf) : null,
     invoiced: invoiced.toFixed(2),
-    paid: paid.toFixed(2),
-    balance: opening.plus(invoiced).minus(paid).toFixed(2),
+    paid: settled.paid.toFixed(2),
+    credited: settled.credited.toFixed(2),
+    balance: opening.plus(invoiced).minus(settledTotal).toFixed(2),
     inProgress: inProgress.toFixed(2),
     orderCount,
     openOrderCount,
@@ -302,7 +317,7 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
         select: balanceOrderSelect,
       }),
       prisma.supplierPayment.groupBy({
-        by: ["supplierId"],
+        by: ["supplierId", "kind"],
         where: { deletedAt: null },
         _sum: { amount: true },
       }),
@@ -313,9 +328,20 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
     ]);
 
   const itemMap = new Map(itemGroups.map((g) => [g.supplierId, g._count._all]));
-  const paidMap = new Map(
-    paidGroups.map((g) => [g.supplierId, g._sum.amount ?? D(0)]),
-  );
+  const settledMap = new Map<
+    number,
+    { paid: Prisma.Decimal; credited: Prisma.Decimal }
+  >();
+  for (const g of paidGroups) {
+    const current = settledMap.get(g.supplierId) ?? {
+      paid: D(0),
+      credited: D(0),
+    };
+    const amount = g._sum.amount ?? D(0);
+    if (g.kind === "Credit") current.credited = current.credited.plus(amount);
+    else current.paid = current.paid.plus(amount);
+    settledMap.set(g.supplierId, current);
+  }
   // At most one per supplier, so the last write wins harmlessly.
   const openingMap = new Map(openingGroups.map((g) => [g.supplierId, g]));
 
@@ -332,7 +358,7 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
       itemCount: itemMap.get(s.supplierId) ?? 0,
       money: toMoneyDTO(
         ordersBySupplier.get(s.supplierId) ?? [],
-        paidMap.get(s.supplierId) ?? D(0),
+        settledMap.get(s.supplierId) ?? { paid: D(0), credited: D(0) },
         openingMap.get(s.supplierId)?.amount ?? D(0),
         openingMap.get(s.supplierId)?.asOfDate ?? null,
       ),
@@ -365,7 +391,8 @@ export async function getSupplier(
       where: { supplierId, deletedAt: null },
       select: balanceOrderSelect,
     }),
-    prisma.supplierPayment.aggregate({
+    prisma.supplierPayment.groupBy({
+      by: ["kind"],
       _sum: { amount: true },
       where: { supplierId, deletedAt: null },
     }),
@@ -380,7 +407,10 @@ export async function getSupplier(
     itemCount,
     money: toMoneyDTO(
       orders,
-      paidAgg._sum.amount ?? D(0),
+      {
+        paid: paidAgg.find((g) => g.kind !== "Credit")?._sum.amount ?? D(0),
+        credited: paidAgg.find((g) => g.kind === "Credit")?._sum.amount ?? D(0),
+      },
       openingAgg?.amount ?? D(0),
       openingAgg?.asOfDate ?? null,
     ),
@@ -444,4 +474,82 @@ export async function getPayableOrders(
     orderBy: [{ receivedOn: "desc" }, { orderId: "desc" }],
   });
   return orders.map((o) => toPurchaseOrderDTO(o));
+}
+
+// ---- Credit notes ----
+
+// Records one credit note and spreads it across the account in a single
+// transaction. The clinic is handed a note for a lump sum and decides at the
+// counter where it goes: some against a specific bill, whatever is left over
+// against the account.
+//
+// Each allocation is stored as its own settlement row, sharing the note's number
+// in `reference`. That is what makes the statement read correctly: a credit that
+// settled two bills genuinely is two entries on the account, and forcing it into
+// one row would leave neither bill showing as settled.
+//
+// One transaction, because a half-applied credit note is worse than none: the
+// balance would be right in total while pointing at the wrong orders.
+export async function recordSupplierCredit(
+  supplierId: number,
+  data: SupplierCreditInput,
+  performedBy: number | null,
+): Promise<number[]> {
+  return prisma.$transaction(async (tx) => {
+    const supplier = await tx.supplier.findFirst({
+      where: { supplierId, deletedAt: null },
+      select: { supplierId: true },
+    });
+    if (!supplier) throw new ApiError(404, "Supplier not found");
+
+    // Every named order has to be this supplier's and actually billed, or the
+    // credit would settle a bill that does not exist yet, or one on another
+    // account. Checked in one query rather than per allocation.
+    const orderIds = data.allocations
+      .map((a) => a.orderId)
+      .filter((id): id is number => id != null);
+    if (orderIds.length > 0) {
+      const orders = await tx.purchaseOrder.findMany({
+        where: { orderId: { in: orderIds }, supplierId, deletedAt: null },
+        select: { orderId: true, status: true },
+      });
+      const byId = new Map(orders.map((o) => [o.orderId, o]));
+      for (const orderId of orderIds) {
+        const order = byId.get(orderId);
+        if (!order) {
+          throw new ApiError(
+            404,
+            `Order #${orderId} does not belong to this supplier`,
+          );
+        }
+        if (order.status !== INVOICED_STATUS) {
+          throw new ApiError(
+            409,
+            `Order #${orderId} is ${order.status.toLowerCase()}, so there is nothing to credit against it yet. Put that part against the account instead.`,
+          );
+        }
+      }
+    }
+
+    const created: number[] = [];
+    for (const allocation of data.allocations) {
+      const row = await tx.supplierPayment.create({
+        data: {
+          supplierId,
+          orderId: allocation.orderId ?? null,
+          amount: allocation.amount,
+          paidOn: data.paidOn,
+          kind: "Credit",
+          // The document number, repeated on every part of it. This is what ties
+          // the rows back together as one note on the statement.
+          reference: data.reference,
+          notes: data.notes,
+          createdBy: performedBy,
+        },
+        select: { paymentId: true },
+      });
+      created.push(row.paymentId);
+    }
+    return created;
+  });
 }
