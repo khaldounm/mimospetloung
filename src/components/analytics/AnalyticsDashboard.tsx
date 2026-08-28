@@ -17,6 +17,12 @@ import type { AnalyticsDTO } from "@/types/entities";
 // show current state. Profitability needs costs:read, Purchases needs
 // orders:read.
 //
+// Inventory is half snapshot and half flow: stock levels are a position, while
+// the top-sellers and the per-item lookup are range-scoped and share the
+// section's own date picker. They live here rather than in a section of their
+// own because "what sold" and "what is left" are the same question asked twice,
+// and the client reads them together.
+//
 // Category performance follows Revenue because it splits the same billed figure
 // by business line and compares it against an earlier window. It reports billed
 // revenue, never collected: cash settles an invoice, not a line, so it cannot be
@@ -46,7 +52,11 @@ export default function AnalyticsDashboard({ data }: { data: AnalyticsDTO }) {
         initialRange={data.defaultRange}
       />
       <ClientsSection data={data.clients} />
-      <InventorySection data={data.inventory} />
+      <InventorySection
+        data={data.inventory}
+        initialItems={data.items}
+        initialRange={data.defaultRange}
+      />
       <BookingsSection
         initial={data.bookings}
         initialRange={data.defaultRange}

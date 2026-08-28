@@ -15,7 +15,9 @@ import {
   AD_HOC_LABEL,
   CATEGORY_GROUPS,
   GROOMING_SERVICE_CATEGORY,
+  ITEM_SEARCH_LIMIT,
   NON_TRADE_SERVICE_CATEGORIES,
+  TOP_ITEMS_LIMIT,
   UNCATEGORISED_LABEL,
   type CategoryGroupKey,
 } from "@/constants/analytics";
@@ -30,6 +32,10 @@ import type {
   CategoryTrendRow,
   ClientsAnalytics,
   InventoryAnalytics,
+  ItemPerformanceDetail,
+  ItemPerformanceRow,
+  ItemSearchResult,
+  ItemsAnalytics,
   NamedCount,
   NamedValue,
   ProfitAnalytics,
@@ -621,6 +627,303 @@ async function getCategoriesSection(
   };
 }
 
+// ---- per-item performance ----
+
+// Invoices whose lines count as trade, over the given window. Shared by every
+// query in this part of the file so the leaderboard, the detail view and the
+// search can never disagree about which sales exist.
+function tradedInvoiceFilter(from: Date, toExclusive: Date) {
+  return {
+    status: { in: REVENUE_STATUSES },
+    issuedAt: { gte: from, lt: toExclusive },
+  };
+}
+
+// The running totals for one item, before they are rounded into a row.
+interface ItemTally {
+  unitsSold: number;
+  unitsReturned: number;
+  grossRevenue: number;
+  refunded: number;
+  saleLines: number;
+  returnLines: number;
+}
+
+function emptyTally(): ItemTally {
+  return {
+    unitsSold: 0,
+    unitsReturned: 0,
+    grossRevenue: 0,
+    refunded: 0,
+    saleLines: 0,
+    returnLines: 0,
+  };
+}
+
+// Fold one invoice line into a tally. The sign of the quantity is the whole
+// classification: a return is stored as a negative quantity against a positive
+// unit price, so both sides are flipped back to positive figures here and the
+// caller never has to remember which way round they were.
+function addLine(
+  tally: ItemTally,
+  quantity: number,
+  lineTotal: number,
+  lineCount = 1,
+): void {
+  if (quantity < 0) {
+    tally.unitsReturned += -quantity;
+    tally.refunded += -lineTotal;
+    tally.returnLines += lineCount;
+  } else {
+    tally.unitsSold += quantity;
+    tally.grossRevenue += lineTotal;
+    tally.saleLines += lineCount;
+  }
+}
+
+// Turn a tally into the reported row. Quantities keep three decimals because
+// stock is decimal (a part-pack sells as 0.25 of a bag); money keeps two.
+function toItemRow(
+  identity: {
+    itemId: number;
+    name: string;
+    category: string | null;
+    unit: string | null;
+    barcode: string | null;
+  },
+  tally: ItemTally,
+): ItemPerformanceRow {
+  const round3 = (n: number) => Math.round(n * 1000) / 1000;
+  return {
+    ...identity,
+    unitsSold: round3(tally.unitsSold),
+    unitsReturned: round3(tally.unitsReturned),
+    netUnits: round3(tally.unitsSold - tally.unitsReturned),
+    grossRevenue: round2(tally.grossRevenue),
+    refunded: round2(tally.refunded),
+    netRevenue: round2(tally.grossRevenue - tally.refunded),
+    saleLines: tally.saleLines,
+    returnLines: tally.returnLines,
+    // Nothing sold means there is no base to take a percentage of. Null says so
+    // rather than printing a 0% that would read as "nothing came back".
+    returnRate:
+      tally.unitsSold > 0
+        ? round2((tally.unitsReturned / tally.unitsSold) * 100)
+        : null,
+  };
+}
+
+// The leaderboard: the best-selling stock items over the window, ranked on net
+// units, i.e. after what came back. Ranking on gross would put an item that
+// sold forty and had thirty returned above one that quietly sold thirty-five.
+//
+// Stock items only. Services have no barcode and no stock position, so they
+// belong to the category section rather than here.
+async function getItemsSection(range: AnalyticsRange): Promise<ItemsAnalytics> {
+  const { from, toExclusive } = rangeBounds(range);
+
+  // Two grouped passes rather than one, split on the sign of the quantity, so
+  // sold and returned stay separate figures instead of a single net sum that
+  // could not be taken apart again.
+  const [sold, returned] = await Promise.all(
+    [{ gt: 0 }, { lt: 0 }].map((quantity) =>
+      prisma.invoiceLineItem.groupBy({
+        by: ["itemId"],
+        where: {
+          itemId: { not: null },
+          quantity,
+          invoice: tradedInvoiceFilter(from, toExclusive),
+        },
+        _sum: { quantity: true, lineTotal: true },
+        _count: { _all: true },
+      }),
+    ),
+  );
+
+  const tallies = new Map<number, ItemTally>();
+  for (const group of [...sold, ...returned]) {
+    if (group.itemId == null) continue;
+    const tally = tallies.get(group.itemId) ?? emptyTally();
+    addLine(
+      tally,
+      group._sum.quantity?.toNumber() ?? 0,
+      group._sum.lineTotal?.toNumber() ?? 0,
+      group._count._all,
+    );
+    tallies.set(group.itemId, tally);
+  }
+
+  const ranked = [...tallies.entries()]
+    .sort((a, b) => {
+      const netA = a[1].unitsSold - a[1].unitsReturned;
+      const netB = b[1].unitsSold - b[1].unitsReturned;
+      // Units first, then money as the tie-break: two items that each moved ten
+      // units are not equally worth knowing about.
+      if (netB !== netA) return netB - netA;
+      return (
+        b[1].grossRevenue - b[1].refunded - (a[1].grossRevenue - a[1].refunded)
+      );
+    })
+    .slice(0, TOP_ITEMS_LIMIT);
+
+  const items = await prisma.inventoryItem.findMany({
+    where: { itemId: { in: ranked.map(([itemId]) => itemId) } },
+    select: {
+      itemId: true,
+      name: true,
+      category: true,
+      unit: true,
+      barcode: true,
+    },
+  });
+  const byId = new Map(items.map((i) => [i.itemId, i]));
+
+  return {
+    topSold: ranked.map(([itemId, tally]) =>
+      toItemRow(
+        byId.get(itemId) ?? {
+          itemId,
+          // A deleted item still sold, so it keeps its place on the board under
+          // an honest placeholder rather than dropping out of the totals.
+          name: `Item #${itemId}`,
+          category: null,
+          unit: null,
+          barcode: null,
+        },
+        tally,
+      ),
+    ),
+  };
+}
+
+// Everything one item did over the window, for the detail view under the
+// search. Reads the lines themselves rather than grouped sums: the trend, the
+// distinct-invoice count and the last sale all need the individual rows, and a
+// single item's lines are a small set even over a long range.
+export async function getItemPerformance(
+  itemId: number,
+  range: AnalyticsRange,
+): Promise<ItemPerformanceDetail | null> {
+  const { from, toExclusive, granularity, buckets } = prepare(range);
+
+  const [item, lines] = await Promise.all([
+    prisma.inventoryItem.findUnique({
+      where: { itemId },
+      select: {
+        itemId: true,
+        name: true,
+        category: true,
+        unit: true,
+        barcode: true,
+        currentStock: true,
+        salePrice: true,
+      },
+    }),
+    prisma.invoiceLineItem.findMany({
+      where: { itemId, invoice: tradedInvoiceFilter(from, toExclusive) },
+      select: {
+        quantity: true,
+        lineTotal: true,
+        invoiceId: true,
+        invoice: { select: { issuedAt: true, clientId: true } },
+      },
+    }),
+  ]);
+  // Soft-deleted items are still reported: they sold, and hiding the history of
+  // a discontinued line is how a report starts disagreeing with the invoices.
+  if (!item) return null;
+
+  const tally = emptyTally();
+  const soldMap = zeroMap(buckets);
+  const returnedMap = zeroMap(buckets);
+  const revenueMap = zeroMap(buckets);
+  const invoiceIds = new Set<number>();
+  const clientIds = new Set<number>();
+  let lastSoldAt: Date | null = null;
+
+  for (const line of lines) {
+    const quantity = line.quantity.toNumber();
+    const lineTotal = line.lineTotal.toNumber();
+    addLine(tally, quantity, lineTotal);
+    invoiceIds.add(line.invoiceId);
+    if (line.invoice.clientId != null) clientIds.add(line.invoice.clientId);
+
+    const issuedAt = line.invoice.issuedAt;
+    if (!issuedAt) continue;
+    const key = bucketKeyOf(issuedAt, granularity);
+    if (quantity < 0) addTo(returnedMap, key, -quantity);
+    else {
+      addTo(soldMap, key, quantity);
+      // Only a sale sets the last-sold date. A refund is the opposite of the
+      // thing being asked about.
+      if (!lastSoldAt || issuedAt > lastSoldAt) lastSoldAt = issuedAt;
+    }
+    // Revenue is net per bucket, so a refund shows up in the period it was
+    // given, which is the period whose cash it actually changed.
+    addTo(revenueMap, key, lineTotal);
+  }
+
+  const row = toItemRow(item, tally);
+
+  return {
+    ...row,
+    currentStock: item.currentStock.toNumber(),
+    salePrice: item.salePrice?.toNumber() ?? null,
+    invoiceCount: invoiceIds.size,
+    clientCount: clientIds.size,
+    lastSoldAt: lastSoldAt ? (lastSoldAt as Date).toISOString() : null,
+    // What a unit actually fetched, after returns and after whatever discount
+    // was typed at the counter. Undefined when the returns cancel the sales out.
+    avgUnitPrice:
+      row.netUnits !== 0 ? round2(row.netRevenue / row.netUnits) : null,
+    trend: buckets.map((b) => ({
+      label: b.label,
+      sold: Math.round((soldMap.get(b.key) ?? 0) * 1000) / 1000,
+      returned: Math.round((returnedMap.get(b.key) ?? 0) * 1000) / 1000,
+      revenue: round2(revenueMap.get(b.key) ?? 0),
+    })),
+  };
+}
+
+// Predictive search behind the item picker, matching on name, category and
+// barcode. Alternate codes are searched too (see InventoryBarcode): a carton
+// scanned at the counter carries the case code, not the item's primary one, so
+// a search that only looked at the primary column would fail on exactly the
+// codes someone is most likely to scan into the box.
+export async function searchAnalyticsItems(
+  query: string,
+): Promise<ItemSearchResult[]> {
+  const q = query.trim();
+  const select = {
+    itemId: true,
+    name: true,
+    category: true,
+    barcode: true,
+    unit: true,
+  };
+
+  const items = await prisma.inventoryItem.findMany({
+    where: {
+      deletedAt: null,
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: "insensitive" as const } },
+              { category: { contains: q, mode: "insensitive" as const } },
+              { barcode: { contains: q, mode: "insensitive" as const } },
+              { barcodes: { some: { gtin: { contains: q } } } },
+            ],
+          }
+        : {}),
+    },
+    select,
+    orderBy: [{ name: "asc" }, { itemId: "asc" }],
+    take: ITEM_SEARCH_LIMIT,
+  });
+
+  return items;
+}
+
 // ---- snapshot sections (not time-boxed) ----
 
 async function getClientsSnapshot(): Promise<ClientsAnalytics> {
@@ -688,44 +991,38 @@ async function getClientsSnapshot(): Promise<ClientsAnalytics> {
   };
 }
 
+// Stock as it stands right now: levels, valuation and warnings, none of which
+// are a flow and so none of which take a date range. What sold is a flow, and
+// lives in the items section instead, off the invoice lines rather than off
+// stock movements so returns net out of it.
 async function getInventorySnapshot(): Promise<InventoryAnalytics> {
   const today = startOfToday();
   const in30Days = new Date(today.getTime() + 30 * DAY_MS);
-  const ninetyDaysAgo = new Date(today.getTime() - 90 * DAY_MS);
 
-  const [items, soldGroups] = await Promise.all([
-    prisma.inventoryItem.findMany({
-      where: { deletedAt: null },
-      select: {
-        itemId: true,
-        name: true,
-        currentStock: true,
-        reorderLevel: true,
-        unit: true,
-        salePrice: true,
-        lastCost: true,
-        partnerId: true,
-        expiryDate: true,
-        tracksExpiry: true,
-        // Soonest dated batch still on the shelf. For a tracked item this is
-        // the expiry that matters; the column above only speaks for items that
-        // are not batched.
-        batches: {
-          where: { quantity: { gt: 0 }, expiryDate: { not: null } },
-          orderBy: { expiryDate: "asc" },
-          take: 1,
-          select: { expiryDate: true },
-        },
+  const items = await prisma.inventoryItem.findMany({
+    where: { deletedAt: null },
+    select: {
+      itemId: true,
+      name: true,
+      currentStock: true,
+      reorderLevel: true,
+      unit: true,
+      salePrice: true,
+      lastCost: true,
+      partnerId: true,
+      expiryDate: true,
+      tracksExpiry: true,
+      // Soonest dated batch still on the shelf. For a tracked item this is the
+      // expiry that matters; the column above only speaks for items that are
+      // not batched.
+      batches: {
+        where: { quantity: { gt: 0 }, expiryDate: { not: null } },
+        orderBy: { expiryDate: "asc" },
+        take: 1,
+        select: { expiryDate: true },
       },
-    }),
-    prisma.inventoryTransaction.groupBy({
-      by: ["itemId"],
-      where: { type: "Sold", performedAt: { gte: ninetyDaysAgo } },
-      _sum: { quantity: true },
-      orderBy: { _sum: { quantity: "asc" } },
-      take: 8,
-    }),
-  ]);
+    },
+  });
 
   let stockValuation = 0;
   let lowStockCount = 0;
@@ -777,18 +1074,6 @@ async function getInventorySnapshot(): Promise<InventoryAnalytics> {
     .slice(0, 10)
     .map((it) => ({ itemId: it.itemId, name: it.name, unit: it.unit }));
 
-  const itemIds = soldGroups.map((g) => g.itemId);
-  const soldItems = await prisma.inventoryItem.findMany({
-    where: { itemId: { in: itemIds } },
-    select: { itemId: true, name: true },
-  });
-  const itemNames = new Map(soldItems.map((i) => [i.itemId, i.name]));
-  const topConsumed = soldGroups.map((g) => ({
-    label: itemNames.get(g.itemId) ?? `Item #${g.itemId}`,
-    // Sold movements are stored as negative quantities; flip to a positive count.
-    value: Math.abs(g._sum.quantity?.toNumber() ?? 0),
-  }));
-
   return {
     totalItems: items.length,
     stockValuation: round2(stockValuation),
@@ -797,7 +1082,6 @@ async function getInventorySnapshot(): Promise<InventoryAnalytics> {
     expiringSoonCount,
     lowStockItems,
     outOfStockItems,
-    topConsumed,
   };
 }
 
@@ -975,6 +1259,7 @@ export function getAnalyticsSection(
   | PurchasesAnalytics
   | BookingsAnalytics
   | CategoriesAnalytics
+  | ItemsAnalytics
 > {
   switch (section) {
     case "revenue":
@@ -987,6 +1272,8 @@ export function getAnalyticsSection(
       return getBookingsSection(range);
     case "categories":
       return getCategoriesSection(range);
+    case "items":
+      return getItemsSection(range);
   }
 }
 
@@ -998,16 +1285,25 @@ export async function getAnalytics(
 ): Promise<AnalyticsDTO> {
   const range = defaultRange();
 
-  const [revenue, bookings, categories, clients, inventory, profit, purchases] =
-    await Promise.all([
-      getRevenueSection(range),
-      getBookingsSection(range),
-      getCategoriesSection(range),
-      getClientsSnapshot(),
-      getInventorySnapshot(),
-      options.includeProfit ? getProfitSection(range) : null,
-      options.includePurchases ? getPurchasesSection(range) : null,
-    ]);
+  const [
+    revenue,
+    bookings,
+    categories,
+    items,
+    clients,
+    inventory,
+    profit,
+    purchases,
+  ] = await Promise.all([
+    getRevenueSection(range),
+    getBookingsSection(range),
+    getCategoriesSection(range),
+    getItemsSection(range),
+    getClientsSnapshot(),
+    getInventorySnapshot(),
+    options.includeProfit ? getProfitSection(range) : null,
+    options.includePurchases ? getPurchasesSection(range) : null,
+  ]);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1017,6 +1313,7 @@ export async function getAnalytics(
     inventory,
     bookings,
     categories,
+    items,
     profit,
     purchases,
   };

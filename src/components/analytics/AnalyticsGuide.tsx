@@ -215,6 +215,27 @@ export default function AnalyticsGuide() {
               <Term label="Expiring (30d)">
                 Items whose expiry date falls within the next 30 days.
               </Term>
+              <Term label="Top 10 items sold">
+                The ten products that moved the most units over the dates picked
+                at the top of this section, ranked after returns rather than
+                before them. It reads the invoices, so a refunded sale takes
+                itself back off the board.
+              </Term>
+              <Term label="Item performance">
+                Type a name or scan a barcode to see one product on its own:
+                what it sold, what came back, what it billed, and what is left
+                on the shelf.
+              </Term>
+              <Term label="Net billed">
+                Billed on sales minus refunded on returns. Billed, not
+                collected: a payment settles a whole invoice, so it cannot be
+                split per product.
+              </Term>
+              <Term label="Average price per unit">
+                What a unit actually fetched over the period, after returns and
+                after any discount typed at the counter. It will not always
+                match the current list price.
+              </Term>
             </Section>
 
             <Section title="Bookings & operations">

@@ -119,3 +119,11 @@ export function todayForDateInput(): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+// Stock quantities are decimal (a part-pack sells as 0.25 of a bag), but almost
+// everything moves in whole units, so trailing zeros are dropped rather than
+// printing "12.000" on every row.
+export function formatQty(value: number, unit?: string | null): string {
+  const text = String(Math.round(value * 1000) / 1000);
+  return unit ? `${text} ${unit}` : text;
+}

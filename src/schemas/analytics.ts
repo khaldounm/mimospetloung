@@ -8,6 +8,7 @@ export const ANALYTICS_SECTIONS = [
   "purchases",
   "bookings",
   "categories",
+  "items",
 ] as const;
 export type AnalyticsSection = (typeof ANALYTICS_SECTIONS)[number];
 
@@ -29,3 +30,27 @@ export const analyticsSectionQuerySchema = z
   });
 
 export type AnalyticsSectionQuery = z.infer<typeof analyticsSectionQuerySchema>;
+
+// Validates the per-item performance lookup: which item, over which range. The
+// range is the same shape the sections use, so the detail view and the
+// leaderboard above it always speak about the same window.
+export const itemPerformanceQuerySchema = z
+  .object({
+    itemId: z.coerce.number().int().positive(),
+    from: dateString,
+    to: dateString,
+  })
+  .refine((d) => d.from <= d.to, {
+    message: "from must be on or before to",
+    path: ["from"],
+  });
+
+export type ItemPerformanceQuery = z.infer<typeof itemPerformanceQuerySchema>;
+
+// Validates the predictive item search. An empty query is allowed and returns a
+// starting page, so opening the picker shows something rather than a blank box.
+export const itemSearchQuerySchema = z.object({
+  q: z.string().trim().max(100).optional(),
+});
+
+export type ItemSearchQuery = z.infer<typeof itemSearchQuerySchema>;

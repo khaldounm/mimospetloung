@@ -470,7 +470,6 @@ export interface InventoryAnalytics {
     name: string;
     unit: string | null;
   }[];
-  topConsumed: NamedValue[]; // most-sold items by quantity, last 90 days
 }
 
 export interface BookingsAnalytics {
@@ -561,6 +560,68 @@ export interface CategoriesAnalytics {
   yoy: CategoryComparison; // against the same dates one year earlier
 }
 
+// ── Per-item performance ──────────────────────────────────
+//
+// How one stock item actually traded over a window, read off the invoice lines
+// rather than off stock movements: a line is what the customer was charged, and
+// it is the only place a return carries the money back as well as the units.
+//
+// Sold and returned are kept as separate positive figures instead of one net
+// number, because "sold 40, gave 12 back" and "sold 28" are the same net and
+// very different items. A return line carries a negative quantity (see
+// InvoiceLineItem.returnedFromLineId), so the split is simply the sign.
+//
+// Billed, never collected: a payment settles an invoice, not a line, so cash
+// cannot be attributed to an item. Same rule as the category section.
+export interface ItemPerformanceRow {
+  itemId: number;
+  name: string;
+  category: string | null;
+  unit: string | null;
+  barcode: string | null;
+  unitsSold: number; // units on positive lines, in stocking units
+  unitsReturned: number; // units given back, as a positive figure
+  netUnits: number; // unitsSold - unitsReturned
+  grossRevenue: number; // billed on positive lines
+  refunded: number; // credited back on return lines, as a positive figure
+  netRevenue: number; // grossRevenue - refunded
+  saleLines: number; // positive lines, i.e. how many times it was sold
+  returnLines: number;
+  // Returned units as a percentage of units sold, or null when nothing sold in
+  // the window and there is no base to divide by.
+  returnRate: number | null;
+}
+
+// One item's row plus everything the detail view adds: where it stands now, and
+// how it traded across the window.
+export interface ItemPerformanceDetail extends ItemPerformanceRow {
+  currentStock: number;
+  salePrice: number | null;
+  invoiceCount: number; // distinct invoices it appeared on
+  clientCount: number; // distinct clients who bought it
+  lastSoldAt: string | null; // issue date of the most recent sale in the window
+  avgUnitPrice: number | null; // netRevenue / netUnits, null when netUnits is 0
+  trend: { label: string; sold: number; returned: number; revenue: number }[];
+}
+
+// A predictive-search hit for the item picker. Deliberately thin: the search
+// runs on every keystroke, and the performance figures only get computed once
+// an item is actually chosen.
+export interface ItemSearchResult {
+  itemId: number;
+  name: string;
+  category: string | null;
+  barcode: string | null;
+  unit: string | null;
+}
+
+// The leaderboard card inside the Inventory section. A specific item is looked
+// up on demand through its own endpoint, so opening Inventory never pays for a
+// search nobody asked for.
+export interface ItemsAnalytics {
+  topSold: ItemPerformanceRow[];
+}
+
 export interface AnalyticsDTO {
   generatedAt: string;
   // The range the boxable sections were initially computed for (the default);
@@ -571,6 +632,7 @@ export interface AnalyticsDTO {
   inventory: InventoryAnalytics;
   bookings: BookingsAnalytics;
   categories: CategoriesAnalytics;
+  items: ItemsAnalytics;
   // Only populated for users allowed to see costs (costs:read). Net-profit
   // figures combine revenue with running costs, which are admin-only.
   profit?: ProfitAnalytics | null;

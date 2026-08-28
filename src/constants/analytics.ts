@@ -31,3 +31,14 @@ export const CATEGORY_GROUPS = [
 ] as const;
 
 export type CategoryGroupKey = (typeof CATEGORY_GROUPS)[number]["key"];
+
+// ---- By-item performance ----
+
+// How many items the leaderboard shows when the section is opened. Ten is what
+// the counter asked for: enough to see the movers, short enough to read without
+// scrolling.
+export const TOP_ITEMS_LIMIT = 10;
+
+// Cap on the predictive item search. The picker is a keyboard search, not a
+// browse: past a couple of dozen hits the answer is "type more", not "scroll".
+export const ITEM_SEARCH_LIMIT = 20;

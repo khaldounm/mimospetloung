@@ -1,7 +1,12 @@
 "use client";
 
 import { Box, Stack, Typography } from "@mui/material";
+import { useAnalyticsSection } from "@/hooks/useAnalyticsSection";
+import { formatQty } from "@/utils/format";
+import { rangeSummary } from "@/utils/date-range";
+import DateRangeControl from "@/components/ui/DateRangeControl";
 import AnalyticsSection from "./AnalyticsSection";
+import ItemLookupCard from "./ItemLookupCard";
 import {
   ChartCard,
   ChartGrid,
@@ -10,17 +15,52 @@ import {
   KpiGrid,
   money,
 } from "./AnalyticsPrimitives";
-import type { InventoryAnalytics } from "@/types/entities";
+import type {
+  AnalyticsRange,
+  InventoryAnalytics,
+  ItemsAnalytics,
+} from "@/types/entities";
 
-// Inventory figures are point-in-time stock levels, so this section is a current
-// snapshot. "Most-sold" is the one flow metric and stays a rolling 90-day view.
+// Stock and the products that move it, in one place.
+//
+// The KPIs and the two warning lists are a snapshot: a stock level is a position,
+// not a flow, so no date range can apply to them. The two sales cards are the
+// opposite, and they share one range picked at the top of the section rather
+// than the fixed 90-day window this used to hardcode.
+//
+// Those sales figures come off the invoice lines, not off stock movements. A
+// movement only knows that stock left the shelf; a line knows what was charged
+// and, when the goods come back, carries the money back too. Reading the lines
+// is what lets a return net out of the item's figures instead of showing up as
+// a second sale.
 export default function InventorySection({
   data,
+  initialItems,
+  initialRange,
 }: {
   data: InventoryAnalytics;
+  initialItems: ItemsAnalytics;
+  initialRange: AnalyticsRange;
 }) {
+  const {
+    range,
+    data: items,
+    loading,
+    setRange,
+  } = useAnalyticsSection<ItemsAnalytics>("items", initialItems, initialRange);
+
+  const topSold = items.topSold.map((row) => ({
+    label: row.name,
+    value: row.netUnits,
+  }));
+
   return (
-    <AnalyticsSection title="Inventory" subtitle="Current snapshot">
+    <AnalyticsSection
+      title="Inventory"
+      subtitle={`Stock now, sales ${rangeSummary(range).toLowerCase()}`}
+      loading={loading}
+      controls={<DateRangeControl range={range} onChange={setRange} />}
+    >
       <KpiGrid>
         <KpiCard label="Total items" value={String(data.totalItems)} />
         <KpiCard label="Stock value" value={money(data.stockValuation)} />
@@ -32,20 +72,18 @@ export default function InventorySection({
         />
       </KpiGrid>
       <ChartGrid>
-        <ChartCard title="Most-sold items (90 days)">
-          {data.topConsumed.length > 0 ? (
-            <HorizontalBars
-              items={data.topConsumed}
-              formatter={(v) => String(v)}
-            />
+        <ChartCard title="Top 10 items sold">
+          {topSold.length > 0 ? (
+            <HorizontalBars items={topSold} formatter={(v) => formatQty(v)} />
           ) : (
             <Box sx={{ py: 2 }}>
               <Typography variant="body2" color="text.secondary">
-                No sales recorded in the last 90 days.
+                Nothing sold in these dates.
               </Typography>
             </Box>
           )}
         </ChartCard>
+        <ItemLookupCard range={range} />
         <ChartCard title="Low-stock items">
           {data.lowStockItems.length > 0 ? (
             <Stack spacing={1} sx={{ py: 1 }}>
