@@ -217,9 +217,14 @@ export default function InvoicesTable({
         />
       </TableContainer>
 
+      {/* Reading a day back is invoices:read, which every role that reaches
+          this page already has. Filing the count is invoices:write: the same
+          grant that lets someone take money at the counter lets them account
+          for what left it. */}
       <RegisterCloseDialog
         open={registerOpen}
         onClose={() => setRegisterOpen(false)}
+        canClose={canWrite}
       />
 
       <InvoiceFormDialog

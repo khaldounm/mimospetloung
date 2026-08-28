@@ -84,6 +84,7 @@ export async function PATCH(
                   ? { unitPrice: data.unitPrice }
                   : {}),
               }),
+          ...(data.isHidden !== undefined ? { isHidden: data.isHidden } : {}),
         },
       });
       await recomputeInvoiceTotals(tx, invoiceId);

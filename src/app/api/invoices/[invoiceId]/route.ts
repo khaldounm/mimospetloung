@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, requirePermission } from "@/lib/api";
 import {
+  discountPatch,
   invoiceInclude,
   issueInvoice,
   recomputeInvoiceTotals,
@@ -121,14 +122,16 @@ export async function PATCH(
             ? { bookingId: data.bookingId }
             : {}),
           ...(data.dueDate !== undefined ? { dueDate: data.dueDate } : {}),
-          ...(data.discountPct !== undefined
-            ? { discountPct: data.discountPct }
-            : {}),
+          ...discountPatch(data),
           ...(data.taxPct !== undefined ? { taxPct: data.taxPct } : {}),
+          ...(data.adjustment !== undefined
+            ? { adjustment: data.adjustment }
+            : {}),
           ...(data.notes !== undefined ? { notes: data.notes } : {}),
         },
       });
-      // Discount/tax changes shift the snapshot even with the same lines.
+      // Discount, tax and adjustment changes shift the snapshot even with the
+      // same lines.
       await recomputeInvoiceTotals(tx, invoiceId);
       return tx.invoice.findUnique({
         where: { invoiceId },

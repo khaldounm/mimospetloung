@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Chip,
   InputAdornment,
+  List,
+  ListItemButton,
+  ListItemText,
   Paper,
   Stack,
   TextField,
@@ -13,12 +16,19 @@ import {
 } from "@mui/material";
 import QrCodeScannerIcon from "@mui/icons-material/QrCodeScanner";
 import { useInvoiceScanner } from "@/hooks/useInvoiceScanner";
+import { formatMoney } from "@/utils/format";
+import {
+  buildLineSearchIndex,
+  searchLines,
+  type LineSearchResult,
+} from "@/utils/line-search";
 import type { InvoiceDTO } from "@/types/entities";
-import type { ItemLineOption } from "./LineItemDialog";
+import type { ItemLineOption, ServiceLineOption } from "./LineItemDialog";
 
 interface Props {
   invoiceId: number;
   itemOptions: ItemLineOption[];
+  serviceOptions: ServiceLineOption[];
   onInvoiceUpdated: (invoice: InvoiceDTO) => void;
 }
 
@@ -36,6 +46,38 @@ const SCANNER_QUIET_MS = 90;
 // six characters this fast and no real barcode is shorter, so this separates a
 // scanner from a person without ever cutting someone off mid-entry.
 const MIN_AUTO_SUBMIT_LENGTH = 6;
+
+// Shortest thing worth searching on. One character matches most of a catalogue
+// and tells the counter nothing.
+const MIN_SEARCH_LENGTH = 2;
+
+// A screenful. Enough that the right answer is nearly always visible, few
+// enough that it is read rather than scrolled.
+const MAX_SUGGESTIONS = 8;
+
+// A quantity typed before the product, the same "6*" prefix a scan takes.
+const MULTIPLIER = /^(\d{1,4})\s*\*\s*(.*)$/;
+
+// What is being typed: a barcode, or a product name.
+//
+// A barcode is all digits and arrives at machine speed; a name has letters in
+// it. Splitting on that means the search list never appears mid-scan, and a
+// scanner burst is never mistaken for someone looking something up. A buffer
+// that is still all digits stays a barcode, because that is what it will be
+// nine times out of ten.
+function looksLikeSearch(text: string): boolean {
+  const body = MULTIPLIER.exec(text)?.[2] ?? text;
+  return body.trim().length >= MIN_SEARCH_LENGTH && /\D/.test(body);
+}
+
+// The quantity prefix and the rest, for a buffer being searched on.
+function splitQuery(text: string): { quantity: number; query: string } {
+  const parts = MULTIPLIER.exec(text);
+  return {
+    quantity: parts ? Number(parts[1]) : 1,
+    query: parts ? (parts[2] ?? "").trim() : text.trim(),
+  };
+}
 
 // True when the keystroke should be left alone because the user is typing
 // somewhere real: another field, or anything inside an open dialog.
@@ -55,12 +97,32 @@ function typingElsewhere(): boolean {
 export default function ScanBar({
   invoiceId,
   itemOptions,
+  serviceOptions,
   onInvoiceUpdated,
 }: Props) {
   const [value, setValue] = useState("");
+  // Which suggestion the arrow keys are on. -1 means none, and Enter then falls
+  // through to the barcode path, so a scan can never be hijacked by a list that
+  // happens to be open.
+  const [highlight, setHighlight] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { submit, pending, feedback, unmatched, dismissUnmatched } =
+  const { submit, add, pending, feedback, unmatched, dismissUnmatched } =
     useInvoiceScanner(invoiceId, itemOptions, onInvoiceUpdated);
+
+  // Built once from the options the page already shipped. No request is made
+  // while typing, which is the point: a search endpoint called per keystroke
+  // puts a round trip between the counter and every character.
+  const index = useMemo(
+    () => buildLineSearchIndex(itemOptions, serviceOptions),
+    [itemOptions, serviceOptions],
+  );
+
+  const searching = looksLikeSearch(value);
+  const { quantity: searchQuantity, query } = splitQuery(value);
+  const suggestions = useMemo(
+    () => (searching ? searchLines(index, query, MAX_SUGGESTIONS) : []),
+    [searching, index, query],
+  );
 
   // Timing of the keystrokes making up the current buffer, used to tell a
   // scanner burst from someone typing. See the auto-submit note below.
@@ -69,13 +131,30 @@ export default function ScanBar({
   const bufferLength = useRef(0);
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function fire(code: string) {
+  function reset() {
     if (autoTimer.current) clearTimeout(autoTimer.current);
     autoTimer.current = null;
     fastRun.current = 0;
     bufferLength.current = 0;
-    submit(code);
     setValue("");
+    setHighlight(-1);
+  }
+
+  function fire(code: string) {
+    reset();
+    submit(code);
+  }
+
+  function pick(result: LineSearchResult) {
+    // An item with no sale price cannot go on an invoice. It is shown greyed
+    // rather than left out, so the answer to "why is it not in the list" is on
+    // screen, and picking it does nothing.
+    if (!result.selectable) return;
+    reset();
+    add(
+      { kind: result.kind, id: result.id, name: result.name },
+      searchQuantity,
+    );
   }
 
   // Most scanners are configured to send Enter after the code, but not all
@@ -140,15 +219,41 @@ export default function ScanBar({
           value={value}
           onChange={(e) => handleChange(e.target.value)}
           onKeyDown={(e) => {
+            // Arrow keys walk the search list. They only do anything while one
+            // is open, so a scan is never affected.
+            if (suggestions.length > 0 && e.key === "ArrowDown") {
+              e.preventDefault();
+              setHighlight((h) => (h + 1) % suggestions.length);
+              return;
+            }
+            if (suggestions.length > 0 && e.key === "ArrowUp") {
+              e.preventDefault();
+              setHighlight((h) => (h <= 0 ? suggestions.length : h) - 1);
+              return;
+            }
+            if (e.key === "Escape") {
+              setHighlight(-1);
+              return;
+            }
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            // Enter adds the highlighted suggestion, but ONLY once the counter
+            // has moved onto one with the arrow keys. Left alone, Enter still
+            // means "this is a barcode", so a scanner that sends Enter after
+            // the code can never be answered with whatever the list was
+            // showing at the time.
+            const chosen = suggestions[highlight];
+            if (chosen) {
+              pick(chosen);
+              return;
+            }
             // A scanner that does send Enter is taken at its word, without
             // waiting out the quiet period. The field is cleared straight away
             // rather than after the request, so the next scan is never typed on
             // top of the last one.
-            if (e.key !== "Enter") return;
-            e.preventDefault();
             fire(value);
           }}
-          placeholder="Scan items"
+          placeholder="Scan, or type a product or service"
           autoFocus
           fullWidth
           slotProps={{
@@ -161,8 +266,58 @@ export default function ScanBar({
               ),
             },
           }}
-          helperText="Scan one after another, no need to click or press Enter. Scanning the same product again adds one more. For a quantity, type 6* then scan."
+          helperText="Scan one after another, no need to click or press Enter. Or type a name to find a service or an item with no barcode. For a quantity, type 6* first."
         />
+
+        {/* Matches from the catalogue the page already has, so nothing is
+            fetched while typing. Only ever open for something typed by hand:
+            a scanner burst is all digits and never reaches here. */}
+        {suggestions.length > 0 && (
+          <Paper variant="outlined" sx={{ maxHeight: 320, overflowY: "auto" }}>
+            <List dense disablePadding>
+              {suggestions.map((r, i) => (
+                <ListItemButton
+                  key={`${r.kind}-${r.id}`}
+                  selected={i === highlight}
+                  disabled={!r.selectable}
+                  onMouseEnter={() => setHighlight(i)}
+                  onClick={() => pick(r)}
+                >
+                  <ListItemText
+                    primary={
+                      searchQuantity === 1
+                        ? r.name
+                        : `${r.name} x${searchQuantity}`
+                    }
+                    secondary={r.detail}
+                  />
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{ alignItems: "center" }}
+                  >
+                    {r.price != null && (
+                      <Typography variant="body2">
+                        {formatMoney(r.price)}
+                      </Typography>
+                    )}
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={r.kind === "service" ? "Service" : "Item"}
+                    />
+                  </Stack>
+                </ListItemButton>
+              ))}
+            </List>
+          </Paper>
+        )}
+
+        {searching && suggestions.length === 0 && (
+          <Typography variant="body2" color="text.secondary">
+            Nothing matches &ldquo;{query}&rdquo;.
+          </Typography>
+        )}
 
         {feedback && (
           <Alert

@@ -88,8 +88,11 @@ export async function listReturnable(
     include: {
       client: { select: { firstName: true, lastName: true } },
       lineItems: {
-        // Only a sale can be given back. A return line is already a giving-back.
-        where: { quantity: { gt: 0 } },
+        // Only a sale can be given back. A return line is already a
+        // giving-back, and a hidden line was consumed in the clinic: the
+        // customer never took it, never paid for it, and has nothing to bring
+        // back. Offering one would credit money that was never charged.
+        where: { quantity: { gt: 0 }, isHidden: false },
         orderBy: { lineItemId: "asc" },
         include: {
           item: { select: { tracksExpiry: true } },
@@ -246,6 +249,16 @@ export async function addReturnLines(
         throw new ApiError(
           409,
           `"${source.description}" is itself a return and cannot be returned again.`,
+        );
+      }
+      // The dialog never offers a hidden line, but the id arrives in the
+      // request body and this is the transaction that would credit money for
+      // it. A hidden line was used in the clinic: the customer never took it
+      // and was never charged, so there is nothing to give back.
+      if (source.isHidden) {
+        throw new ApiError(
+          409,
+          `"${source.description}" was used in the clinic rather than sold, so there is nothing to return.`,
         );
       }
       // Crediting one account for another's purchase is a real and expensive

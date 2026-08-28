@@ -23,6 +23,12 @@ export interface ScanFeedback {
 
 interface Scanner {
   submit: (raw: string) => void;
+  // Add a line the counter picked out of the search list rather than scanned.
+  // Goes through the same queue as a scan so the two cannot race.
+  add: (
+    pick: { kind: "item" | "service"; id: number; name: string },
+    quantity: number,
+  ) => void;
   pending: PendingScan[];
   feedback: ScanFeedback | null;
   unmatched: string[];
@@ -35,7 +41,8 @@ interface Scanner {
 // asterisk never appears in a GTIN, which makes the split unambiguous.
 const MULTIPLIER = /^(\d{1,4})\s*\*\s*(.+)$/;
 
-// Drives scan-to-line entry on a draft invoice.
+// Drives scan-to-line entry on a draft invoice, and the search-by-name entry
+// that sits beside it.
 //
 // Requests are chained rather than fired in parallel: every response carries
 // the whole recomputed invoice, so two in flight at once would race and the
@@ -104,9 +111,56 @@ export function useInvoiceScanner(
       .catch(() => undefined);
   }
 
+  // A product picked by name. Scanning cannot reach a service at all, and a
+  // good part of the catalogue has no barcode on the box, so this is the same
+  // action arriving a different way: it queues behind whatever is in flight,
+  // shows the same chip, and makes the same noise.
+  function add(
+    pick: { kind: "item" | "service"; id: number; name: string },
+    quantity: number,
+  ): void {
+    const id = ++nextId.current;
+    setPending((p) => [...p, { id, label: pick.name, quantity }]);
+
+    chain.current = chain.current
+      .then(async () => {
+        try {
+          const data = await apiRequest<{ invoice: InvoiceDTO }>(
+            `/api/invoices/${invoiceId}/line-items`,
+            {
+              method: "POST",
+              body: {
+                serviceId: pick.kind === "service" ? String(pick.id) : "",
+                itemId: pick.kind === "item" ? String(pick.id) : "",
+                quantity,
+              },
+            },
+          );
+          onInvoiceUpdated(data.invoice);
+          beepAccept();
+          setFeedback({
+            kind: "accepted",
+            message: quantity === 1 ? pick.name : `${pick.name} x${quantity}`,
+            at: Date.now(),
+          });
+        } catch (err) {
+          beepReject();
+          setFeedback({
+            kind: "rejected",
+            message:
+              err instanceof Error ? err.message : "That line did not go on",
+            at: Date.now(),
+          });
+        } finally {
+          setPending((p) => p.filter((s) => s.id !== id));
+        }
+      })
+      .catch(() => undefined);
+  }
+
   function dismissUnmatched(code: string): void {
     setUnmatched((u) => u.filter((c) => c !== code));
   }
 
-  return { submit, pending, feedback, unmatched, dismissUnmatched };
+  return { submit, add, pending, feedback, unmatched, dismissUnmatched };
 }

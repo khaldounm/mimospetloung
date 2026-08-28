@@ -37,6 +37,7 @@ import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
 import AssignmentReturnIcon from "@mui/icons-material/AssignmentReturn";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { apiRequest } from "@/utils/api-client";
 import { formatLineQuantity } from "@/utils/inventory";
 import {
@@ -69,9 +70,15 @@ interface Props {
   // LBP per 1 USD. The invoice's own frozen rate once issued, the current
   // clinic setting while it is still a draft.
   fxRate: number;
-  // The client's whole-account balance, which spans every invoice they have,
-  // not just this one. Null for a walk-in.
-  clientBalance: string | null;
+}
+
+// How the discount is described depends on how it was typed. A flat discount
+// shown as a percentage reads as a rounding error, and the reverse hides which
+// figure was actually agreed at the counter.
+function discountLabel(invoice: InvoiceDTO): string {
+  return Number(invoice.discountAmount) > 0
+    ? "Discount"
+    : `Discount (${invoice.discountPct}%)`;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -90,7 +97,6 @@ export default function InvoiceDetail({
   canWrite,
   canPay,
   fxRate,
-  clientBalance,
 }: Props) {
   const [invoice, setInvoice] = useState(initialInvoice);
   const [addLineOpen, setAddLineOpen] = useState(false);
@@ -108,8 +114,18 @@ export default function InvoiceDetail({
 
   const isDraft = invoice.status === "Draft";
   const onVetHold = invoice.vetHoldAt != null;
+  const adjustment = Number(invoice.adjustment);
+  // Consumed in the clinic, not sold. Split out so the counter can see them
+  // without them ever reading as something the customer is being billed for.
+  const chargedLines = invoice.lineItems.filter((l) => !l.isHidden);
+  const hiddenLines = invoice.lineItems.filter((l) => l.isHidden);
+  // The client's whole-account balance, which spans every invoice they have and
+  // not just this one. It rides on the invoice DTO now, because the printed
+  // copies and the WhatsApp message need it too.
   const accountSummary =
-    clientBalance != null ? formatAccountBalance(clientBalance) : null;
+    invoice.clientBalance != null
+      ? formatAccountBalance(invoice.clientBalance)
+      : null;
   const paid = Number(invoice.amountPaid) > 0;
   const balanceDue = Number(invoice.balance);
 
@@ -474,12 +490,14 @@ export default function InvoiceDetail({
               </Stack>
             )}
           </Stack>
-          {/* Scanning is the primary way lines get onto a draft; the dialog
-              above is for services and stock that has no barcode. */}
+          {/* Scanning is the primary way lines get onto a draft, and the same
+              field finds a service or an unbarcoded item by name. The dialog
+              above is for a manual line, a price override or clinic use. */}
           {canWrite && isDraft && (
             <ScanBar
               invoiceId={invoice.invoiceId}
               itemOptions={itemOptions}
+              serviceOptions={serviceOptions}
               onInvoiceUpdated={applyInvoice}
             />
           )}
@@ -495,19 +513,21 @@ export default function InvoiceDetail({
                 </TableRow>
               </TableHead>
               <TableBody>
-                {invoice.lineItems.length === 0 ? (
+                {chargedLines.length === 0 ? (
                   <TableRow>
                     <TableCell
                       colSpan={canWrite && isDraft ? 5 : 4}
                       align="center"
                     >
                       <Typography color="text.secondary" sx={{ py: 2 }}>
-                        No line items yet.
+                        {hiddenLines.length > 0
+                          ? "Nothing charged on this invoice."
+                          : "No line items yet."}
                       </Typography>
                     </TableCell>
                   </TableRow>
                 ) : (
-                  invoice.lineItems.map((l) => (
+                  chargedLines.map((l) => (
                     <TableRow
                       key={l.lineItemId}
                       hover
@@ -554,6 +574,66 @@ export default function InvoiceDetail({
               </TableBody>
             </Table>
           </TableContainer>
+
+          {/* Consumables used during the visit. On the invoice so the stock
+              leaves the shelf and the spend is on record; off the bill and off
+              every printed copy, so the customer never sees them. */}
+          {hiddenLines.length > 0 && (
+            <Paper variant="outlined" sx={{ mt: 2, p: 2 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ alignItems: "center", mb: 1 }}
+              >
+                <VisibilityOffIcon fontSize="small" color="action" />
+                <Typography variant="subtitle2">Used in the clinic</Typography>
+                <Chip size="small" variant="outlined" label="Not charged" />
+              </Stack>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mb: 1.5 }}
+              >
+                Kept off the printed invoice and out of the total. Issuing takes
+                these off the shelf and files what they cost as a running cost.
+              </Typography>
+              <Stack spacing={0.5}>
+                {hiddenLines.map((l) => (
+                  <Stack
+                    key={l.lineItemId}
+                    direction="row"
+                    spacing={1}
+                    sx={{ alignItems: "center" }}
+                  >
+                    <Typography variant="body2" sx={{ flex: 1 }}>
+                      {l.description}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {formatLineQuantity(l)}
+                    </Typography>
+                    {canWrite && isDraft && (
+                      <>
+                        <IconButton
+                          size="small"
+                          aria-label="Edit line"
+                          onClick={() => setEditLine(l)}
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          aria-label="Remove line"
+                          onClick={() => void deleteLine(l.lineItemId)}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </>
+                    )}
+                  </Stack>
+                ))}
+              </Stack>
+            </Paper>
+          )}
 
           <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>
             Payments
@@ -610,16 +690,23 @@ export default function InvoiceDetail({
             <Stack spacing={1}>
               <Row label="Subtotal" value={formatMoney(invoice.subtotal)} />
               <Row
-                label={`Discount (${invoice.discountPct}%)`}
-                value={`-${formatMoney(
-                  (Number(invoice.subtotal) * Number(invoice.discountPct)) /
-                    100,
-                )}`}
+                label={discountLabel(invoice)}
+                value={`-${formatMoney(invoice.discountValue)}`}
               />
               <Row
                 label={`Tax (${invoice.taxPct}%)`}
                 value={formatMoney(invoice.taxAmount)}
               />
+              {/* Only shown when there is one. A zero adjustment is the normal
+                  case and a permanent "Adjustment $0.00" is just noise. */}
+              {adjustment !== 0 && (
+                <Row
+                  label="Adjustment"
+                  value={`${adjustment > 0 ? "+" : "-"}${formatMoney(
+                    Math.abs(adjustment),
+                  )}`}
+                />
+              )}
               <Divider />
               <Stack direction="row" sx={{ justifyContent: "space-between" }}>
                 <Typography variant="h6">Total</Typography>

@@ -3,8 +3,11 @@
 import { useState } from "react";
 import {
   Alert,
+  Box,
   Button,
+  Divider,
   FormControlLabel,
+  InputAdornment,
   Switch,
   Dialog,
   DialogActions,
@@ -12,9 +15,18 @@ import {
   DialogTitle,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
-import { todayForDateInput } from "@/utils/format";
+import { formatMoney, todayForDateInput } from "@/utils/format";
+import {
+  adjustmentFor,
+  previewInvoiceMoney,
+  type DiscountMode,
+} from "@/utils/invoice-money";
+import { CURRENCY } from "@/constants/clinic";
 import ClientSearchField from "@/components/ui/ClientSearchField";
 import type { ClientSearchResult } from "@/hooks/useClientSearch";
 import type { InvoiceDTO } from "@/types/entities";
@@ -67,11 +79,41 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
   const [dueDate, setDueDate] = useState(
     invoice?.dueDate ?? todayForDateInput(),
   );
-  const [discountPct, setDiscountPct] = useState(invoice?.discountPct ?? "0");
+  // One discount, two ways of typing it. Which mode the invoice is already in
+  // is read off the row: a non-zero discount_amount means it was typed as money.
+  const [discountMode, setDiscountMode] = useState<DiscountMode>(
+    invoice && Number(invoice.discountAmount) > 0 ? "amount" : "pct",
+  );
+  const [discountInput, setDiscountInput] = useState(
+    invoice && Number(invoice.discountAmount) > 0
+      ? invoice.discountAmount
+      : (invoice?.discountPct ?? "0"),
+  );
   const [taxPct, setTaxPct] = useState(invoice?.taxPct ?? "0");
   const [notes, setNotes] = useState(invoice?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // What the invoice comes to before rounding, recomputed from the frozen
+  // subtotal as the discount and tax are typed. The same arithmetic the server
+  // will do on save, so what is shown here is what gets stored.
+  const preview = previewInvoiceMoney({
+    subtotal: Number(invoice?.subtotal ?? 0),
+    discountMode,
+    discountInput: Number(discountInput) || 0,
+    taxPct: Number(taxPct) || 0,
+  });
+
+  // Prefilled with what the invoice currently charges, so an untouched field
+  // reproduces the adjustment already on the row instead of silently clearing
+  // it. Typing a round figure here is the whole feature: 101.12 becomes 100.
+  const [chargeTotal, setChargeTotal] = useState(
+    invoice ? Number(invoice.total).toFixed(2) : "",
+  );
+  const adjustment =
+    chargeTotal.trim() === ""
+      ? 0
+      : adjustmentFor(preview.totalBeforeAdjustment, Number(chargeTotal) || 0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -82,13 +124,20 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
     }
     setSaving(true);
     try {
+      // Only the mode in use is sent with a value; the other goes as 0 so the
+      // server clears it and the row never carries both. See discountPatch.
+      const discount = Number(discountInput) || 0;
       const body = {
         clientId: walkIn || !client ? "" : String(client.clientId),
         // A walk-in has no account to bill later, and the server refuses a due
         // date on one, so the default must not be sent with it.
         dueDate: walkIn ? "" : dueDate,
-        discountPct,
+        discountPct: discountMode === "pct" ? String(discount) : "0",
+        discountAmount: discountMode === "amount" ? String(discount) : "0",
         taxPct,
+        // The delta, not the target. Only an existing invoice has lines to
+        // round, so a new draft never sends one.
+        ...(editing ? { adjustment: String(adjustment) } : {}),
         notes,
       };
       const data = editing
@@ -152,13 +201,57 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
               fullWidth
             />
           )}
-          <Stack direction="row" spacing={2}>
+          <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
             <TextField
-              label="Discount %"
+              label="Discount"
               type="number"
-              value={discountPct}
-              onChange={(e) => setDiscountPct(e.target.value)}
-              slotProps={{ htmlInput: { min: 0, max: 100, step: "0.01" } }}
+              value={discountInput}
+              onChange={(e) => setDiscountInput(e.target.value)}
+              slotProps={{
+                htmlInput: {
+                  min: 0,
+                  // A percentage cannot go past 100; money can go as high as
+                  // the invoice does, and the server clamps it to the subtotal.
+                  ...(discountMode === "pct" ? { max: 100 } : {}),
+                  step: "0.01",
+                },
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      {/* Two ways of saying one discount. "Ten dollars off" is
+                          said at the counter as often as "ten percent", and
+                          working a percentage back from a round figure lands on
+                          9.99 as often as it lands on 10. */}
+                      <ToggleButtonGroup
+                        exclusive
+                        size="small"
+                        value={discountMode}
+                        onChange={(_e, next: DiscountMode | null) => {
+                          // A percentage and an amount are not interchangeable
+                          // numbers: 10 means two completely different discounts
+                          // either side of this switch. Clearing the field is
+                          // the honest move, rather than silently rebilling.
+                          if (!next || next === discountMode) return;
+                          setDiscountMode(next);
+                          setDiscountInput("0");
+                        }}
+                      >
+                        <ToggleButton value="amount" aria-label="Amount off">
+                          {CURRENCY.symbol}
+                        </ToggleButton>
+                        <ToggleButton value="pct" aria-label="Percent off">
+                          %
+                        </ToggleButton>
+                      </ToggleButtonGroup>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+              helperText={
+                discountMode === "pct"
+                  ? `${formatMoney(preview.discountValue)} off`
+                  : "A flat amount off the subtotal"
+              }
               fullWidth
             />
             <TextField
@@ -170,6 +263,58 @@ function InvoiceForm({ invoice, onClose, onSaved }: FormProps) {
               fullWidth
             />
           </Stack>
+
+          {/* Rounding. Only an invoice that already has lines has anything to
+              round, so a brand new draft never shows this. */}
+          {editing && (
+            <>
+              <Divider />
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">
+                  Round the total
+                </Typography>
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  sx={{ mt: 1.5, alignItems: "flex-start" }}
+                >
+                  <TextField
+                    label="Works out to"
+                    value={formatMoney(preview.totalBeforeAdjustment)}
+                    slotProps={{ input: { readOnly: true } }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Charge"
+                    type="number"
+                    value={chargeTotal}
+                    onChange={(e) => setChargeTotal(e.target.value)}
+                    slotProps={{ htmlInput: { step: "0.01" } }}
+                    helperText={
+                      adjustment === 0
+                        ? "Type a round figure to charge instead"
+                        : `Adjustment ${adjustment > 0 ? "+" : "-"}${formatMoney(
+                            Math.abs(adjustment),
+                          )}`
+                    }
+                    fullWidth
+                  />
+                </Stack>
+                {adjustment !== 0 && (
+                  <Button
+                    size="small"
+                    sx={{ mt: 0.5 }}
+                    onClick={() =>
+                      setChargeTotal(preview.totalBeforeAdjustment.toFixed(2))
+                    }
+                  >
+                    Clear the rounding
+                  </Button>
+                )}
+              </Box>
+              <Divider />
+            </>
+          )}
           <TextField
             label="Notes"
             value={notes}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -20,15 +21,28 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/DeleteOutlined";
+import LockIcon from "@mui/icons-material/Lock";
 import { apiRequest } from "@/utils/api-client";
 import { CURRENCY, SECONDARY_CURRENCY } from "@/constants/clinic";
 import { REGISTER_MAX_DAYS_BACK } from "@/constants/invoice";
-import { formatDate, formatMoney, todayForDateInput } from "@/utils/format";
-import type { RegisterDayDTO } from "@/types/entities";
+import {
+  RUNNING_COST_CATEGORIES,
+  RUNNING_COST_ITEM_SUGGESTIONS,
+} from "@/constants/running-cost";
+import {
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  todayForDateInput,
+} from "@/utils/format";
+import type { RegisterClosingDTO, RegisterDayDTO } from "@/types/entities";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  // True when the user may file the count. Reading a day back is a wider grant
+  // than closing one, so an owner checking the week can still be read-only.
+  canClose: boolean;
 }
 
 // A cash figure in the currency it was counted in. Lira has no minor unit, so
@@ -77,26 +91,90 @@ function Line({
   );
 }
 
+// One handful of cash out of the till, entered exactly the way a running cost
+// is: a category and an item. That is not a resemblance, it is the same thing.
+// Money out of the drawer is an operating cost, and filing it under a category
+// here is what puts it in the analytics breakdown beside the rent and the
+// electricity instead of vanishing as an unexplained shortfall.
 interface Payout {
   id: number;
+  category: string;
   description: string;
   amount: string;
   currency: string;
 }
 
-export default function RegisterCloseDialog({ open, onClose }: Props) {
+// The day is fetched by the outer dialog so the body can initialise its state
+// from a day that has already been closed, at mount, rather than syncing props
+// into state through an effect afterwards.
+export default function RegisterCloseDialog({
+  open,
+  onClose,
+  canClose,
+}: Props) {
   const [date, setDate] = useState(todayForDateInput());
+  // Both carry the day they belong to rather than being cleared when the date
+  // changes. Deriving "is this for the day on screen" is what keeps yesterday's
+  // figures from flashing under today's heading while the new day loads, and it
+  // means the effect only ever writes state from its own response.
+  const [loaded, setLoaded] = useState<{
+    date: string;
+    day: RegisterDayDTO;
+  } | null>(null);
+  const [failed, setFailed] = useState<{
+    date: string;
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void apiRequest<{ register: RegisterDayDTO }>(
+      `/api/invoices/register?date=${date}`,
+    )
+      .then((r) => {
+        if (!cancelled) setLoaded({ date, day: r.register });
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setFailed({
+            date,
+            message: e instanceof Error ? e.message : "Could not load this day",
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, date]);
+
+  const data = loaded?.date === date ? loaded.day : null;
+  const error = failed?.date === date ? failed.message : null;
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>Close the register</DialogTitle>
-      {/* Keyed on the day: the float, the payouts and the count all belong to
-          one date, so switching days starts a fresh sheet rather than carrying
-          yesterday's numbers into today's. */}
+      {/* One body, which owns the single DialogContent. The day picker lives
+          inside it rather than in a content box of its own: two stacked
+          DialogContents each bring their own padding, and the seam between them
+          landed a divider on top of the picker's helper text.
+
+          Keyed on the day AND on whether that day is closed. Switching days
+          starts a fresh sheet rather than carrying yesterday's numbers into
+          today's, and a day that has just been saved comes back showing what
+          was filed, both by remounting and reading the props at mount. */}
       <RegisterCloseBody
-        key={date}
+        key={`${date}-${data ? (data.closing?.closingId ?? "open") : "loading"}`}
         date={date}
         onDateChange={setDate}
+        data={data}
+        error={error}
+        canClose={canClose}
+        onSaved={(closing) =>
+          setLoaded((l) =>
+            l && l.date === date ? { ...l, day: { ...l.day, closing } } : l,
+          )
+        }
         onClose={onClose}
       />
     </Dialog>
@@ -106,48 +184,57 @@ export default function RegisterCloseDialog({ open, onClose }: Props) {
 function RegisterCloseBody({
   date,
   onDateChange,
+  data,
+  error: loadError,
+  canClose,
+  onSaved,
   onClose,
 }: {
   date: string;
   onDateChange: (date: string) => void;
+  // Null while the day is still loading. The picker stays usable meanwhile, so
+  // a slow day cannot trap someone on a date they did not want.
+  data: RegisterDayDTO | null;
+  error: string | null;
+  canClose: boolean;
+  onSaved: (closing: RegisterClosingDTO) => void;
   onClose: () => void;
 }) {
-  const [data, setData] = useState<RegisterDayDTO | null>(null);
+  const closed = data?.closing ?? null;
+
+  // Prefilled from the day's saved count when there is one, so reopening a
+  // closed day shows what was filed rather than a blank sheet. Recounting it
+  // then replaces the row instead of filing a second one.
+  const [openingUsd, setOpeningUsd] = useState(closed?.openingUsd ?? "");
+  const [openingLbp, setOpeningLbp] = useState(
+    closed ? String(Number(closed.openingLbp)) : "",
+  );
+  const [countedUsd, setCountedUsd] = useState(closed?.countedUsd ?? "");
+  const [countedLbp, setCountedLbp] = useState(
+    closed ? String(Number(closed.countedLbp)) : "",
+  );
+  const [notes, setNotes] = useState(closed?.notes ?? "");
+  const [payouts, setPayouts] = useState<Payout[]>(
+    (closed?.payouts ?? []).map((p, i) => ({
+      id: i + 1,
+      category: p.category,
+      description: p.description,
+      amount: p.amount,
+      currency: p.currency,
+    })),
+  );
+  const [nextPayoutId, setNextPayoutId] = useState(
+    (closed?.payouts.length ?? 0) + 1,
+  );
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [openingUsd, setOpeningUsd] = useState("");
-  const [openingLbp, setOpeningLbp] = useState("");
-  const [countedUsd, setCountedUsd] = useState("");
-  const [countedLbp, setCountedLbp] = useState("");
-  const [payouts, setPayouts] = useState<Payout[]>([]);
-  const [nextPayoutId, setNextPayoutId] = useState(1);
-
-  // One fetch per mount, and this body is remounted whenever the day changes.
-  useEffect(() => {
-    let cancelled = false;
-    void apiRequest<{ register: RegisterDayDTO }>(
-      `/api/invoices/register?date=${date}`,
-    )
-      .then((r) => {
-        if (!cancelled) setData(r.register);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Could not load this day");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [date]);
-
-  const loading = !data && !error;
 
   function addPayout() {
     setPayouts((prev) => [
       ...prev,
       {
         id: nextPayoutId,
+        category: "",
         description: "",
         amount: "",
         currency: CURRENCY.code,
@@ -215,10 +302,54 @@ function RegisterCloseBody({
   // Anything under a cent is rounding in the lira conversion, not a discrepancy.
   const balances = Math.abs(combinedVariance) < 0.01;
 
+  // Every draw needs both a category and a description, because that is what
+  // makes it findable in the running costs later. A blank one is refused here
+  // rather than filed as "Other / (no description)", which is the same as
+  // losing it.
+  const incompletePayout = payouts.some(
+    (p) =>
+      !p.category.trim() || !p.description.trim() || !(Number(p.amount) > 0),
+  );
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await apiRequest<{ closing: RegisterClosingDTO }>(
+        "/api/invoices/register",
+        {
+          method: "POST",
+          body: {
+            // Safe to take from the picker: this body only ever renders a
+            // save button once `data` has loaded, and `data` is non-null only
+            // while it belongs to this same date. See the outer component.
+            date,
+            openingUsd,
+            openingLbp,
+            countedUsd,
+            countedLbp,
+            notes,
+            payouts: payouts.map((p) => ({
+              category: p.category.trim(),
+              description: p.description.trim(),
+              amount: p.amount,
+              currency: p.currency,
+            })),
+          },
+        },
+      );
+      onSaved(res.closing);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the count");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
       <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
+        <Stack spacing={2.5} sx={{ mt: 1 }}>
           <TextField
             label="Day"
             type="date"
@@ -235,15 +366,25 @@ function RegisterCloseBody({
             fullWidth
           />
 
-          {error && <Alert severity="error">{error}</Alert>}
+          {loadError && <Alert severity="error">{loadError}</Alert>}
 
-          {loading && (
-            <Stack sx={{ alignItems: "center", py: 3 }}>
+          {!data && !loadError && (
+            <Stack sx={{ alignItems: "center", py: 4 }}>
               <CircularProgress size={28} />
             </Stack>
           )}
 
-          {data && !loading && (
+          {closed && (
+            <Alert severity="success" icon={<LockIcon />}>
+              Closed by {closed.closedByName ?? "someone"} on{" "}
+              {formatDateTime(closed.closedAt)}.
+              {canClose
+                ? " Counting it again replaces what was filed."
+                : " You can read it here but not change it."}
+            </Alert>
+          )}
+
+          {data && (
             <>
               <Divider />
               <Typography variant="subtitle2" color="text.secondary">
@@ -256,6 +397,7 @@ function RegisterCloseBody({
                   value={openingUsd}
                   onChange={(e) => setOpeningUsd(e.target.value)}
                   slotProps={{ htmlInput: { step: "0.01" } }}
+                  disabled={!canClose}
                   fullWidth
                 />
                 <TextField
@@ -264,6 +406,7 @@ function RegisterCloseBody({
                   value={openingLbp}
                   onChange={(e) => setOpeningLbp(e.target.value)}
                   slotProps={{ htmlInput: { step: "1000" } }}
+                  disabled={!canClose}
                   fullWidth
                 />
               </Stack>
@@ -325,74 +468,121 @@ function RegisterCloseBody({
                 <Typography variant="subtitle2" color="text.secondary">
                   Money out of the drawer
                 </Typography>
-                <Button
-                  size="small"
-                  startIcon={<AddIcon />}
-                  onClick={addPayout}
-                >
-                  Add
-                </Button>
+                {canClose && (
+                  <Button
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={addPayout}
+                  >
+                    Add
+                  </Button>
+                )}
               </Stack>
-              {payouts.length === 0 && (
-                <Typography variant="body2" color="text.secondary">
-                  Anything taken out by hand: the owner drawing cash, rent paid
-                  from the till, a supplier settled at the door.
-                </Typography>
-              )}
+              <Typography variant="body2" color="text.secondary">
+                Anything taken out by hand: the owner drawing cash, rent paid
+                from the till, a supplier settled at the door. Each one is filed
+                as a running cost under the category you pick, so it shows up in
+                analytics with the rest of the clinic&rsquo;s costs.
+              </Typography>
               {payouts.map((p) => (
-                <Stack
-                  key={p.id}
-                  direction="row"
-                  spacing={1}
-                  sx={{ alignItems: "center" }}
-                >
-                  <TextField
-                    label="What for"
-                    value={p.description}
-                    onChange={(e) =>
-                      updatePayout(p.id, { description: e.target.value })
-                    }
-                    size="small"
-                    sx={{ flex: 2 }}
-                  />
-                  <TextField
-                    label="Amount"
-                    type="number"
-                    value={p.amount}
-                    onChange={(e) =>
-                      updatePayout(p.id, { amount: e.target.value })
-                    }
-                    size="small"
-                    slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
-                    sx={{ flex: 1 }}
-                  />
-                  <TextField
-                    select
-                    label="Currency"
-                    value={p.currency}
-                    onChange={(e) =>
-                      updatePayout(p.id, { currency: e.target.value })
-                    }
-                    size="small"
-                    sx={{ minWidth: 96 }}
+                <Stack key={p.id} spacing={1}>
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{ alignItems: "center" }}
                   >
-                    <MenuItem value={CURRENCY.code}>{CURRENCY.code}</MenuItem>
-                    <MenuItem value={SECONDARY_CURRENCY.code}>
-                      {SECONDARY_CURRENCY.code}
-                    </MenuItem>
-                  </TextField>
-                  <IconButton
-                    aria-label="Remove"
-                    onClick={() =>
-                      setPayouts((prev) => prev.filter((x) => x.id !== p.id))
-                    }
+                    {/* The same two fields the running-cost form uses, with the
+                    same suggestions, so a draw files itself into the categories
+                    the clinic already reads its costs by. */}
+                    <Autocomplete
+                      freeSolo
+                      options={
+                        RUNNING_COST_CATEGORIES as readonly string[] as string[]
+                      }
+                      value={p.category}
+                      onChange={(_e, v) =>
+                        updatePayout(p.id, { category: v ?? "" })
+                      }
+                      inputValue={p.category}
+                      onInputChange={(_e, v) =>
+                        updatePayout(p.id, { category: v })
+                      }
+                      disabled={!canClose}
+                      size="small"
+                      sx={{ flex: 1 }}
+                      renderInput={(params) => (
+                        <TextField {...params} label="Category" required />
+                      )}
+                    />
+                    <Autocomplete
+                      freeSolo
+                      options={RUNNING_COST_ITEM_SUGGESTIONS[p.category] ?? []}
+                      value={p.description}
+                      onChange={(_e, v) =>
+                        updatePayout(p.id, { description: v ?? "" })
+                      }
+                      inputValue={p.description}
+                      onInputChange={(_e, v) =>
+                        updatePayout(p.id, { description: v })
+                      }
+                      disabled={!canClose}
+                      size="small"
+                      sx={{ flex: 1 }}
+                      renderInput={(params) => (
+                        <TextField {...params} label="What for" required />
+                      )}
+                    />
+                  </Stack>
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{ alignItems: "center" }}
                   >
-                    <DeleteIcon />
-                  </IconButton>
+                    <TextField
+                      label="Amount"
+                      type="number"
+                      value={p.amount}
+                      onChange={(e) =>
+                        updatePayout(p.id, { amount: e.target.value })
+                      }
+                      size="small"
+                      slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
+                      disabled={!canClose}
+                      sx={{ flex: 1 }}
+                    />
+                    <TextField
+                      select
+                      label="Currency"
+                      value={p.currency}
+                      onChange={(e) =>
+                        updatePayout(p.id, { currency: e.target.value })
+                      }
+                      size="small"
+                      disabled={!canClose}
+                      sx={{ minWidth: 96 }}
+                    >
+                      <MenuItem value={CURRENCY.code}>{CURRENCY.code}</MenuItem>
+                      <MenuItem value={SECONDARY_CURRENCY.code}>
+                        {SECONDARY_CURRENCY.code}
+                      </MenuItem>
+                    </TextField>
+                    {canClose && (
+                      <IconButton
+                        aria-label="Remove"
+                        onClick={() =>
+                          setPayouts((prev) =>
+                            prev.filter((x) => x.id !== p.id),
+                          )
+                        }
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    )}
+                  </Stack>
+                  <Divider />
                 </Stack>
               ))}
 
-              <Divider />
               <Typography variant="subtitle2" color="text.secondary">
                 Counted in the drawer now
               </Typography>
@@ -403,6 +593,7 @@ function RegisterCloseBody({
                   value={countedUsd}
                   onChange={(e) => setCountedUsd(e.target.value)}
                   slotProps={{ htmlInput: { step: "0.01" } }}
+                  disabled={!canClose}
                   fullWidth
                 />
                 <TextField
@@ -412,6 +603,7 @@ function RegisterCloseBody({
                   onChange={(e) => setCountedLbp(e.target.value)}
                   slotProps={{ htmlInput: { step: "1000" } }}
                   helperText={`at ${fxRate.toLocaleString("en-US")} / $1`}
+                  disabled={!canClose}
                   fullWidth
                 />
               </Stack>
@@ -465,17 +657,49 @@ function RegisterCloseBody({
                 )}
               </Box>
 
-              <Alert severity="info">
-                This is a check, not a record. Nothing here is saved, so print
-                or write down the sheet for {formatDate(date)} before closing
-                it.
-              </Alert>
+              <TextField
+                label="Notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Anything the next person should know about this day"
+                multiline
+                minRows={2}
+                disabled={!canClose}
+                fullWidth
+              />
+
+              {error && <Alert severity="error">{error}</Alert>}
+
+              {/* A short drawer is still a real day and still has to be filed. The
+              count is the record of what was actually there, not a claim that
+              it was right, so being out is a warning and never a block. */}
+              {!nothingCounted && !balances && canClose && (
+                <Alert severity="warning">
+                  This day does not balance. Save it anyway if that is what was
+                  in the drawer, and put what you know in the notes.
+                </Alert>
+              )}
             </>
           )}
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose} disabled={saving}>
+          Close
+        </Button>
+        {canClose && data && (
+          <Button
+            variant="contained"
+            onClick={() => void save()}
+            disabled={saving || nothingCounted || incompletePayout}
+          >
+            {saving
+              ? "Saving…"
+              : closed
+                ? `Save the count for ${formatDate(data.date)}`
+                : `Close ${formatDate(data.date)}`}
+          </Button>
+        )}
       </DialogActions>
     </>
   );

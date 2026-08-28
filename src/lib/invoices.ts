@@ -5,6 +5,8 @@ import { applyStockMovementTx, isStockCheckViolation } from "@/lib/inventory";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
 import { computePartnerPayable, effectiveRates } from "@/lib/partners";
 import { toDateOnly } from "@/utils/format";
+import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
+import { clinicToday } from "@/lib/register";
 import { INVOICE_STATUSES, SIGNED_TX_TYPES } from "@/types/enums";
 import type {
   InvoiceDTO,
@@ -54,6 +56,7 @@ type LineItemRow = {
   lineTotal: Prisma.Decimal;
   looseQty: Prisma.Decimal | null;
   looseUnit: string | null;
+  isHidden: boolean;
 };
 
 type PaymentRow = {
@@ -80,8 +83,10 @@ type InvoiceRow = {
   status: string;
   subtotal: Prisma.Decimal;
   discountPct: Prisma.Decimal;
+  discountAmount: Prisma.Decimal;
   taxPct: Prisma.Decimal;
   taxAmount: Prisma.Decimal;
+  adjustment: Prisma.Decimal;
   total: Prisma.Decimal;
   issuedAt: Date | null;
   dueDate: Date | null;
@@ -90,7 +95,12 @@ type InvoiceRow = {
   attendingVetId: number | null;
   notes: string | null;
   createdAt: Date;
-  client: { firstName: string; lastName: string; phone: string | null } | null;
+  client: {
+    firstName: string;
+    lastName: string;
+    phone: string | null;
+    accountBalance: Prisma.Decimal;
+  } | null;
   attendingVet: { firstName: string; lastName: string } | null;
   lineItems: LineItemRow[];
   payments: PaymentRow[];
@@ -108,7 +118,17 @@ type InvoiceListRow = {
 
 // Includes that produce the rows above.
 export const invoiceInclude = {
-  client: { select: { firstName: true, lastName: true, phone: true } },
+  // accountBalance rides along so the printed copies and the WhatsApp message
+  // can show what the client owes overall. It is one column on a row already
+  // being joined, so it costs nothing extra.
+  client: {
+    select: {
+      firstName: true,
+      lastName: true,
+      phone: true,
+      accountBalance: true,
+    },
+  },
   attendingVet: { select: { firstName: true, lastName: true } },
   lineItems: { orderBy: { lineItemId: "asc" } },
   payments: { orderBy: { paidAt: "asc" } },
@@ -121,25 +141,92 @@ export const invoiceListInclude = {
 
 // ---- Money math ----
 
-// Compute the frozen money snapshot from line totals + the invoice's discount
-// and tax percentages. All values rounded to 2 dp.
-export function computeTotals(
-  lineTotals: Prisma.Decimal[],
-  discountPct: Prisma.Decimal,
-  taxPct: Prisma.Decimal,
-): {
+export interface InvoiceMoneyShape {
+  // A percentage off, the original and still the default mode.
+  discountPct: Prisma.Decimal;
+  // A discount typed as money instead. Only one of the two is ever non-zero,
+  // enforced by invoices_one_discount_mode.
+  discountAmount: Prisma.Decimal;
+  taxPct: Prisma.Decimal;
+  // A signed nudge applied after tax, to land the invoice on a round figure.
+  adjustment: Prisma.Decimal;
+}
+
+export interface InvoiceTotals {
   subtotal: Prisma.Decimal;
+  // What the discount actually came to in money, whichever way it was typed.
+  // Derived rather than stored: the printed copy needs the figure, and working
+  // it back out of a percentage at every call site is how they drift apart.
+  discountValue: Prisma.Decimal;
   taxAmount: Prisma.Decimal;
   total: Prisma.Decimal;
-} {
+}
+
+// Compute the frozen money snapshot from line totals + the invoice's discount,
+// tax and adjustment. All values rounded to 2 dp.
+//
+// lineTotals must already exclude hidden lines: a hidden line is consumed by
+// the clinic, not sold, so it never reaches the subtotal. See issueInvoice.
+export function computeTotals(
+  lineTotals: Prisma.Decimal[],
+  money: InvoiceMoneyShape,
+): InvoiceTotals {
   const subtotal = lineTotals
     .reduce((sum, lt) => sum.plus(lt), D(0))
     .toDecimalPlaces(2);
-  const discountAmount = subtotal.times(discountPct).dividedBy(HUNDRED);
-  const taxable = subtotal.minus(discountAmount);
-  const taxAmount = taxable.times(taxPct).dividedBy(HUNDRED).toDecimalPlaces(2);
-  const total = taxable.plus(taxAmount).toDecimalPlaces(2);
-  return { subtotal, taxAmount, total };
+
+  // Percentage and flat amount are two ways of saying the same thing, so they
+  // collapse to one figure here and everything downstream reads that.
+  //
+  // The flat amount is clamped to what there is to discount. A document whose
+  // returns outweigh its sales has a NEGATIVE subtotal, and an unclamped "$10
+  // off" on one would hand the customer ten dollars more back than they paid.
+  const discountValue = money.discountAmount.isZero()
+    ? subtotal.times(money.discountPct).dividedBy(HUNDRED).toDecimalPlaces(2)
+    : Prisma.Decimal.min(
+        money.discountAmount,
+        Prisma.Decimal.max(subtotal, D(0)),
+      ).toDecimalPlaces(2);
+
+  const taxable = subtotal.minus(discountValue);
+  const taxAmount = taxable
+    .times(money.taxPct)
+    .dividedBy(HUNDRED)
+    .toDecimalPlaces(2);
+  // The adjustment lands last, after tax, because it exists to make the figure
+  // the customer actually pays a round one.
+  const total = taxable
+    .plus(taxAmount)
+    .plus(money.adjustment)
+    .toDecimalPlaces(2);
+
+  return { subtotal, discountValue, taxAmount, total };
+}
+
+// One discount typed two ways. Setting either mode clears the other, so a row
+// can never carry both and leave whoever reads it guessing which one applied.
+// The zod schema already refuses two non-zero values; this is what makes
+// SWITCHING mode work, since the dialog sends only the mode it is in.
+export function discountPatch(data: {
+  discountPct?: number;
+  discountAmount?: number;
+}): { discountPct?: number; discountAmount?: number } {
+  if (data.discountAmount !== undefined && data.discountAmount > 0) {
+    return { discountAmount: data.discountAmount, discountPct: 0 };
+  }
+  if (data.discountPct !== undefined && data.discountPct > 0) {
+    return { discountPct: data.discountPct, discountAmount: 0 };
+  }
+  // Nothing to switch to: clear only what was actually sent, so an update that
+  // never mentions the discount leaves it alone.
+  return {
+    ...(data.discountPct !== undefined
+      ? { discountPct: data.discountPct }
+      : {}),
+    ...(data.discountAmount !== undefined
+      ? { discountAmount: data.discountAmount }
+      : {}),
+  };
 }
 
 function sumPaid(payments: { amount: Prisma.Decimal }[]): Prisma.Decimal {
@@ -185,6 +272,7 @@ export function toLineItemDTO(l: LineItemRow): InvoiceLineItemDTO {
     lineTotal: l.lineTotal.toFixed(2),
     looseQty: l.looseQty ? l.looseQty.toString() : null,
     looseUnit: l.looseUnit,
+    isHidden: l.isHidden,
   };
 }
 
@@ -206,6 +294,14 @@ export function toPaymentDTO(p: PaymentRow): PaymentDTO {
 export function toInvoiceDTO(i: InvoiceRow): InvoiceDTO {
   const amountPaid = sumPaid(i.payments);
   const balance = i.total.minus(amountPaid).toDecimalPlaces(2);
+  // What the discount came to in money. Recomputed from the frozen subtotal
+  // rather than stored, so it always agrees with the total on the same row.
+  const discountValue = i.discountAmount.isZero()
+    ? i.subtotal.times(i.discountPct).dividedBy(HUNDRED).toDecimalPlaces(2)
+    : Prisma.Decimal.min(
+        i.discountAmount,
+        Prisma.Decimal.max(i.subtotal, D(0)),
+      ).toDecimalPlaces(2);
   return {
     invoiceId: i.invoiceId,
     number: formatInvoiceNumber(i.invoiceId),
@@ -221,11 +317,15 @@ export function toInvoiceDTO(i: InvoiceRow): InvoiceDTO {
     status: i.status as InvoiceStatus,
     subtotal: i.subtotal.toFixed(2),
     discountPct: i.discountPct.toString(),
+    discountAmount: i.discountAmount.toFixed(2),
+    discountValue: discountValue.toFixed(2),
     taxPct: i.taxPct.toString(),
     taxAmount: i.taxAmount.toFixed(2),
+    adjustment: i.adjustment.toFixed(2),
     total: i.total.toFixed(2),
     amountPaid: amountPaid.toFixed(2),
     balance: balance.toFixed(2),
+    clientBalance: i.client ? i.client.accountBalance.toFixed(2) : null,
     issuedAt: i.issuedAt ? i.issuedAt.toISOString() : null,
     dueDate: toDateOnly(i.dueDate),
     fxRate: i.fxRate ? i.fxRate.toString() : null,
@@ -393,19 +493,26 @@ export async function recomputeInvoiceTotals(
 ): Promise<void> {
   const invoice = await tx.invoice.findUnique({
     where: { invoiceId },
-    select: { discountPct: true, taxPct: true },
+    select: {
+      discountPct: true,
+      discountAmount: true,
+      taxPct: true,
+      adjustment: true,
+    },
   });
   if (!invoice) throw new ApiError(404, "Invoice not found");
 
+  // Hidden lines are filtered out in SQL rather than summed and subtracted
+  // back, so there is one definition of what is on the bill and no way for a
+  // caller to forget it.
   const lines = await tx.invoiceLineItem.findMany({
-    where: { invoiceId },
+    where: { invoiceId, isHidden: false },
     select: { lineTotal: true },
   });
 
   const { subtotal, taxAmount, total } = computeTotals(
     lines.map((l) => l.lineTotal),
-    invoice.discountPct,
-    invoice.taxPct,
+    invoice,
   );
 
   await tx.invoice.update({
@@ -764,6 +871,85 @@ async function applyReturnLineTx(
   }
 }
 
+// A hidden line at issue: stock off the shelf as Used, and its cost filed as a
+// running cost so the money shows up in analytics.
+//
+// Cost, never sale price. A running cost is money the clinic SPENT, and what a
+// box of gloves would have sold for is not that. lastCost is the same frozen
+// figure a Sold movement would have carried into COGS.
+//
+// The running cost is a real row rather than something analytics derives from
+// the Used movement. That keeps the spend visible on the running-costs list
+// where the clinic already looks for it, puts it in the same categories as
+// everything else, and leaves the analytics query untouched. It is also why
+// consumables stop needing to be typed in by hand at month end.
+async function applyHiddenLineTx(
+  tx: Tx,
+  params: {
+    invoiceId: number;
+    line: {
+      lineItemId: number;
+      itemId: number | null;
+      description: string;
+      quantity: Prisma.Decimal;
+    };
+    item: {
+      name: string;
+      lastCost: Prisma.Decimal | null;
+      partnerId: number | null;
+    } | null;
+    performedBy: number | null;
+  },
+): Promise<void> {
+  const { invoiceId, line, item, performedBy } = params;
+
+  // A consigned item belongs to the partner until it sells, and the payout is
+  // worked out from the sale price. A hidden line has no sale price, so there
+  // is nothing to work the payout out from and the clinic would quietly consume
+  // stock it still owes somebody for.
+  if (item?.partnerId != null) {
+    throw new ApiError(
+      400,
+      `"${item.name}" is consigned from a partner, so it cannot be used in the clinic on an invoice. Take it off the invoice and record it as a purchase from the partner instead.`,
+    );
+  }
+
+  await applyStockMovementTx(tx, {
+    itemId: line.itemId!,
+    type: "Used",
+    quantity: line.quantity.toNumber(),
+    // unitCost is left out on purpose: applyStockMovementTx defaults a Used
+    // movement to the item's lastCost, which is the one place that rule lives.
+    referenceType: "invoice",
+    referenceId: invoiceId,
+    notes: `Used in the clinic on ${formatInvoiceNumber(invoiceId)}`,
+    performedBy,
+    allowDeletedItem: true,
+  });
+
+  // Nothing was paid for it, so there is nothing to expense. An item with no
+  // cost on record still moves stock above; it just does not invent a figure.
+  const amount = (item?.lastCost ?? D(0))
+    .times(line.quantity)
+    .toDecimalPlaces(2);
+  if (amount.lte(0)) return;
+
+  await tx.runningCost.create({
+    data: {
+      category: CLINIC_USE_COST_CATEGORY,
+      description: line.description.slice(0, 200),
+      amount,
+      // The day the invoice was issued, as the CLINIC reckons it. Vercel runs in
+      // UTC, so a plain new Date() files an evening in Beirut against tomorrow
+      // and drops the cost into the wrong month at a month end.
+      incurredOn: new Date(`${clinicToday()}T00:00:00.000Z`),
+      notes: `Used in the clinic on ${formatInvoiceNumber(invoiceId)}`,
+      invoiceLineItemId: line.lineItemId,
+      createdBy: performedBy,
+    },
+  });
+}
+
 export async function issueInvoice(
   invoiceId: number,
   performedBy: number | null,
@@ -827,6 +1013,16 @@ export async function issueInvoice(
         // (e.g. 0.5 vial, 2.5 ml) decrement stock as-is.
         const qty = line.quantity.toNumber();
         const item = line.item;
+
+        // A hidden line was consumed by the clinic, not sold to the customer.
+        // It never reached the subtotal, so there is no revenue, no COGS and no
+        // margin to record: the stock leaves as Used and the money side is a
+        // running cost, which is how every other consumable is already
+        // expensed. See applyHiddenLineTx.
+        if (line.isHidden) {
+          await applyHiddenLineTx(tx, { invoiceId, line, item, performedBy });
+          continue;
+        }
 
         // A negative line is a return: the same document that sells can also
         // take something back, which is how an exchange happens at the counter.
@@ -988,11 +1184,15 @@ export async function voidInvoice(
       });
 
       for (const m of written) {
-        // A sale is undone by the goods coming back. Everything else this
-        // invoice can write is already a signed type and undoes itself, which is
-        // exactly why those types carry a sign.
+        // A sale is undone by the goods coming back, and so is a consumable the
+        // clinic used: neither Sold nor Used carries a sign, and both put the
+        // stock back on the shelf when the document that took it is cancelled.
+        // Everything else this invoice can write is already a signed type and
+        // undoes itself, which is exactly why those types carry a sign.
         const type =
-          m.type === "Sold" ? "Returned" : (m.type as InventoryTxType);
+          m.type === "Sold" || m.type === "Used"
+            ? "Returned"
+            : (m.type as InventoryTxType);
         if (!SIGNED_TX_TYPES.includes(type)) {
           throw new ApiError(
             409,
@@ -1023,6 +1223,21 @@ export async function voidInvoice(
           reverseOf: m.transactionId,
         });
       }
+    }
+
+    // Retire the running costs this invoice's hidden lines raised. Soft, like
+    // every other financial record here: the row stays, so the audit trail still
+    // shows the clinic booked a cost and then cancelled the document behind it.
+    // Without this, voiding would put the gloves back on the shelf and leave
+    // their cost sitting in the month's operating costs.
+    if (invoice.status !== "Draft") {
+      await tx.runningCost.updateMany({
+        where: {
+          invoiceLineItemId: { in: invoice.lineItems.map((l) => l.lineItemId) },
+          deletedAt: null,
+        },
+        data: { deletedAt: new Date() },
+      });
     }
 
     // Voiding an issued invoice takes back what issuing added. Drafts never

@@ -79,6 +79,7 @@ model User {
   supplierPayments      SupplierPayment[]
   auditLogs             AuditLog[]
   attendingInvoices     Invoice[]              @relation("InvoiceAttendingVet")
+  registerClosings      RegisterClosing[]
 
   @@index([roleId], map: "idx_users_role")
   @@map("users")
@@ -744,8 +745,19 @@ model Invoice {
   status         String    @default("Draft") @db.VarChar(20)
   subtotal       Decimal   @default(0) @db.Decimal(12, 2)
   discountPct    Decimal   @default(0) @map("discount_pct") @db.Decimal(5, 2)
+  // A discount typed as money rather than a percentage. The counter says "take
+  // ten dollars off" as often as it says "ten percent", and deriving a
+  // percentage from a round figure lands on 9.99 as often as not. Only one of
+  // the two is ever set: discount_amount wins when it is above zero, which is
+  // what invoices_one_discount_mode enforces.
+  discountAmount Decimal   @default(0) @map("discount_amount") @db.Decimal(12, 2)
   taxPct         Decimal   @default(0) @map("tax_pct") @db.Decimal(5, 2)
   taxAmount      Decimal   @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  // Signed nudge applied AFTER tax to land the invoice on a round figure:
+  // 101.12 becomes 100.00 with an adjustment of -1.12. Stored as the delta, not
+  // as the target, so adding a line afterwards moves the total by that line
+  // rather than silently swallowing it.
+  adjustment     Decimal   @default(0) @db.Decimal(12, 2)
   total          Decimal   @default(0) @db.Decimal(12, 2)
   issuedAt       DateTime? @map("issued_at") @db.Timestamptz(6)
   dueDate        DateTime? @map("due_date") @db.Date
@@ -795,6 +807,12 @@ model InvoiceLineItem {
   // partner payouts needed no changes for loose selling.
   looseQty           Decimal?  @map("loose_qty") @db.Decimal(10, 3)
   looseUnit          String?   @map("loose_unit") @db.VarChar(20)
+  // Consumed during the visit, not sold: gloves, pads, a syringe. The line
+  // exists so the stock comes off the shelf and the spend is on record, but the
+  // customer is neither shown it nor charged for it. Hidden lines are left out
+  // of the subtotal and off every printed copy, and issuing writes a Used
+  // movement plus a running cost instead of a sale.
+  isHidden           Boolean   @default(false) @map("is_hidden")
   // GENERATED ALWAYS AS (quantity * unit_price) STORED — computed by Postgres.
   lineTotal          Decimal   @default(dbgenerated()) @map("line_total") @db.Decimal(12, 2)
   // The sale line this one gives back. Set only on a return, where quantity is
@@ -819,6 +837,7 @@ model InvoiceLineItem {
   item         InventoryItem?    @relation(fields: [itemId], references: [itemId], onDelete: SetNull)
   returnedFrom InvoiceLineItem?  @relation("InvoiceLineReturns", fields: [returnedFromLineId], references: [lineItemId], onDelete: SetNull)
   returns      InvoiceLineItem[] @relation("InvoiceLineReturns")
+  runningCosts RunningCost[]
 
   @@index([invoiceId], map: "idx_lineitems_invoice")
   @@index([returnedFromLineId], map: "idx_invoice_lines_returned_from")
@@ -961,15 +980,84 @@ model RunningCost {
   amount      Decimal   @db.Decimal(12, 2)
   incurredOn  DateTime  @map("incurred_on") @db.Date
   notes       String?   @db.Text
+  // Where this cost came from. Both null on one typed in by hand, which is
+  // still the normal case. Set on the two kinds the app raises for itself:
+  //
+  //   invoiceLineItemId  a hidden line on an issued invoice (gloves, pads),
+  //                      expensed at what the stock cost the clinic
+  //   registerClosingId  cash drawn out of the till on a closed register
+  //
+  // These exist so the source document can find its own rows again: voiding an
+  // invoice or re-closing a day retires the costs it raised instead of leaving
+  // orphans behind. Analytics does not read them at all, which is the point:
+  // an app-raised cost is a running cost like any other and lands in the same
+  // categories and the same breakdown with no special-casing.
+  invoiceLineItemId Int? @map("invoice_line_item_id")
+  registerClosingId Int? @map("register_closing_id")
   createdBy   Int?      @map("created_by")
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  creator User? @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+  creator         User?            @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+  invoiceLineItem InvoiceLineItem? @relation(fields: [invoiceLineItemId], references: [lineItemId], onDelete: Cascade)
+  registerClosing RegisterClosing? @relation(fields: [registerClosingId], references: [closingId], onDelete: Cascade)
 
   @@index([incurredOn], map: "idx_running_costs_incurred")
+  @@index([invoiceLineItemId], map: "idx_running_costs_line_item")
+  @@index([registerClosingId], map: "idx_running_costs_closing")
   @@map("running_costs")
+}
+
+// ============================================================
+// REGISTER CLOSINGS
+// ============================================================
+// The end-of-day drawer count, kept. Closing the register used to be a
+// calculator on screen that vanished when the dialog did, so a receptionist who
+// counted the till on Friday had nothing to show for it and an owner back from
+// holiday had no way to check the week. One row per business date.
+//
+// Everything here is a snapshot taken at the moment of counting, including the
+// figures the app worked out itself (expected, taken, refunded). They are NOT
+// re-derived on read: a payment corrected next week would otherwise rewrite
+// history and turn a day that balanced into a day that did not.
+model RegisterClosing {
+  closingId    Int      @id @default(autoincrement()) @map("closing_id")
+  // The clinic's day, not the server's. Unique: a day is closed once, and
+  // re-closing it replaces the count rather than filing a second one.
+  businessDate DateTime @unique @map("business_date") @db.Date
+  // LBP per 1 USD used to reconcile the two drawers against each other.
+  fxRate       Decimal  @map("fx_rate") @db.Decimal(18, 6)
+
+  openingUsd  Decimal @default(0) @map("opening_usd") @db.Decimal(12, 2)
+  openingLbp  Decimal @default(0) @map("opening_lbp") @db.Decimal(18, 2)
+  takenUsd    Decimal @default(0) @map("taken_usd") @db.Decimal(12, 2)
+  takenLbp    Decimal @default(0) @map("taken_lbp") @db.Decimal(18, 2)
+  refundedUsd Decimal @default(0) @map("refunded_usd") @db.Decimal(12, 2)
+  refundedLbp Decimal @default(0) @map("refunded_lbp") @db.Decimal(18, 2)
+  paidOutUsd  Decimal @default(0) @map("paid_out_usd") @db.Decimal(12, 2)
+  paidOutLbp  Decimal @default(0) @map("paid_out_lbp") @db.Decimal(18, 2)
+  expectedUsd Decimal @default(0) @map("expected_usd") @db.Decimal(12, 2)
+  expectedLbp Decimal @default(0) @map("expected_lbp") @db.Decimal(18, 2)
+  countedUsd  Decimal @default(0) @map("counted_usd") @db.Decimal(12, 2)
+  countedLbp  Decimal @default(0) @map("counted_lbp") @db.Decimal(18, 2)
+  // Both drawers together, converted to USD at the rate above. A day short in
+  // dollars and over in lira by the same value is a currency mix-up rather than
+  // a loss, and only the combined figure says so.
+  varianceUsd Decimal @default(0) @map("variance_usd") @db.Decimal(12, 2)
+
+  notes    String?  @db.Text
+  closedBy Int?     @map("closed_by")
+  closedAt DateTime @default(now()) @map("closed_at") @db.Timestamptz(6)
+
+  closer User?         @relation(fields: [closedBy], references: [userId], onDelete: SetNull)
+  // The cash drawn out of the till that day. They are running costs, so they
+  // reach analytics on their own, in the same categories as every other
+  // operating cost.
+  payouts RunningCost[]
+
+  @@index([businessDate(sort: Desc)], map: "idx_register_closings_date")
+  @@map("register_closings")
 }
 
 // ============================================================

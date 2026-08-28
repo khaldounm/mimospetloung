@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
-import { invoiceInclude, listInvoices, toInvoiceDTO } from "@/lib/invoices";
+import {
+  discountPatch,
+  invoiceInclude,
+  listInvoices,
+  toInvoiceDTO,
+} from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
 import { invoiceCreateSchema } from "@/schemas/invoice";
 
@@ -63,9 +68,7 @@ export async function POST(request: Request) {
         clientId: data.clientId ?? null,
         bookingId: data.bookingId,
         dueDate: data.dueDate,
-        ...(data.discountPct !== undefined
-          ? { discountPct: data.discountPct }
-          : {}),
+        ...discountPatch(data),
         ...(data.taxPct !== undefined ? { taxPct: data.taxPct } : {}),
         notes: data.notes,
         status: "Draft",

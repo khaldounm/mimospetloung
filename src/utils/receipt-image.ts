@@ -167,9 +167,11 @@ function layout(
   advance(BASE);
   sep();
 
-  // Rows
+  // Rows. Lines the clinic consumed rather than sold are not on the bill, so
+  // they are not on the copy the customer walks out with either.
+  const lineItems = invoice.lineItems.filter((l) => !l.isHidden);
   ctx.font = font(BASE);
-  for (const item of invoice.lineItems) {
+  for (const item of lineItems) {
     ctx.font = font(BASE);
     const descLines = wrap(ctx, item.description, descWidth);
     if (draw) {
@@ -193,24 +195,50 @@ function layout(
 
   sep();
 
-  const discountAmount =
-    (Number(invoice.subtotal) * Number(invoice.discountPct)) / 100;
+  const discountValue = Number(invoice.discountValue);
+  const adjustment = Number(invoice.adjustment);
   totLine("Subtotal", formatMoney(invoice.subtotal));
-  if (Number(invoice.discountPct) > 0) {
+  if (discountValue !== 0) {
+    // A flat discount described as a percentage reads as a rounding error, and
+    // the reverse hides the figure actually agreed at the counter.
     totLine(
-      `Discount (${invoice.discountPct}%)`,
-      `-${formatMoney(discountAmount)}`,
+      Number(invoice.discountAmount) > 0
+        ? "Discount"
+        : `Discount (${invoice.discountPct}%)`,
+      `-${formatMoney(discountValue)}`,
     );
   }
   if (Number(invoice.taxPct) > 0) {
     totLine(`Tax (${invoice.taxPct}%)`, formatMoney(invoice.taxAmount));
   }
+  // The rounding the counter agreed to, shown rather than folded into the
+  // total: a customer told "call it 100" should see the 1.12 come off.
+  if (adjustment !== 0) {
+    totLine(
+      "Adjustment",
+      `${adjustment > 0 ? "+" : "-"}${formatMoney(Math.abs(adjustment))}`,
+    );
+  }
   totLine("TOTAL", formatMoney(invoice.total), true);
   totLine("Paid", formatMoney(invoice.amountPaid));
   totLine("Balance due", formatMoney(invoice.balance), true);
 
+  // What the client owes across their WHOLE account, this invoice included. A
+  // different number from the balance above whenever anything else is
+  // outstanding, which is the reason for printing it: the customer standing at
+  // the counter can settle the lot. Absent on a walk-in, which has no account.
+  if (invoice.clientBalance != null) {
+    const account = Number(invoice.clientBalance);
+    sep();
+    totLine(
+      account < 0 ? "Account in credit" : "Account balance",
+      formatMoney(Math.abs(account)),
+      true,
+    );
+  }
+
   sep();
-  left(`Items# ${invoice.lineItems.length}`, BASE);
+  left(`Items# ${lineItems.length}`, BASE);
 
   y += 6;
   center("♥ Thank you for your visit", BASE);

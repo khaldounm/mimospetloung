@@ -74,15 +74,20 @@ export default function InventoryCategoryTabs({
                   healthy shelf carries no decoration. */}
               <Badge
                 color="warning"
-                badgeContent={c.lowStockCount}
                 invisible={c.lowStockCount === 0}
-                sx={{ "& .MuiBadge-badge": { right: -10, top: 2 } }}
+                variant="dot"
+                anchorOrigin={{
+                  vertical: "top",
+                  horizontal: "left",
+                }}
+                sx={{ "& .MuiBadge-badge": { left: -10, top: 7.5 } }}
               >
                 <span>{c.category}</span>
+                <span>&nbsp;</span>
+                <Typography variant="caption" color="text.secondary">
+                  {c.count.toLocaleString()}
+                </Typography>
               </Badge>
-              <Typography variant="caption" color="text.secondary">
-                {c.count.toLocaleString()}
-              </Typography>
             </Stack>
           }
         />

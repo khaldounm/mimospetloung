@@ -46,17 +46,6 @@ export default async function InvoiceDetailPage({
   // the current setting until it is issued.
   const fxRate = invoice.fxRate ? invoice.fxRate.toNumber() : currentFxRate;
 
-  // What the client owes across their whole account, not just this invoice.
-  // Read here rather than in the browser so the page arrives with it. Null for
-  // a walk-in, which has no account.
-  const client =
-    invoice.clientId != null
-      ? await prisma.client.findUnique({
-          where: { clientId: invoice.clientId },
-          select: { accountBalance: true },
-        })
-      : null;
-
   const serviceOptions: ServiceLineOption[] = services
     .map(toServiceDTO)
     .map((s) => ({ serviceId: s.serviceId, name: s.name, price: s.price }));
@@ -83,7 +72,6 @@ export default async function InvoiceDetailPage({
       canWrite={canWrite}
       canPay={canPay}
       fxRate={fxRate}
-      clientBalance={client ? client.accountBalance.toFixed(2) : null}
     />
   );
 }

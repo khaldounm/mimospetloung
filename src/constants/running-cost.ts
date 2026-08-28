@@ -24,3 +24,12 @@ export const RUNNING_COST_ITEM_SUGGESTIONS: Record<string, string[]> = {
   "Ops items": ["Gloves", "Pads", "Syringes"],
   Other: [],
 };
+
+// Where a hidden invoice line files itself when the invoice is issued. Gloves,
+// pads and syringes are already the suggested items under this category, which
+// is exactly what a hidden line is for.
+export const CLINIC_USE_COST_CATEGORY = "Ops items";
+
+// What the register's cash draws are called on the running-costs list, so a
+// figure that appeared without anyone typing it says where it came from.
+export const REGISTER_DRAW_NOTE = "Drawn from the register";

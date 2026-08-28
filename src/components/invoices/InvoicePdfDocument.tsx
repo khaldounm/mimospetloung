@@ -145,7 +145,23 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
   },
   pageNumber: { textAlign: "right", marginTop: 2 },
+  accountRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderTopWidth: 1,
+    borderTopColor: COLORS.line,
+    marginTop: 6,
+    paddingTop: 5,
+  },
 });
+
+// How to read the account figure. "Owes" and "in credit" are opposite signs of
+// one column, and a bare minus in front of a number on a printed invoice gets
+// read as a discount at least as often as a credit.
+function accountLabel(balance: number): string {
+  if (balance === 0) return "Account balance";
+  return balance > 0 ? "Total account balance" : "Account in credit";
+}
 
 export default function InvoicePdfDocument({
   invoice,
@@ -157,10 +173,25 @@ export default function InvoicePdfDocument({
   logoSrc?: string;
 }) {
   const fxRate = invoice.fxRate ? Number(invoice.fxRate) : null;
-  const discountAmount =
-    (Number(invoice.subtotal) * Number(invoice.discountPct)) / 100;
-  const hasDiscount = Number(invoice.discountPct) > 0;
+  const discountValue = Number(invoice.discountValue);
+  const hasDiscount = discountValue !== 0;
+  // A flat discount described as a percentage reads as a rounding error, and
+  // the reverse hides the figure that was actually agreed at the counter.
+  const discountLabel =
+    Number(invoice.discountAmount) > 0
+      ? "Discount"
+      : `Discount (${invoice.discountPct}%)`;
   const hasTax = Number(invoice.taxPct) > 0;
+  const adjustment = Number(invoice.adjustment);
+  // Lines the clinic consumed rather than sold. They are not on the bill and
+  // the customer is not being charged for them, so they are not on the copy the
+  // customer gets either.
+  const lineItems = invoice.lineItems.filter((l) => !l.isHidden);
+  // What the client owes across their whole account, which is not the same
+  // number as this invoice's balance. Absent on a walk-in, which has no
+  // account behind it.
+  const accountBalance =
+    invoice.clientBalance != null ? Number(invoice.clientBalance) : null;
 
   return (
     <Document
@@ -250,7 +281,7 @@ export default function InvoicePdfDocument({
             <Text style={styles.colUnit}>Unit price</Text>
             <Text style={styles.colTotal}>Amount</Text>
           </View>
-          {invoice.lineItems.map((l) => (
+          {lineItems.map((l) => (
             <View key={l.lineItemId} style={styles.tableRow}>
               <Text style={styles.colDesc}>{l.description}</Text>
               <Text style={styles.colQty}>{formatLineQuantity(l)}</Text>
@@ -269,16 +300,26 @@ export default function InvoicePdfDocument({
             </View>
             {hasDiscount ? (
               <View style={styles.totalsRow}>
-                <Text style={styles.muted}>
-                  Discount ({invoice.discountPct}%)
-                </Text>
-                <Text>-{formatMoney(discountAmount)}</Text>
+                <Text style={styles.muted}>{discountLabel}</Text>
+                <Text>-{formatMoney(discountValue)}</Text>
               </View>
             ) : null}
             {hasTax ? (
               <View style={styles.totalsRow}>
                 <Text style={styles.muted}>Tax ({invoice.taxPct}%)</Text>
                 <Text>{formatMoney(invoice.taxAmount)}</Text>
+              </View>
+            ) : null}
+            {/* The rounding the counter agreed to, shown rather than folded
+                into the total: a customer who was told "call it 100" should be
+                able to see the 1.12 that came off. */}
+            {adjustment !== 0 ? (
+              <View style={styles.totalsRow}>
+                <Text style={styles.muted}>Adjustment</Text>
+                <Text>
+                  {adjustment > 0 ? "+" : "-"}
+                  {formatMoney(Math.abs(adjustment))}
+                </Text>
               </View>
             ) : null}
             <View style={styles.totalsDivider} />
@@ -314,6 +355,19 @@ export default function InvoicePdfDocument({
                 <Text style={styles.muted}>{SECONDARY_CURRENCY.code}</Text>
                 <Text style={styles.muted}>
                   {formatSecondaryMoney(invoice.balance, fxRate)}
+                </Text>
+              </View>
+            ) : null}
+            {/* What the client owes across their WHOLE account, this invoice
+                included. A different number from the balance above whenever
+                they have anything else outstanding, which is exactly why it is
+                worth printing: the customer standing at the counter can settle
+                the lot. */}
+            {accountBalance != null ? (
+              <View style={styles.accountRow}>
+                <Text style={styles.muted}>{accountLabel(accountBalance)}</Text>
+                <Text style={styles.bold}>
+                  {formatMoney(Math.abs(accountBalance))}
                 </Text>
               </View>
             ) : null}

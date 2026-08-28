@@ -19,18 +19,45 @@ const optionalMoney = z.preprocess(
   z.coerce.number().nonnegative().max(99_999_999.99).optional(),
 );
 
+// Money that can go either way. The invoice adjustment is the only one: it is a
+// nudge onto a round figure and rounding goes up as often as down.
+const optionalSignedMoney = z.preprocess(
+  (v) => (v === "" || v === null ? undefined : v),
+  z.coerce.number().min(-99_999_999.99).max(99_999_999.99).optional(),
+);
+
+// A percentage and a flat amount are two ways of saying one discount, so an
+// invoice carries one or the other and never both. Checked here rather than
+// leaving it to invoices_one_discount_mode, so a caller that sends both gets a
+// 400 that says what is wrong instead of a constraint violation.
+function refineOneDiscountMode(
+  data: { discountPct?: number; discountAmount?: number },
+  ctx: z.RefinementCtx,
+): void {
+  if ((data.discountPct ?? 0) > 0 && (data.discountAmount ?? 0) > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["discountAmount"],
+      message: "Set the discount as a percentage or as an amount, not both",
+    });
+  }
+}
+
 // --- Invoice (draft creation + draft edits) ---
 
-export const invoiceCreateSchema = z.object({
-  // Optional: an invoice with no client is a walk-in, an anonymous counter
-  // sale that belongs to no account.
-  clientId: optionalId,
-  bookingId: optionalId,
-  dueDate: optionalDate,
-  discountPct: optionalPct,
-  taxPct: optionalPct,
-  notes: optionalString(5000),
-});
+export const invoiceCreateSchema = z
+  .object({
+    // Optional: an invoice with no client is a walk-in, an anonymous counter
+    // sale that belongs to no account.
+    clientId: optionalId,
+    bookingId: optionalId,
+    dueDate: optionalDate,
+    discountPct: optionalPct,
+    discountAmount: optionalMoney,
+    taxPct: optionalPct,
+    notes: optionalString(5000),
+  })
+  .superRefine(refineOneDiscountMode);
 
 export const invoiceUpdateSchema = z
   .object({
@@ -38,12 +65,19 @@ export const invoiceUpdateSchema = z
     bookingId: optionalId,
     dueDate: optionalDate,
     discountPct: optionalPct,
+    discountAmount: optionalMoney,
     taxPct: optionalPct,
+    // Sent as the delta the counter wants taken off (or added to) the total,
+    // never as the target figure. The dialog works the delta out from whatever
+    // round number was typed, because a stored target would swallow the next
+    // line added to the invoice.
+    adjustment: optionalSignedMoney,
     notes: optionalString(5000),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "No fields to update",
-  });
+  })
+  .superRefine(refineOneDiscountMode);
 
 // Status transitions are a separate action from field edits. Only Issued and
 // Void are reachable via the API; Partial/Paid are derived from payments.
@@ -83,6 +117,9 @@ export const lineItemCreateSchema = z
     ),
     looseQty: optionalLooseQty,
     unitPrice: optionalMoney,
+    // Consumed in the clinic rather than sold. Kept off the bill and off every
+    // printed copy; the stock still moves and the cost still lands in analytics.
+    isHidden: z.coerce.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.quantity === undefined && data.looseQty === undefined) {
@@ -113,6 +150,16 @@ export const lineItemCreateSchema = z
         message: "Pick only one of service or inventory item",
       });
     }
+    // Only stock can be consumed. A service has nothing to take off a shelf and
+    // no cost to expense, so hiding one would drop it off the bill and leave
+    // nothing behind at all.
+    if (data.isHidden && !data.itemId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["isHidden"],
+        message: "Only an inventory item can be used in the clinic",
+      });
+    }
   });
 
 // A single scan at the counter. The barcode is resolved server-side so the
@@ -133,6 +180,7 @@ export const lineItemUpdateSchema = z
     // so the two are never sent together.
     looseQty: optionalLooseQty,
     unitPrice: optionalMoney,
+    isHidden: z.coerce.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "No fields to update",

@@ -31,12 +31,22 @@ function receiptHtml(invoice: InvoiceDTO): string {
     minute: "2-digit",
   });
 
-  const discountAmount =
-    (Number(invoice.subtotal) * Number(invoice.discountPct)) / 100;
-  const hasDiscount = Number(invoice.discountPct) > 0;
+  const discountValue = Number(invoice.discountValue);
+  const hasDiscount = discountValue !== 0;
+  // A flat discount described as a percentage reads as a rounding error, and
+  // the reverse hides the figure that was actually agreed at the counter.
+  const discountLabel =
+    Number(invoice.discountAmount) > 0
+      ? "Discount"
+      : `Discount (${invoice.discountPct}%)`;
   const hasTax = Number(invoice.taxPct) > 0;
+  const adjustment = Number(invoice.adjustment);
+  // Lines the clinic consumed rather than sold never reach the customer's copy.
+  const lineItems = invoice.lineItems.filter((l) => !l.isHidden);
+  const accountBalance =
+    invoice.clientBalance != null ? Number(invoice.clientBalance) : null;
 
-  const rows = invoice.lineItems
+  const rows = lineItems
     .map(
       (l) => `
       <tr>
@@ -125,15 +135,18 @@ function receiptHtml(invoice: InvoiceDTO): string {
 
   <div class="sep"></div>
   ${totalsRow("Subtotal", formatMoney(invoice.subtotal))}
+  ${hasDiscount ? totalsRow(discountLabel, `-${formatMoney(discountValue)}`) : ""}
+  ${hasTax ? totalsRow(`Tax (${invoice.taxPct}%)`, formatMoney(invoice.taxAmount)) : ""}
   ${
-    hasDiscount
+    /* The rounding the counter agreed to, shown rather than folded into the
+       total: a customer told "call it 100" should see the 1.12 come off. */
+    adjustment !== 0
       ? totalsRow(
-          `Discount (${invoice.discountPct}%)`,
-          `-${formatMoney(discountAmount)}`,
+          "Adjustment",
+          `${adjustment > 0 ? "+" : "-"}${formatMoney(Math.abs(adjustment))}`,
         )
       : ""
   }
-  ${hasTax ? totalsRow(`Tax (${invoice.taxPct}%)`, formatMoney(invoice.taxAmount)) : ""}
   ${totalsRow("TOTAL", formatMoney(invoice.total), true)}
   ${
     /* Lira at the rate frozen when the invoice was issued, so a reprint shows
@@ -148,9 +161,23 @@ function receiptHtml(invoice: InvoiceDTO): string {
   }
   ${totalsRow("Paid", formatMoney(invoice.amountPaid))}
   ${totalsRow("Balance due", formatMoney(invoice.balance), true)}
+  ${
+    /* What the client owes across their WHOLE account, this invoice included.
+       A different number from the balance above whenever anything else is
+       outstanding, which is the reason for printing it: the customer standing
+       at the counter can settle the lot. Absent on a walk-in. */
+    accountBalance != null
+      ? `<div class="sep"></div>` +
+        totalsRow(
+          accountBalance < 0 ? "Account in credit" : "Account balance",
+          formatMoney(Math.abs(accountBalance)),
+          true,
+        )
+      : ""
+  }
 
   <div class="sep"></div>
-  <div>Items# ${invoice.lineItems.length}</div>
+  <div>Items# ${lineItems.length}</div>
 
   <div class="foot">
     <div><span class="heart">&#9829;</span> Thank you for your visit</div>

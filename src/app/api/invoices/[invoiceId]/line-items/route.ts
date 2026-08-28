@@ -69,6 +69,11 @@ export async function POST(
         (item.salePrice ? item.salePrice.toNumber() : undefined);
     }
 
+    // A hidden line is never charged, so a consumable with no sale price set
+    // (which most of them are: nobody sells a glove) must still go on. Zero
+    // rather than a refusal, and the price is still honoured if one exists so
+    // un-hiding the line later has something to charge.
+    if (unitPrice === undefined && data.isHidden) unitPrice = 0;
     if (unitPrice === undefined) {
       throw new ApiError(400, "A unit price is required");
     }
@@ -87,6 +92,7 @@ export async function POST(
           unitPrice,
           looseQty: resolved.looseQty,
           looseUnit: resolved.looseUnit,
+          isHidden: data.isHidden ?? false,
         },
       });
       await recomputeInvoiceTotals(tx, invoiceId);
@@ -106,6 +112,7 @@ export async function POST(
         description,
         quantity: resolved.quantity,
         unitPrice,
+        ...(data.isHidden ? { isHidden: true } : {}),
         ...(resolved.looseQty != null
           ? { looseQty: resolved.looseQty, looseUnit: resolved.looseUnit }
           : {}),

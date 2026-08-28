@@ -202,6 +202,10 @@ export interface InvoiceLineItemDTO {
   // the stock.
   looseQty: string | null;
   looseUnit: string | null;
+  // Consumed by the clinic during the visit rather than sold: gloves, pads, a
+  // syringe. Left out of the subtotal and off every printed copy. Its cost
+  // reaches analytics as a running cost when the invoice is issued.
+  isHidden: boolean;
 }
 
 // One line of an issued invoice, seen from the counter that is about to take
@@ -268,11 +272,24 @@ export interface InvoiceDTO {
   status: InvoiceStatus;
   subtotal: string;
   discountPct: string;
+  // A discount typed as money instead of a percentage. Only one of the two is
+  // ever non-zero.
+  discountAmount: string;
+  // What the discount came to in money, whichever way it was typed. Derived, so
+  // no caller has to work it back out of a percentage.
+  discountValue: string;
   taxPct: string;
   taxAmount: string;
+  // Signed nudge applied after tax to land the total on a round figure.
+  adjustment: string;
   total: string;
   amountPaid: string;
   balance: string;
+  // What the client owes across their WHOLE account, not just this invoice.
+  // Carried on the DTO so the printed copies and the WhatsApp message can show
+  // it without each one going back to the database for it. Null on a walk-in,
+  // which has no account.
+  clientBalance: string | null;
   issuedAt: string | null;
   dueDate: string | null;
   // LBP per 1 USD, frozen when the invoice was issued. Null on a draft, which
@@ -1029,4 +1046,44 @@ export interface RegisterDayDTO {
   // drawer that does not balance can be traced back to them.
   unspecifiedCount: number;
   unspecifiedUsd: string;
+  // The count already filed for this day, if the day has been closed. Null on
+  // one nobody has counted yet.
+  closing: RegisterClosingDTO | null;
+}
+
+// One handful of cash out of the till. Stored as a running cost, so it lands in
+// analytics under its own category alongside every other operating cost.
+export interface RegisterPayoutDTO {
+  costId: number;
+  category: string;
+  description: string;
+  amount: string;
+  currency: string;
+}
+
+// A day that has been counted and filed. Every figure here is frozen at the
+// moment of closing, including the ones the app worked out: a payment corrected
+// next week must not turn a day that balanced into a day that did not.
+export interface RegisterClosingDTO {
+  closingId: number;
+  date: string;
+  fxRate: number;
+  openingUsd: string;
+  openingLbp: string;
+  takenUsd: string;
+  takenLbp: string;
+  refundedUsd: string;
+  refundedLbp: string;
+  paidOutUsd: string;
+  paidOutLbp: string;
+  expectedUsd: string;
+  expectedLbp: string;
+  countedUsd: string;
+  countedLbp: string;
+  // Both drawers together in USD. Positive is over, negative is short.
+  varianceUsd: string;
+  notes: string | null;
+  closedByName: string | null;
+  closedAt: string;
+  payouts: RegisterPayoutDTO[];
 }

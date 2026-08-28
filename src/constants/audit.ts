@@ -12,6 +12,9 @@ export const AUDIT_ACTIONS = [
   // Goods given back against an earlier sale. Distinct from "void", which
   // cancels a document, and from "update", which is someone editing a draft.
   "return",
+  // The day's drawer counted and filed. Its own action rather than "create",
+  // because re-closing a day replaces the count and both times are a close.
+  "close",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -41,6 +44,7 @@ export const AUDIT_ENTITIES = [
   "purchase_order_line",
   "contact_message",
   "setting",
+  "register_closing",
 ] as const;
 export type AuditEntity = (typeof AUDIT_ENTITIES)[number];
 
@@ -69,6 +73,7 @@ export const AUDIT_ENTITY_LABELS: Record<AuditEntity, string> = {
   purchase_order_line: "Purchase order line",
   contact_message: "Website message",
   setting: "Clinic setting",
+  register_closing: "Register close",
 };
 
 // MUI Chip colors per action for the viewer.
@@ -86,4 +91,5 @@ export const AUDIT_ACTION_COLOR: Record<
   send: "info",
   cancel: "warning",
   return: "warning",
+  close: "info",
 };

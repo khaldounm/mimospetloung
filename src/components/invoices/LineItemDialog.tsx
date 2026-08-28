@@ -22,7 +22,9 @@ import {
 } from "@mui/material";
 import ClearIcon from "@mui/icons-material/Clear";
 import QrCodeScannerIcon from "@mui/icons-material/QrCodeScanner";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { apiRequest } from "@/utils/api-client";
+import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
 import { toGtin14 } from "@/utils/barcode";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
 import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
@@ -104,6 +106,9 @@ function LineItemForm({
   // server turns it into a pack quantity and a price, so neither is typed here.
   const [sellLoose, setSellLoose] = useState(line?.looseQty != null);
   const [looseQty, setLooseQty] = useState(line?.looseQty ?? "");
+  // Consumed during the visit rather than sold. Off the bill and off every
+  // printed copy; the stock still moves and the cost still lands in analytics.
+  const [isHidden, setIsHidden] = useState(line?.isHidden ?? false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Raw text from the barcode scanner (or manual entry) before it resolves to
@@ -218,9 +223,12 @@ function LineItemForm({
           `/api/invoices/${invoiceId}/line-items/${line!.lineItemId}`,
           {
             method: "PATCH",
-            body: loose
-              ? { description, looseQty }
-              : { description, quantity, unitPrice },
+            body: {
+              ...(loose
+                ? { description, looseQty }
+                : { description, quantity, unitPrice }),
+              ...(isItem ? { isHidden } : {}),
+            },
           },
         );
       } else {
@@ -235,6 +243,7 @@ function LineItemForm({
               // A loose line sends only the amount asked for; the server
               // derives the pack quantity and the price it bills at.
               ...(loose ? { looseQty } : { quantity, unitPrice }),
+              ...(isItem && isHidden ? { isHidden: true } : {}),
             },
           },
         );
@@ -428,10 +437,41 @@ function LineItemForm({
                 value={unitPrice}
                 onChange={(e) => setUnitPrice(e.target.value)}
                 slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
-                required
+                // A hidden line is never charged, and most consumables have no
+                // sale price to type in the first place.
+                required={!isHidden}
+                disabled={isHidden}
                 fullWidth
+                helperText={isHidden ? "Not charged" : undefined}
               />
             </Stack>
+          )}
+
+          {/* Only stock can be consumed: a service has nothing to take off a
+              shelf and no cost to expense, so hiding one would drop it off the
+              bill and leave nothing behind at all. */}
+          {isItem && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={isHidden}
+                  onChange={(e) => {
+                    setIsHidden(e.target.checked);
+                    // A hidden line is not sold, so selling part of a pack is
+                    // not a thing it can be doing.
+                    if (e.target.checked) setSellLoose(false);
+                  }}
+                />
+              }
+              label="Used in the clinic, not charged"
+            />
+          )}
+          {isHidden && (
+            <Alert severity="info" icon={<VisibilityOffIcon />}>
+              This line stays off the printed invoice and out of the total.
+              Issuing takes it off the shelf and files what it cost as a running
+              cost under {CLINIC_USE_COST_CATEGORY}.
+            </Alert>
           )}
         </Stack>
       </DialogContent>

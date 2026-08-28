@@ -495,6 +495,10 @@ async function billedByCategory(
 
   const lines = await prisma.invoiceLineItem.findMany({
     where: {
+      // A hidden line was consumed by the clinic, not billed. Its line_total is
+      // still whatever the item would have sold for, so leaving it in would
+      // report a box of gloves as revenue nobody was ever charged.
+      isHidden: false,
       invoice: {
         status: { in: REVENUE_STATUSES },
         issuedAt: { gte: from, lt: toExclusive },
@@ -731,6 +735,9 @@ async function getItemsSection(range: AnalyticsRange): Promise<ItemsAnalytics> {
         by: ["itemId"],
         where: {
           itemId: { not: null },
+          // Consumed in the clinic, never sold. It belongs in operating costs,
+          // which is where issuing files it, and not in what this item sold.
+          isHidden: false,
           quantity,
           invoice: tradedInvoiceFilter(from, toExclusive),
         },
@@ -820,7 +827,13 @@ export async function getItemPerformance(
       },
     }),
     prisma.invoiceLineItem.findMany({
-      where: { itemId, invoice: tradedInvoiceFilter(from, toExclusive) },
+      // isHidden excluded for the same reason as the tallies above: clinic use
+      // is a cost, not a sale, and the two must not be added together.
+      where: {
+        itemId,
+        isHidden: false,
+        invoice: tradedInvoiceFilter(from, toExclusive),
+      },
       select: {
         quantity: true,
         lineTotal: true,

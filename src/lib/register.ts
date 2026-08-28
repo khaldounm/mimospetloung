@@ -1,12 +1,17 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { ApiError } from "@/lib/api";
 import { CLINIC, CURRENCY, SECONDARY_CURRENCY } from "@/constants/clinic";
 import { REGISTER_MAX_DAYS_BACK } from "@/constants/invoice";
+import { REGISTER_DRAW_NOTE } from "@/constants/running-cost";
 import { getFxRate } from "@/lib/settings";
+import type { RegisterCloseInput } from "@/schemas/register";
 import type {
+  RegisterClosingDTO,
   RegisterCurrencyLine,
   RegisterDayDTO,
   RegisterNonCashLine,
+  RegisterPayoutDTO,
 } from "@/types/entities";
 
 const D = (v: string | number | Prisma.Decimal) => new Prisma.Decimal(v);
@@ -79,14 +84,19 @@ function emptyLine(currency: string): {
   return { currency, taken: D(0), refunded: D(0) };
 }
 
-// What the drawer should hold from documents, for one day. Read-only: closing
-// the register is a counting exercise on the counter's side, and nothing here
-// is written back.
+// What the drawer should hold from documents, for one day, together with the
+// count already filed against it if there is one.
+//
+// The document figures are always recomputed and never read off the closing.
+// They are what the day looks like NOW, which is what a fresh count has to be
+// checked against; the closing carries its own frozen copy for the day it was
+// filed. Showing both is what lets an owner see that a day was counted straight
+// and that something has moved since.
 export async function getRegisterDay(date: string): Promise<RegisterDayDTO> {
   const start = clinicMidnight(date);
   const end = clinicMidnight(date, 1);
 
-  const [payments, fxRate] = await Promise.all([
+  const [payments, fxRate, closing] = await Promise.all([
     prisma.payment.findMany({
       where: { paidAt: { gte: start, lt: end } },
       select: {
@@ -97,6 +107,7 @@ export async function getRegisterDay(date: string): Promise<RegisterDayDTO> {
       },
     }),
     getFxRate(),
+    getRegisterClosing(date),
   ]);
 
   // USD and LBP always appear, even on a day neither was taken: the drawer
@@ -164,5 +175,232 @@ export async function getRegisterDay(date: string): Promise<RegisterDayDTO> {
     nonCash: nonCashLines,
     unspecifiedCount,
     unspecifiedUsd: unspecifiedUsd.toFixed(2),
+    closing,
   };
+}
+
+// ---- Closing the day ----
+
+const closingInclude = {
+  closer: { select: { firstName: true, lastName: true } },
+  payouts: {
+    where: { deletedAt: null },
+    orderBy: { costId: "asc" },
+    select: {
+      costId: true,
+      category: true,
+      description: true,
+      amount: true,
+      notes: true,
+    },
+  },
+} as const;
+
+type ClosingRow = Prisma.RegisterClosingGetPayload<{
+  include: typeof closingInclude;
+}>;
+
+// The currency a draw was taken in. running_costs is a USD ledger like the rest
+// of the books, so the lira figure would be lost if it were not written down;
+// it is kept on the note, which is also what the running-costs list shows.
+const DRAW_NOTE = (currency: string, amount: Prisma.Decimal, date: string) =>
+  currency === CURRENCY.code
+    ? `${REGISTER_DRAW_NOTE} on ${date}`
+    : `${REGISTER_DRAW_NOTE} on ${date} (${amount.toFixed(0)} ${currency})`;
+
+// Reads the currency back out of the note above, so reopening a closed day
+// shows each draw as it was counted rather than converted.
+//
+// The note is the only place the original figure lives: running_costs is a USD
+// ledger, and the lira amount would otherwise be gone. That makes this a
+// best-effort read, not a source of truth. A note edited by hand from the
+// running-costs page simply stops matching, and the draw falls back to its USD
+// value, which is the figure the books were built on either way.
+const DRAW_CURRENCY = /\(([\d,.]+) (\w+)\)$/;
+
+function toPayoutDTO(p: ClosingRow["payouts"][number]): RegisterPayoutDTO {
+  const match = p.notes ? DRAW_CURRENCY.exec(p.notes) : null;
+  return {
+    costId: p.costId,
+    category: p.category,
+    description: p.description,
+    // The USD value is the ledger figure; the original is recovered from the
+    // note for a draw that was handed over in lira.
+    amount: match ? match[1]!.replace(/,/g, "") : p.amount.toFixed(2),
+    currency: match ? match[2]! : CURRENCY.code,
+  };
+}
+
+function toClosingDTO(c: ClosingRow): RegisterClosingDTO {
+  return {
+    closingId: c.closingId,
+    date: c.businessDate.toISOString().slice(0, 10),
+    fxRate: c.fxRate.toNumber(),
+    openingUsd: c.openingUsd.toFixed(2),
+    openingLbp: c.openingLbp.toFixed(2),
+    takenUsd: c.takenUsd.toFixed(2),
+    takenLbp: c.takenLbp.toFixed(2),
+    refundedUsd: c.refundedUsd.toFixed(2),
+    refundedLbp: c.refundedLbp.toFixed(2),
+    paidOutUsd: c.paidOutUsd.toFixed(2),
+    paidOutLbp: c.paidOutLbp.toFixed(2),
+    expectedUsd: c.expectedUsd.toFixed(2),
+    expectedLbp: c.expectedLbp.toFixed(2),
+    countedUsd: c.countedUsd.toFixed(2),
+    countedLbp: c.countedLbp.toFixed(2),
+    varianceUsd: c.varianceUsd.toFixed(2),
+    notes: c.notes,
+    closedByName: c.closer
+      ? `${c.closer.firstName} ${c.closer.lastName}`
+      : null,
+    closedAt: c.closedAt.toISOString(),
+    payouts: c.payouts.map(toPayoutDTO),
+  };
+}
+
+export async function getRegisterClosing(
+  date: string,
+): Promise<RegisterClosingDTO | null> {
+  const row = await prisma.registerClosing.findUnique({
+    where: { businessDate: new Date(`${date}T00:00:00.000Z`) },
+    include: closingInclude,
+  });
+  return row ? toClosingDTO(row) : null;
+}
+
+// The most recent closings, newest first, for the list an owner reads when they
+// get back. Deliberately not paged: the window that can be closed is a week
+// wide, so this is a short list by construction.
+export async function listRegisterClosings(
+  limit = 30,
+): Promise<RegisterClosingDTO[]> {
+  const rows = await prisma.registerClosing.findMany({
+    orderBy: { businessDate: "desc" },
+    take: Math.min(Math.max(limit, 1), 90),
+    include: closingInclude,
+  });
+  return rows.map(toClosingDTO);
+}
+
+// File the day's count.
+//
+// Re-closing a day REPLACES the count rather than filing a second one, because
+// a receptionist who mistyped what they counted has to be able to fix it and
+// the day is one event either way. The draws are deleted and rewritten with it,
+// which is why they carry register_closing_id: without it the old ones would
+// stay in the month's operating costs and the day would be expensed twice.
+//
+// Everything the app worked out is frozen onto the row here. It is not derived
+// on read, so a payment corrected next week cannot rewrite a day that already
+// balanced.
+export async function saveRegisterClosing(
+  input: RegisterCloseInput,
+  closedBy: number | null,
+): Promise<RegisterClosingDTO> {
+  const day = await getRegisterDay(input.date);
+  const fxRate = D(day.fxRate);
+  if (fxRate.lte(0)) {
+    throw new ApiError(
+      400,
+      "No exchange rate is set, so the two drawers cannot be reconciled against each other.",
+    );
+  }
+
+  const lineFor = (currency: string) =>
+    day.currencies.find((c) => c.currency === currency);
+  const taken = (currency: string) => D(lineFor(currency)?.taken ?? 0);
+  const refunded = (currency: string) => D(lineFor(currency)?.refunded ?? 0);
+
+  const paidOut = (currency: string) =>
+    input.payouts
+      .filter((p) => p.currency === currency)
+      .reduce((sum, p) => sum.plus(D(p.amount)), D(0));
+
+  const usd = CURRENCY.code;
+  const lbp = SECONDARY_CURRENCY.code;
+
+  // Expected = what was in the drawer at the start, plus what the documents say
+  // came in, minus what was handed back out of it. Per currency, because that is
+  // how the notes are counted.
+  const expected = (currency: string, opening: number) =>
+    D(opening)
+      .plus(taken(currency))
+      .minus(refunded(currency))
+      .minus(paidOut(currency))
+      .toDecimalPlaces(2);
+
+  const expectedUsd = expected(usd, input.openingUsd);
+  const expectedLbp = expected(lbp, input.openingLbp);
+  const varianceUsd = D(input.countedUsd)
+    .minus(expectedUsd)
+    .plus(D(input.countedLbp).minus(expectedLbp).dividedBy(fxRate))
+    .toDecimalPlaces(2);
+
+  const businessDate = new Date(`${input.date}T00:00:00.000Z`);
+  const figures = {
+    fxRate,
+    openingUsd: D(input.openingUsd),
+    openingLbp: D(input.openingLbp),
+    takenUsd: taken(usd),
+    takenLbp: taken(lbp),
+    refundedUsd: refunded(usd),
+    refundedLbp: refunded(lbp),
+    paidOutUsd: paidOut(usd),
+    paidOutLbp: paidOut(lbp),
+    expectedUsd,
+    expectedLbp,
+    countedUsd: D(input.countedUsd),
+    countedLbp: D(input.countedLbp),
+    varianceUsd,
+    notes: input.notes ?? null,
+    closedBy,
+  };
+
+  const saved = await prisma.$transaction(async (tx) => {
+    const closing = await tx.registerClosing.upsert({
+      where: { businessDate },
+      create: { businessDate, ...figures },
+      update: { ...figures, closedAt: new Date() },
+    });
+
+    // Hard delete, not soft. These rows only ever existed as this closing's
+    // draws, so a superseded one is a correction and not history: leaving it
+    // soft-deleted would clutter the running-costs list with every version of a
+    // count somebody retyped.
+    await tx.runningCost.deleteMany({
+      where: { registerClosingId: closing.closingId },
+    });
+
+    if (input.payouts.length > 0) {
+      await tx.runningCost.createMany({
+        data: input.payouts.map((p) => {
+          const original = D(p.amount);
+          // The books are in USD. A draw handed over in lira is converted at
+          // the day's rate, the same rate the drawer was reconciled at, and the
+          // figure actually taken is kept on the note.
+          const amountUsd =
+            p.currency === usd
+              ? original
+              : original.dividedBy(fxRate).toDecimalPlaces(2);
+          return {
+            category: p.category,
+            description: p.description,
+            amount: amountUsd,
+            incurredOn: businessDate,
+            notes: DRAW_NOTE(p.currency, original, input.date),
+            registerClosingId: closing.closingId,
+            createdBy: closedBy,
+          };
+        }),
+      });
+    }
+
+    return closing.closingId;
+  });
+
+  const dto = await prisma.registerClosing.findUniqueOrThrow({
+    where: { closingId: saved },
+    include: closingInclude,
+  });
+  return toClosingDTO(dto);
 }

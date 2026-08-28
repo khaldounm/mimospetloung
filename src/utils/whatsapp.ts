@@ -17,6 +17,20 @@ export function invoiceWhatsAppMessage(invoice: InvoiceDTO): string {
     `Balance due: ${formatMoney(invoice.balance)}`,
   ];
   if (invoice.dueDate) lines.push(`Due date: ${invoice.dueDate}`);
+  // What the client owes across their WHOLE account, this invoice included.
+  // Worth saying only when it differs from the balance above: repeating the
+  // same figure under a second name reads like two separate demands. Absent on
+  // a walk-in, which has no account.
+  if (invoice.clientBalance != null) {
+    const account = Number(invoice.clientBalance);
+    if (Math.abs(account - Number(invoice.balance)) >= 0.01) {
+      lines.push(
+        account < 0
+          ? `Account in credit: ${formatMoney(Math.abs(account))}`
+          : `Total account balance: ${formatMoney(account)}`,
+      );
+    }
+  }
   lines.push("", "Thank you for your visit.");
   return lines.join("\n");
 }
