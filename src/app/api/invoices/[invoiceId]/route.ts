@@ -79,7 +79,14 @@ export async function PATCH(
         entityId: invoiceId,
         changes: {
           status: invoice.status,
-          ...(parsed.data.overrideVetHold ? { overrodeVetHold: true } : {}),
+          // Recorded off the row, not off the request flag. A till whose page
+          // went stale sends overrideVetHold for a hold the vet already
+          // released, and trusting the flag would log an override that never
+          // happened. issueInvoice throws when a real hold is not overridden,
+          // so reaching here with vetHoldAt set means it genuinely was.
+          ...(parsed.data.status === "Issued" && invoice.vetHoldAt != null
+            ? { overrodeVetHold: true }
+            : {}),
         },
       });
       return NextResponse.json({ invoice: toInvoiceDTO(invoice) });

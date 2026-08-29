@@ -12,6 +12,7 @@
     "db:deploy": "prisma migrate deploy",
     "legacy:reset": "tsx --env-file=.env src/lib/legacy-import/reset.ts",
     "legacy:import": "tsx --env-file=.env src/lib/legacy-import/run.ts",
+    "seed:rbac": "tsx --env-file=.env prisma/seed-rbac.ts",
     "seed:clients": "tsx --env-file=.env prisma/seed-clients.ts",
     "seed:inventory": "tsx --env-file=.env prisma/seed-inventory.ts",
     "seed:ledger": "tsx --env-file=.env prisma/seed-stock-ledger.ts",

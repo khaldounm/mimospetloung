@@ -112,6 +112,7 @@ type InvoiceListRow = {
   total: Prisma.Decimal;
   issuedAt: Date | null;
   dueDate: Date | null;
+  vetHoldAt: Date | null;
   client: { firstName: string; lastName: string } | null;
   payments: { amount: Prisma.Decimal }[];
 };
@@ -247,6 +248,14 @@ function isOverdue(
   return dueDate.getTime() < today.getTime();
 }
 
+// A hold only means anything on a draft. Issuing does not clear vet_hold_at, so
+// the column outlives the hold and reading it raw would leave every overridden
+// invoice flagged "still being worked on" forever. The status check is what
+// makes the flag true only while it can still change the outcome.
+function onVetHold(status: string, vetHoldAt: Date | null): boolean {
+  return status === "Draft" && vetHoldAt != null;
+}
+
 // ---- DTO mappers ----
 
 export function toServiceDTO(s: ServiceRow): ServiceDTO {
@@ -376,6 +385,7 @@ type ListRow = {
   amount_paid: Prisma.Decimal;
   issued_at: Date | null;
   due_date: Date | null;
+  vet_hold_at: Date | null;
   // Null on a walk-in, which has no client row to join to.
   first_name: string | null;
   last_name: string | null;
@@ -406,6 +416,7 @@ export async function listInvoices(
 
   const rows = await prisma.$queryRaw<ListRow[]>`
     SELECT i.invoice_id, i.status, i.total, i.issued_at, i.due_date,
+           i.vet_hold_at,
            c.first_name, c.last_name,
            COALESCE(p.paid, 0) AS amount_paid,
            COUNT(*) OVER () AS total_count
@@ -447,6 +458,7 @@ export async function listInvoices(
         issuedAt: r.issued_at ? r.issued_at.toISOString() : null,
         dueDate: toDateOnly(r.due_date),
         isOverdue: isOverdue(r.status, r.due_date, balance),
+        onVetHold: onVetHold(r.status, r.vet_hold_at),
       };
     }),
     total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
@@ -471,6 +483,7 @@ export function toInvoiceListItemDTO(i: InvoiceListRow): InvoiceListItemDTO {
     issuedAt: i.issuedAt ? i.issuedAt.toISOString() : null,
     dueDate: toDateOnly(i.dueDate),
     isOverdue: isOverdue(i.status, i.dueDate, balance),
+    onVetHold: onVetHold(i.status, i.vetHoldAt),
   };
 }
 

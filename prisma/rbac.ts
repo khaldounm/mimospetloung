@@ -46,6 +46,10 @@ export const ROLE_GRANTS: Record<string, string[]> = {
     // the grants stay portable across clinics.
     "inventory:read",
     "invoices:read",
+    // The vet builds the bill during the consult and closes it themselves, so
+    // they need the same write grant reception has: hold, release, add lines
+    // and issue. Payment stays with the front desk via payments:write.
+    "invoices:write",
     "notifications:read",
     "messages:read",
   ],
@@ -74,7 +78,7 @@ export const ROLE_GRANTS: Record<string, string[]> = {
 
 export const ROLE_DESCRIPTIONS: Record<string, string> = {
   Admin: "Full access to all modules and settings",
-  Vet: "Veterinarian: clinical records, bookings, read-only invoices. No stock or purchasing.",
+  Vet: "Veterinarian: clinical records, bookings, invoicing. No payments, stock or purchasing.",
   Receptionist: "Front desk, clients, bookings, invoicing and payments",
   Groomer: "Grooming bookings and grooming records",
 };

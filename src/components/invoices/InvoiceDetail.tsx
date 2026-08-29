@@ -34,6 +34,7 @@ import PrintIcon from "@mui/icons-material/Print";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import AssignmentReturnIcon from "@mui/icons-material/AssignmentReturn";
 import { apiRequest } from "@/utils/api-client";
 import {
@@ -114,7 +115,11 @@ export default function InvoiceDetail({
   const [waBusy, setWaBusy] = useState(false);
 
   const isDraft = invoice.status === "Draft";
-  const onVetHold = invoice.vetHoldAt != null;
+  // Issuing does not clear vetHoldAt, so the raw column stays set on an invoice
+  // that was issued over a hold. Gating on the status is what stops the banner
+  // living on an issued invoice that nobody can clear it from: the hold route
+  // refuses anything that is no longer a draft.
+  const onVetHold = isDraft && invoice.vetHoldAt != null;
   const adjustment = Number(invoice.adjustment);
   // Consumed in the clinic, not sold. They sit in the same table as everything
   // else, flagged on the row, so one list is the whole of what happened at the
@@ -255,6 +260,37 @@ export default function InvoiceDetail({
     }
   }
 
+  // The counter's page is a snapshot from whenever it loaded, and nothing
+  // pushes a hold set or released on another terminal. Every mutation already
+  // returns the whole invoice, so the view self-heals as soon as the till does
+  // anything; this is for the two moments where it has done nothing and the
+  // answer still matters: waiting on the vet, and issuing.
+  async function refreshInvoice(): Promise<InvoiceDTO | null> {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await apiRequest<{ invoice: InvoiceDTO }>(
+        `/api/invoices/${invoice.invoiceId}`,
+      );
+      applyInvoice(data.invoice);
+      return data.invoice;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not refresh");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Re-read before the confirm dialog opens so the override is decided against
+  // the hold as it stands now. Without this the dialog can offer "Issue anyway"
+  // for a hold the vet already released, and the override would be recorded
+  // against the cashier for a hold that was no longer there.
+  async function openIssueConfirm() {
+    await refreshInvoice();
+    setConfirmIssue(true);
+  }
+
   async function deleteLine(lineItemId: number) {
     setError(null);
     try {
@@ -389,7 +425,8 @@ export default function InvoiceDetail({
             <Button
               variant="contained"
               color={onVetHold ? "warning" : "primary"}
-              onClick={() => setConfirmIssue(true)}
+              onClick={() => void openIssueConfirm()}
+              disabled={busy}
             >
               {onVetHold ? "Issue anyway" : "Issue"}
             </Button>
@@ -423,16 +460,34 @@ export default function InvoiceDetail({
           icon={<MedicalServicesIcon />}
           sx={{ mb: 2 }}
           action={
-            canWrite ? (
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: "center", flexShrink: 0, whiteSpace: "nowrap" }}
+            >
+              {/* For the till waiting on the vet. The hold is released on the
+                  vet's own screen, and nothing tells this page about it, so
+                  the counter needs a way to ask without losing the page. */}
               <Button
                 color="inherit"
                 size="small"
-                onClick={() => void setVetHold(false)}
+                startIcon={<RefreshIcon />}
+                onClick={() => void refreshInvoice()}
                 disabled={busy}
               >
-                Done, release it
+                {busy ? "Checking…" : "Check again"}
               </Button>
-            ) : undefined
+              {canWrite && (
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => void setVetHold(false)}
+                  disabled={busy}
+                >
+                  Done, release it
+                </Button>
+              )}
+            </Stack>
           }
         >
           {invoice.attendingVetName

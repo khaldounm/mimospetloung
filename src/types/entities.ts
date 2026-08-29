@@ -1036,6 +1036,9 @@ export interface InvoiceListItemDTO {
   issuedAt: string | null;
   dueDate: string | null;
   isOverdue: boolean;
+  // True only while a draft is held, so the counter can see which drafts a vet
+  // is still adding to without opening each one.
+  onVetHold: boolean;
 }
 
 // ---- register close ----

@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import PointOfSaleIcon from "@mui/icons-material/PointOfSale";
+import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney } from "@/utils/format";
 import { INVOICE_STATUS_COLOR } from "@/constants/invoice";
@@ -192,6 +193,14 @@ export default function InvoicesTable({
                       />
                       {inv.isOverdue && (
                         <Chip size="small" color="error" label="Overdue" />
+                      )}
+                      {inv.onVetHold && (
+                        <Chip
+                          size="small"
+                          color="warning"
+                          icon={<MedicalServicesIcon />}
+                          label="Vet hold"
+                        />
                       )}
                     </Stack>
                   </TableCell>
