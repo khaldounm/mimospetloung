@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { toDateOnly } from "@/utils/format";
+import { toClinicalRecordDTO } from "@/lib/patients";
 import type { MedicalRecordDTO } from "@/types/entities";
-import type { RecordType } from "@/types/enums";
 
 // Assembles a patient's full clinical history into the shape the medical
 // record PDF prints. Both the in-app download and the public (token-signed)
@@ -48,19 +48,7 @@ export async function getMedicalRecord(
     // Falls back to the second number: for many imported clients that is the
     // one that actually reaches them.
     clientPhone: patient.client.phone ?? patient.client.phone2 ?? null,
-    records: patient.clinicalRecords.map((r) => ({
-      recordId: r.recordId,
-      recordType: r.recordType as RecordType,
-      subcategory: r.subcategory,
-      title: r.title,
-      notes: r.notes,
-      details: (r.details as Record<string, unknown> | null) ?? null,
-      performedAt: toDateOnly(r.performedAt) ?? "",
-      nextDueDate: toDateOnly(r.nextDueDate),
-      performerName: r.performer
-        ? `${r.performer.firstName} ${r.performer.lastName}`
-        : null,
-    })),
+    records: patient.clinicalRecords.map(toClinicalRecordDTO),
     generatedAt: new Date().toISOString(),
   };
 }

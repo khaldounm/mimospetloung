@@ -9,7 +9,17 @@ export const CHART_HEIGHT = 280;
 
 export const money = (v: number | null) => formatMoney(v ?? 0);
 
-export function KpiCard({ label, value }: { label: string; value: string }) {
+export function KpiCard({
+  label,
+  value,
+  // Optional second line under the figure, for a card whose number needs
+  // breaking down before it can be read correctly.
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: React.ReactNode;
+}) {
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography
@@ -23,6 +33,15 @@ export function KpiCard({ label, value }: { label: string; value: string }) {
       <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5 }}>
         {value}
       </Typography>
+      {hint && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", mt: 0.5 }}
+        >
+          {hint}
+        </Typography>
+      )}
     </Paper>
   );
 }

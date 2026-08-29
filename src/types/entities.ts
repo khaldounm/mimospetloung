@@ -97,6 +97,10 @@ export interface ClinicalRecordDTO {
   title: string;
   notes: string | null;
   details: Record<string, unknown> | null;
+  // Vitals at the visit, as strings like every other Decimal in a DTO. Null
+  // when nothing was taken, which is most groomings and boosters.
+  temperature: string | null; // degrees Celsius
+  weight: string | null; // kilograms
   performedAt: string;
   nextDueDate: string | null;
   performerName: string | null;
@@ -535,6 +539,15 @@ export interface PurchasesAnalytics {
   periodOrderCount: number; // orders that became Received within the range
   // As of now, not range-scoped. A balance is a position, not a flow.
   owedNow: number; // sum of positive supplier balances
+  // The two figures behind owedNow, each reported whole rather than as a share
+  // of it. owedOpening is the balances the accounts were opened with, which do
+  // not age and are never allocated against later payments; owedThisYear is
+  // what trading since has left outstanding on its own. They do NOT sum to
+  // owedNow: owedNow nets the two together per supplier first, so an account
+  // that has overpaid this year absorbs its own opening balance instead of
+  // adding to the total.
+  owedOpening: number;
+  owedThisYear: number;
   creditNow: number; // sum of negative balances, as a positive figure
   inProgressNow: number; // value of orders placed but not yet fully delivered
   trend: { label: string; billed: number; paid: number }[];

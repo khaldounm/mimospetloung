@@ -173,6 +173,14 @@ model ClinicalRecord {
   title       String    @db.VarChar(255)
   notes       String?   @db.Text
   details     Json?     @db.JsonB
+  // Vitals taken at the visit. Columns rather than keys in `details` because
+  // they are the only clinical figures plotted over time, and a chart cannot
+  // sort or range-scan values buried in JSONB. Both optional: plenty of visits
+  // (a grooming, a booster) never put the animal on a scale.
+  // Degrees Celsius, one decimal, as the thermometer reads.
+  temperature Decimal?  @db.Decimal(4, 1)
+  // Kilograms. Two decimals so a kitten at 0.45 kg is not rounded to nothing.
+  weight      Decimal?  @db.Decimal(6, 2)
   performedAt DateTime  @default(now()) @map("performed_at") @db.Date
   nextDueDate DateTime? @map("next_due_date") @db.Date
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)

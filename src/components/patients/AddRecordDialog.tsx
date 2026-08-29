@@ -15,6 +15,7 @@ import {
 import { apiRequest } from "@/utils/api-client";
 import { RECORD_TYPES, type RecordType } from "@/types/enums";
 import type { ServicePickerOption } from "@/types/entities";
+import VitalsFields from "./VitalsFields";
 
 interface Props {
   open: boolean;
@@ -77,6 +78,9 @@ function AddRecordForm({ patientId, services, onClose, onSaved }: FormProps) {
     new Date().toISOString().slice(0, 10),
   );
   const [nextDueDate, setNextDueDate] = useState("");
+  // Vitals at this visit. Blank means not taken, and stays blank.
+  const [temperature, setTemperature] = useState("");
+  const [weight, setWeight] = useState("");
   const [details, setDetails] = useState<Record<string, string>>(() => ({
     ...EMPTY_DETAILS.Consultation,
   }));
@@ -118,6 +122,8 @@ function AddRecordForm({ patientId, services, onClose, onSaved }: FormProps) {
           notes,
           performedAt,
           nextDueDate,
+          temperature,
+          weight,
           details,
         },
       });
@@ -192,6 +198,13 @@ function AddRecordForm({ patientId, services, onClose, onSaved }: FormProps) {
               fullWidth
             />
           </Stack>
+
+          <VitalsFields
+            temperature={temperature}
+            weight={weight}
+            onTemperatureChange={setTemperature}
+            onWeightChange={setWeight}
+          />
 
           {Object.keys(details).map((key) => (
             <TextField

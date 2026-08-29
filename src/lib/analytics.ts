@@ -1114,59 +1114,69 @@ async function getPurchasesSection(
   const { from: dateFrom, toExclusive: dateToExclusive } =
     dateOnlyBounds(range);
 
-  const [billedOrders, payments, allOrders, allPayments] = await Promise.all([
-    // An order is billed on the date it reached Received, which is what billedOn
-    // records. receivedOn marks the first of possibly several deliveries and
-    // would land a part-delivered order in the wrong period.
-    prisma.purchaseOrder.findMany({
-      where: {
-        deletedAt: null,
-        status: "Received",
-        billedOn: { gte: dateFrom, lt: dateToExclusive },
-      },
-      select: {
-        billedOn: true,
-        discountAmount: true,
-        shippingAmount: true,
-        taxAmount: true,
-        supplier: { select: { name: true } },
-        lines: { select: { quantityOrdered: true, unitCost: true } },
-      },
-    }),
-    // Cash only. A credit note settles a bill without any money leaving the
-    // clinic, so counting it here would report a month as having spent what the
-    // supplier actually wrote off. The balance figures below deliberately do NOT
-    // make this distinction: a credit reduces what is owed exactly as a payment
-    // does.
-    prisma.supplierPayment.findMany({
-      where: {
-        deletedAt: null,
-        kind: { not: "Credit" },
-        paidOn: { gte: dateFrom, lt: dateToExclusive },
-      },
-      select: { paidOn: true, amount: true },
-    }),
-    // Everything, for the as-of-now position: balances are a point in time, so
-    // they are not confined to the range.
-    prisma.purchaseOrder.findMany({
-      where: { deletedAt: null, supplierId: { not: null } },
-      select: {
-        supplierId: true,
-        status: true,
-        discountAmount: true,
-        shippingAmount: true,
-        taxAmount: true,
-        lines: { select: { quantityOrdered: true, unitCost: true } },
-      },
-    }),
-    // Every kind, unlike the range-scoped query above: this one builds what is
-    // owed, and a credit note settles a bill just as a payment does.
-    prisma.supplierPayment.groupBy({
-      by: ["supplierId"],
-      where: { deletedAt: null },
-      _sum: { amount: true },
-    }),
-  ]);
+  const [billedOrders, payments, allOrders, allPayments, openingBalances] =
+    await Promise.all([
+      // An order is billed on the date it reached Received, which is what billedOn
+      // records. receivedOn marks the first of possibly several deliveries and
+      // would land a part-delivered order in the wrong period.
+      prisma.purchaseOrder.findMany({
+        where: {
+          deletedAt: null,
+          status: "Received",
+          billedOn: { gte: dateFrom, lt: dateToExclusive },
+        },
+        select: {
+          billedOn: true,
+          discountAmount: true,
+          shippingAmount: true,
+          taxAmount: true,
+          supplier: { select: { name: true } },
+          lines: { select: { quantityOrdered: true, unitCost: true } },
+        },
+      }),
+      // Cash only. A credit note settles a bill without any money leaving the
+      // clinic, so counting it here would report a month as having spent what the
+      // supplier actually wrote off. The balance figures below deliberately do NOT
+      // make this distinction: a credit reduces what is owed exactly as a payment
+      // does.
+      prisma.supplierPayment.findMany({
+        where: {
+          deletedAt: null,
+          kind: { not: "Credit" },
+          paidOn: { gte: dateFrom, lt: dateToExclusive },
+        },
+        select: { paidOn: true, amount: true },
+      }),
+      // Everything, for the as-of-now position: balances are a point in time, so
+      // they are not confined to the range.
+      prisma.purchaseOrder.findMany({
+        where: { deletedAt: null, supplierId: { not: null } },
+        select: {
+          supplierId: true,
+          status: true,
+          discountAmount: true,
+          shippingAmount: true,
+          taxAmount: true,
+          lines: { select: { quantityOrdered: true, unitCost: true } },
+        },
+      }),
+      // Every kind, unlike the range-scoped query above: this one builds what is
+      // owed, and a credit note settles a bill just as a payment does.
+      prisma.supplierPayment.groupBy({
+        by: ["supplierId"],
+        where: { deletedAt: null },
+        _sum: { amount: true },
+      }),
+      // The balance each account was opened with. Without it the position is not
+      // merely incomplete, it can have the wrong sign: a supplier paid more than
+      // this system has ever billed them reads as being in credit when an opening
+      // balance means money is still owed.
+      prisma.openingBalance.groupBy({
+        by: ["supplierId"],
+        where: { supplierId: { not: null } },
+        _sum: { amount: true },
+      }),
+    ]);
 
   const orderValue = (o: {
     discountAmount: { toNumber(): number } | null;
@@ -1234,17 +1244,34 @@ async function getPurchasesSection(
     }
   }
 
+  const openingBySupplier = new Map(
+    openingBalances.map((o) => [o.supplierId!, o._sum.amount?.toNumber() ?? 0]),
+  );
+
+  // The opening position, whole and unaged. An opening balance is what the
+  // account was opened with; it does not shrink as payments come in and it does
+  // not belong to any date range, so it is reported as it stands and never
+  // allocated against later payments.
+  let owedOpening = 0;
+  for (const amount of openingBySupplier.values()) owedOpening += amount;
+
   let owedNow = 0;
+  let owedThisYear = 0;
   let creditNow = 0;
   for (const supplierId of new Set([
+    ...openingBySupplier.keys(),
     ...billedBySupplier.keys(),
     ...paidBySupplier.keys(),
   ])) {
-    const balance =
-      (billedBySupplier.get(supplierId) ?? 0) -
-      (paidBySupplier.get(supplierId) ?? 0);
+    const paid = paidBySupplier.get(supplierId) ?? 0;
+    const billed = billedBySupplier.get(supplierId) ?? 0;
+    const balance = (openingBySupplier.get(supplierId) ?? 0) + billed - paid;
     if (balance > 0) owedNow += balance;
     else creditNow += -balance;
+    // What this year's trading alone has left outstanding, opening balances set
+    // aside. Clamped per supplier for the same reason owedNow is: a credit on
+    // one account does not cancel a real debt on another.
+    if (billed - paid > 0) owedThisYear += billed - paid;
   }
 
   return {
@@ -1252,6 +1279,8 @@ async function getPurchasesSection(
     periodPaid: round2(periodPaid),
     periodOrderCount: billedOrders.length,
     owedNow: round2(owedNow),
+    owedOpening: round2(owedOpening),
+    owedThisYear: round2(owedThisYear),
     creditNow: round2(creditNow),
     inProgressNow: round2(inProgressNow),
     trend: buckets.map((b) => ({

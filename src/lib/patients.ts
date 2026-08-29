@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { toDateOnly } from "@/utils/format";
-import type { PatientDTO } from "@/types/entities";
+import type { ClinicalRecordDTO, PatientDTO } from "@/types/entities";
+import type { RecordType } from "@/types/enums";
 
 // Relations to pull when a patient is rendered with its owner's name.
 export const patientInclude = {
@@ -41,6 +42,58 @@ export function toPatientDTO(p: PatientWithClient): PatientDTO {
     needsReview: p.needsReview,
     reviewNote: p.reviewNote,
     clientName: `${p.client.firstName} ${p.client.lastName}`,
+  };
+}
+
+// ---- Clinical records ----
+
+// Relations a clinical record needs to render: only who performed it.
+export const clinicalRecordInclude = {
+  performer: { select: { firstName: true, lastName: true } },
+} as const;
+
+type ClinicalRecordWithPerformer = {
+  recordId: number;
+  recordType: string;
+  subcategory: string | null;
+  title: string;
+  notes: string | null;
+  details: unknown;
+  temperature: { toFixed(dp: number): string } | null;
+  weight: { toFixed(dp: number): string } | null;
+  performedAt: Date;
+  nextDueDate: Date | null;
+  performer: { firstName: string; lastName: string } | null;
+};
+
+/**
+ * One clinical record as the screen and the printed history both read it.
+ *
+ * Mapped in one place because three callers need it (the patient page, the
+ * refetch the timeline runs after an edit, and the medical-record PDF) and they
+ * previously each built their own shape. The refetch was returning raw Prisma
+ * rows, so a saved edit silently dropped the performer name and turned the
+ * date-only `performedAt` into a full timestamp.
+ */
+export function toClinicalRecordDTO(
+  r: ClinicalRecordWithPerformer,
+): ClinicalRecordDTO {
+  return {
+    recordId: r.recordId,
+    recordType: r.recordType as RecordType,
+    subcategory: r.subcategory,
+    title: r.title,
+    notes: r.notes,
+    details: (r.details as Record<string, unknown> | null) ?? null,
+    // Decimals as strings, the DTO convention throughout. Fixed to the column's
+    // own precision so a reading never prints more places than were recorded.
+    temperature: r.temperature?.toFixed(1) ?? null,
+    weight: r.weight?.toFixed(2) ?? null,
+    performedAt: toDateOnly(r.performedAt) ?? "",
+    nextDueDate: toDateOnly(r.nextDueDate),
+    performerName: r.performer
+      ? `${r.performer.firstName} ${r.performer.lastName}`
+      : null,
   };
 }
 

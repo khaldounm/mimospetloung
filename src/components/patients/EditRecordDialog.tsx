@@ -14,6 +14,7 @@ import {
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
 import type { ClinicalRecordDTO, ServicePickerOption } from "@/types/entities";
+import VitalsFields from "./VitalsFields";
 import type { RecordType } from "@/types/enums";
 
 interface Props {
@@ -73,6 +74,10 @@ function EditRecordForm({
   const [notes, setNotes] = useState(record.notes ?? "");
   const [performedAt, setPerformedAt] = useState(record.performedAt);
   const [nextDueDate, setNextDueDate] = useState(record.nextDueDate ?? "");
+  // Blank when nothing was taken at the visit, and clearing a value blanks
+  // the column rather than leaving the old reading on the chart.
+  const [temperature, setTemperature] = useState(record.temperature ?? "");
+  const [weight, setWeight] = useState(record.weight ?? "");
   const [details, setDetails] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       Object.entries(record.details ?? {}).map(([k, v]) => [
@@ -111,6 +116,8 @@ function EditRecordForm({
             notes,
             performedAt,
             nextDueDate,
+            temperature,
+            weight,
             details,
           },
         },
@@ -174,6 +181,13 @@ function EditRecordForm({
               fullWidth
             />
           </Stack>
+
+          <VitalsFields
+            temperature={temperature}
+            weight={weight}
+            onTemperatureChange={setTemperature}
+            onWeightChange={setWeight}
+          />
 
           {Object.keys(details).map((key) => (
             <TextField

@@ -53,7 +53,21 @@ export default function PurchasesSection({
           label="Orders delivered"
           value={String(data.periodOrderCount)}
         />
-        <KpiCard label="Owed now" value={money(data.owedNow)} />
+        {/* The headline is the whole debt, opening balances included. The two
+            figures under it are the parts it was built from, each shown whole:
+            they are not shares of the total and will not add up to it, because
+            the total nets them together per supplier first. */}
+        <KpiCard
+          label="Owed now"
+          value={money(data.owedNow)}
+          hint={
+            <>
+              Opening balance <strong>{money(data.owedOpening)}</strong>.
+              <br />
+              This year balance: <strong>{money(data.owedThisYear)}</strong>
+            </>
+          }
+        />
         <KpiCard label="In progress now" value={money(data.inProgressNow)} />
       </KpiGrid>
 
@@ -64,7 +78,11 @@ export default function PurchasesSection({
       >
         Billed, Paid and Orders delivered cover{" "}
         {rangeSummary(range).toLowerCase()}. Owed now and In progress now are
-        the position as it stands today, not for the period.
+        the position as it stands today, not for the period. Owed now counts the
+        balances the supplier accounts were opened with, so it does not tie to
+        Billed less Paid. Its opening and this-year figures are each shown in
+        full and will not add up to it: a supplier who has overpaid this year
+        absorbs their own opening balance rather than adding to what is owed.
         {data.creditNow > 0 &&
           ` A further ${money(data.creditNow)} is held in credit, paid with no bill recorded against it.`}
       </Typography>

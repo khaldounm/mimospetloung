@@ -19,7 +19,10 @@ import {
 } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
+import ThermostatIcon from "@mui/icons-material/Thermostat";
+import MonitorWeightIcon from "@mui/icons-material/MonitorWeight";
 import { formatDate } from "@/utils/format";
+import { formatTemperature, formatWeight } from "@/utils/vitals";
 import { apiRequest } from "@/utils/api-client";
 import type { ClinicalRecordDTO, ServicePickerOption } from "@/types/entities";
 import type { RecordType } from "@/types/enums";
@@ -55,6 +58,32 @@ function DetailList({ details }: { details: Record<string, unknown> | null }) {
           <strong>{humanize(k)}:</strong> {String(v)}
         </Typography>
       ))}
+    </Stack>
+  );
+}
+
+function Vitals({ record }: { record: ClinicalRecordDTO }) {
+  const temperature = formatTemperature(record.temperature);
+  const weight = formatWeight(record.weight);
+  if (!temperature && !weight) return null;
+  return (
+    <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap" }}>
+      {temperature && (
+        <Chip
+          size="small"
+          variant="outlined"
+          icon={<ThermostatIcon />}
+          label={temperature}
+        />
+      )}
+      {weight && (
+        <Chip
+          size="small"
+          variant="outlined"
+          icon={<MonitorWeightIcon />}
+          label={weight}
+        />
+      )}
     </Stack>
   );
 }
@@ -146,6 +175,11 @@ export default function ClinicalTimeline({
                       )}
                     </Box>
                   </Stack>
+                  {/* Vitals lead the entry rather than sitting among the
+                      per-type details: they are the two figures a vet scans a
+                      history for, and they mean the same thing on every kind of
+                      record. */}
+                  <Vitals record={r} />
                   {r.notes && (
                     <Typography variant="body2" sx={{ mt: 1 }}>
                       {r.notes}

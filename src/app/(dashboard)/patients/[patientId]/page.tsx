@@ -2,13 +2,13 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
+import { toClinicalRecordDTO } from "@/lib/patients";
 import { toDateOnly } from "@/utils/format";
 import type {
   ClinicalRecordDTO,
   PatientDTO,
   ServicePickerOption,
 } from "@/types/entities";
-import type { RecordType } from "@/types/enums";
 import PatientDetail from "@/components/patients/PatientDetail";
 
 export default async function PatientDetailPage({
@@ -76,19 +76,7 @@ export default async function PatientDetailPage({
   };
 
   const records: ClinicalRecordDTO[] = canReadClinical
-    ? patient.clinicalRecords.map((r) => ({
-        recordId: r.recordId,
-        recordType: r.recordType as RecordType,
-        subcategory: r.subcategory,
-        title: r.title,
-        notes: r.notes,
-        details: (r.details as Record<string, unknown> | null) ?? null,
-        performedAt: toDateOnly(r.performedAt) ?? "",
-        nextDueDate: toDateOnly(r.nextDueDate),
-        performerName: r.performer
-          ? `${r.performer.firstName} ${r.performer.lastName}`
-          : null,
-      }))
+    ? patient.clinicalRecords.map(toClinicalRecordDTO)
     : [];
 
   return (

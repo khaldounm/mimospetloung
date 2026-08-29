@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
+import { clinicalRecordInclude, toClinicalRecordDTO } from "@/lib/patients";
 import { upsertRecallReminder } from "@/lib/reminders";
 import { clinicalRecordCreateSchema } from "@/schemas/clinical-record";
 
@@ -24,11 +25,11 @@ export async function GET(
     const records = await prisma.clinicalRecord.findMany({
       where: { patientId, deletedAt: null },
       orderBy: { performedAt: "desc" },
-      include: {
-        performer: { select: { firstName: true, lastName: true } },
-      },
+      include: clinicalRecordInclude,
     });
-    return NextResponse.json({ records });
+    // Mapped, not raw: the timeline refetches through here after every edit and
+    // needs the same shape the server-rendered page gave it.
+    return NextResponse.json({ records: records.map(toClinicalRecordDTO) });
   });
 }
 

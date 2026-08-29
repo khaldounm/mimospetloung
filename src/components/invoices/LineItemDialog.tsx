@@ -27,7 +27,7 @@ import { apiRequest } from "@/utils/api-client";
 import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
 import { toGtin14 } from "@/utils/barcode";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
-import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
+import type { InvoiceDTO } from "@/types/entities";
 
 export interface ServiceLineOption {
   serviceId: number;
@@ -54,26 +54,20 @@ interface Props {
   invoiceId: number;
   serviceOptions: ServiceLineOption[];
   itemOptions: ItemLineOption[];
-  // When provided, the dialog edits this line instead of adding a new one.
-  line?: InvoiceLineItemDTO | null;
   onClose: () => void;
   onSaved: (invoice: InvoiceDTO) => void;
 }
 
 type SourceType = "service" | "item";
 
+// Adding a line only. Changing one is done in the row itself, on the invoice,
+// so a correction at the counter never costs a dialog.
 export default function LineItemDialog({ open, onClose, ...rest }: Props) {
-  // Remount the form (via key) each time the dialog opens instead of syncing
-  // props into state with an effect. State is initialized directly from props.
+  // The form mounts fresh each time the dialog opens instead of syncing props
+  // into state with an effect. State is initialized directly from props.
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      {open && (
-        <LineItemForm
-          key={rest.line?.lineItemId ?? "new"}
-          onClose={onClose}
-          {...rest}
-        />
-      )}
+      {open && <LineItemForm onClose={onClose} {...rest} />}
     </Dialog>
   );
 }
@@ -84,31 +78,21 @@ function LineItemForm({
   invoiceId,
   serviceOptions,
   itemOptions,
-  line,
   onClose,
   onSaved,
 }: FormProps) {
-  const editing = Boolean(line);
-  const [sourceType, setSourceType] = useState<SourceType>(
-    line?.itemId != null ? "item" : "service",
-  );
-  const [sourceId, setSourceId] = useState(
-    line?.itemId != null
-      ? String(line.itemId)
-      : line?.serviceId != null
-        ? String(line.serviceId)
-        : "",
-  );
-  const [description, setDescription] = useState(line?.description ?? "");
-  const [quantity, setQuantity] = useState(line?.quantity ?? "1");
-  const [unitPrice, setUnitPrice] = useState(line?.unitPrice ?? "");
+  const [sourceType, setSourceType] = useState<SourceType>("service");
+  const [sourceId, setSourceId] = useState("");
+  const [description, setDescription] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [unitPrice, setUnitPrice] = useState("");
   // Selling part of a pack. The amount is in the item's loose unit and the
   // server turns it into a pack quantity and a price, so neither is typed here.
-  const [sellLoose, setSellLoose] = useState(line?.looseQty != null);
-  const [looseQty, setLooseQty] = useState(line?.looseQty ?? "");
+  const [sellLoose, setSellLoose] = useState(false);
+  const [looseQty, setLooseQty] = useState("");
   // Consumed during the visit rather than sold. Off the bill and off every
   // printed copy; the stock still moves and the cost still lands in analytics.
-  const [isHidden, setIsHidden] = useState(line?.isHidden ?? false);
+  const [isHidden, setIsHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Raw text from the barcode scanner (or manual entry) before it resolves to
@@ -116,8 +100,7 @@ function LineItemForm({
   const [barcode, setBarcode] = useState("");
   const [scanError, setScanError] = useState<string | null>(null);
 
-  // When editing, the source (service/item) is fixed; only qty/price/desc change.
-  const isItem = editing ? line!.itemId != null : sourceType === "item";
+  const isItem = sourceType === "item";
 
   // Prefill description + unit price when a source is picked.
   function pickSource(id: string) {
@@ -186,8 +169,7 @@ function LineItemForm({
   );
 
   // Only items configured for it can be sold loose, so the switch appears
-  // nowhere else. When editing, the item is fixed and its config comes with the
-  // line rather than the picker.
+  // nowhere else.
   const looseConfig = useMemo(
     () => (selectedItem ? looseConfigOf(selectedItem) : null),
     [selectedItem],
@@ -211,43 +193,27 @@ function LineItemForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!editing && isItem && !sourceId) {
+    if (isItem && !sourceId) {
       setError("Scan a barcode or search to select an inventory item.");
       return;
     }
     setSaving(true);
     try {
-      let data: { invoice: InvoiceDTO };
-      if (editing) {
-        data = await apiRequest<{ invoice: InvoiceDTO }>(
-          `/api/invoices/${invoiceId}/line-items/${line!.lineItemId}`,
-          {
-            method: "PATCH",
-            body: {
-              ...(loose
-                ? { description, looseQty }
-                : { description, quantity, unitPrice }),
-              ...(isItem ? { isHidden } : {}),
-            },
+      const data = await apiRequest<{ invoice: InvoiceDTO }>(
+        `/api/invoices/${invoiceId}/line-items`,
+        {
+          method: "POST",
+          body: {
+            serviceId: isItem ? "" : sourceId,
+            itemId: isItem ? sourceId : "",
+            description,
+            // A loose line sends only the amount asked for; the server derives
+            // the pack quantity and the price it bills at.
+            ...(loose ? { looseQty } : { quantity, unitPrice }),
+            ...(isItem && isHidden ? { isHidden: true } : {}),
           },
-        );
-      } else {
-        data = await apiRequest<{ invoice: InvoiceDTO }>(
-          `/api/invoices/${invoiceId}/line-items`,
-          {
-            method: "POST",
-            body: {
-              serviceId: isItem ? "" : sourceId,
-              itemId: isItem ? sourceId : "",
-              description,
-              // A loose line sends only the amount asked for; the server
-              // derives the pack quantity and the price it bills at.
-              ...(loose ? { looseQty } : { quantity, unitPrice }),
-              ...(isItem && isHidden ? { isHidden: true } : {}),
-            },
-          },
-        );
-      }
+        },
+      );
       onSaved(data.invoice);
       onClose();
     } catch (err) {
@@ -259,120 +225,112 @@ function LineItemForm({
 
   return (
     <form onSubmit={handleSubmit}>
-      <DialogTitle>{editing ? "Edit line item" : "Add line item"}</DialogTitle>
+      <DialogTitle>Add line item</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
-          {!editing && (
-            <>
-              <ToggleButtonGroup
-                value={sourceType}
-                exclusive
-                onChange={(_e, v) => changeType(v as SourceType | null)}
-                size="small"
-              >
-                <ToggleButton value="service">Service</ToggleButton>
-                <ToggleButton value="item">Inventory item</ToggleButton>
-              </ToggleButtonGroup>
+          <ToggleButtonGroup
+            value={sourceType}
+            exclusive
+            onChange={(_e, v) => changeType(v as SourceType | null)}
+            size="small"
+          >
+            <ToggleButton value="service">Service</ToggleButton>
+            <ToggleButton value="item">Inventory item</ToggleButton>
+          </ToggleButtonGroup>
 
-              {isItem ? (
-                selectedItem ? (
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    sx={{ alignItems: "center" }}
-                  >
-                    <Chip
-                      color="primary"
-                      variant="outlined"
-                      label={`${selectedItem.name} (${selectedItem.currentStock}${
-                        selectedItem.unit ? ` ${selectedItem.unit}` : ""
-                      } in stock)`}
-                    />
-                    <IconButton
-                      size="small"
-                      aria-label="Scan a different item"
-                      onClick={clearScannedItem}
-                    >
-                      <ClearIcon fontSize="small" />
-                    </IconButton>
-                  </Stack>
-                ) : (
-                  <Stack spacing={2}>
-                    <TextField
-                      label="Scan barcode"
-                      value={barcode}
-                      onChange={(e) => {
-                        setBarcode(e.target.value);
-                        if (scanError) setScanError(null);
-                      }}
-                      onKeyDown={(e) => {
-                        // Barcode scanners append Enter; resolve here and keep
-                        // the keystroke from submitting the form.
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          scanBarcode(barcode);
-                        }
-                      }}
-                      error={Boolean(scanError)}
-                      helperText={
-                        scanError ??
-                        "Scan or type a barcode, then press Enter. Stock is decremented when the invoice is issued."
-                      }
-                      autoFocus
-                      fullWidth
-                      slotProps={{
-                        input: {
-                          startAdornment: (
-                            <InputAdornment position="start">
-                              <QrCodeScannerIcon fontSize="small" />
-                            </InputAdornment>
-                          ),
-                        },
-                      }}
-                    />
-                    {/* Searchable picker for items that can't be scanned at the
-                        counter (e.g. anaesthesia, gloves). */}
-                    <Autocomplete
-                      options={itemOptions}
-                      getOptionLabel={(o) =>
-                        `${o.name}${
-                          o.barcode ? "" : " (no barcode)"
-                        } - ${o.currentStock}${o.unit ? ` ${o.unit}` : ""} in stock`
-                      }
-                      isOptionEqualToValue={(o, v) => o.itemId === v.itemId}
-                      value={null}
-                      blurOnSelect
-                      onChange={(_e, v) => {
-                        if (v) pickSource(String(v.itemId));
-                      }}
-                      renderInput={(p) => (
-                        <TextField
-                          {...p}
-                          label="Or search the item list"
-                          helperText="Pick items that aren't scannable at the counter"
-                        />
-                      )}
-                    />
-                  </Stack>
-                )
-              ) : (
-                <TextField
-                  select
-                  label="Service"
-                  value={sourceId}
-                  onChange={(e) => pickSource(e.target.value)}
-                  required
-                  fullWidth
+          {isItem ? (
+            selectedItem ? (
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                <Chip
+                  color="primary"
+                  variant="outlined"
+                  label={`${selectedItem.name} (${selectedItem.currentStock}${
+                    selectedItem.unit ? ` ${selectedItem.unit}` : ""
+                  } in stock)`}
+                />
+                <IconButton
+                  size="small"
+                  aria-label="Scan a different item"
+                  onClick={clearScannedItem}
                 >
-                  {serviceOptions.map((o) => (
-                    <MenuItem key={o.serviceId} value={String(o.serviceId)}>
-                      {o.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              )}
-            </>
+                  <ClearIcon fontSize="small" />
+                </IconButton>
+              </Stack>
+            ) : (
+              <Stack spacing={2}>
+                <TextField
+                  label="Scan barcode"
+                  value={barcode}
+                  onChange={(e) => {
+                    setBarcode(e.target.value);
+                    if (scanError) setScanError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    // Barcode scanners append Enter; resolve here and keep
+                    // the keystroke from submitting the form.
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      scanBarcode(barcode);
+                    }
+                  }}
+                  error={Boolean(scanError)}
+                  helperText={
+                    scanError ??
+                    "Scan or type a barcode, then press Enter. Stock is decremented when the invoice is issued."
+                  }
+                  autoFocus
+                  fullWidth
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <QrCodeScannerIcon fontSize="small" />
+                        </InputAdornment>
+                      ),
+                    },
+                  }}
+                />
+                {/* Searchable picker for items that can't be scanned at the
+                        counter (e.g. anaesthesia, gloves). */}
+                <Autocomplete
+                  options={itemOptions}
+                  getOptionLabel={(o) =>
+                    `${o.name}${
+                      o.barcode ? "" : " (no barcode)"
+                    } - ${o.currentStock}${o.unit ? ` ${o.unit}` : ""} in stock`
+                  }
+                  isOptionEqualToValue={(o, v) => o.itemId === v.itemId}
+                  value={null}
+                  blurOnSelect
+                  onChange={(_e, v) => {
+                    if (v) pickSource(String(v.itemId));
+                  }}
+                  renderInput={(p) => (
+                    <TextField
+                      {...p}
+                      label="Or search the item list"
+                      helperText="Pick items that aren't scannable at the counter"
+                    />
+                  )}
+                />
+              </Stack>
+            )
+          ) : (
+            <TextField
+              select
+              label="Service"
+              value={sourceId}
+              onChange={(e) => pickSource(e.target.value)}
+              required
+              fullWidth
+            >
+              {serviceOptions.map((o) => (
+                <MenuItem key={o.serviceId} value={String(o.serviceId)}>
+                  {o.name}
+                </MenuItem>
+              ))}
+            </TextField>
           )}
 
           <TextField
@@ -480,7 +438,7 @@ function LineItemForm({
           Cancel
         </Button>
         <Button type="submit" variant="contained" disabled={saving}>
-          {saving ? "Saving…" : editing ? "Save" : "Add"}
+          {saving ? "Saving…" : "Add"}
         </Button>
       </DialogActions>
     </form>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Alert,
@@ -14,7 +14,6 @@ import {
   DialogTitle,
   Divider,
   Grid,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -28,7 +27,6 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
-import DeleteIcon from "@mui/icons-material/Delete";
 import PaymentsIcon from "@mui/icons-material/Payments";
 import DownloadIcon from "@mui/icons-material/Download";
 import PrintIcon from "@mui/icons-material/Print";
@@ -37,9 +35,7 @@ import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
 import AssignmentReturnIcon from "@mui/icons-material/AssignmentReturn";
-import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { apiRequest } from "@/utils/api-client";
-import { formatLineQuantity } from "@/utils/inventory";
 import {
   formatAccountBalance,
   formatDate,
@@ -50,13 +46,19 @@ import {
 import { printInvoiceReceipt } from "@/utils/print-receipt";
 import { downloadReceiptImage } from "@/utils/receipt-image";
 import { INVOICE_STATUS_COLOR } from "@/constants/invoice";
+import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
 import { SECONDARY_CURRENCY } from "@/constants/clinic";
-import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
+import type { InvoiceDTO } from "@/types/entities";
 import InvoiceFormDialog from "./InvoiceFormDialog";
 import LineItemDialog, {
   type ItemLineOption,
   type ServiceLineOption,
 } from "./LineItemDialog";
+import LineItemRow, {
+  LINE_ITEM_CELL_SX,
+  LINE_ITEM_TABLE_MIN_WIDTH,
+  lineItemColumnWidths,
+} from "./LineItemRow";
 import PaymentDialog from "./PaymentDialog";
 import ReturnDialog from "./ReturnDialog";
 import ScanBar from "./ScanBar";
@@ -100,7 +102,6 @@ export default function InvoiceDetail({
 }: Props) {
   const [invoice, setInvoice] = useState(initialInvoice);
   const [addLineOpen, setAddLineOpen] = useState(false);
-  const [editLine, setEditLine] = useState<InvoiceLineItemDTO | null>(null);
   const [editInvoiceOpen, setEditInvoiceOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
@@ -115,10 +116,19 @@ export default function InvoiceDetail({
   const isDraft = invoice.status === "Draft";
   const onVetHold = invoice.vetHoldAt != null;
   const adjustment = Number(invoice.adjustment);
-  // Consumed in the clinic, not sold. Split out so the counter can see them
-  // without them ever reading as something the customer is being billed for.
-  const chargedLines = invoice.lineItems.filter((l) => !l.isHidden);
-  const hiddenLines = invoice.lineItems.filter((l) => l.isHidden);
+  // Consumed in the clinic, not sold. They sit in the same table as everything
+  // else, flagged on the row, so one list is the whole of what happened at the
+  // counter; what keeps them off the bill is isHidden, not where they are shown.
+  const hasHiddenLines = invoice.lineItems.some((l) => l.isHidden);
+  // Lines are only editable while the invoice is still a draft.
+  const canEditLines = canWrite && isDraft;
+  // Keyed for the row editor, which needs the item's loose setup to know
+  // whether the amount is typed in packs or by the kilo.
+  const itemById = useMemo(
+    () => new Map(itemOptions.map((o) => [o.itemId, o])),
+    [itemOptions],
+  );
+  const cols = lineItemColumnWidths(canEditLines);
   // The client's whole-account balance, which spans every invoice they have and
   // not just this one. It rides on the invoice DTO now, because the printed
   // copies and the WhatsApp message need it too.
@@ -502,137 +512,91 @@ export default function InvoiceDetail({
             />
           )}
           <TableContainer component={Paper}>
-            <Table size="small">
+            {/* Fixed layout: the columns keep their proportions whatever a
+                product is called, so the numbers stay in a straight line down
+                the page and a long name wraps rather than shoving them. */}
+            <Table
+              size="small"
+              sx={{
+                tableLayout: "fixed",
+                minWidth: LINE_ITEM_TABLE_MIN_WIDTH,
+              }}
+            >
               <TableHead>
                 <TableRow>
-                  <TableCell>Description</TableCell>
-                  <TableCell align="right">Qty</TableCell>
-                  <TableCell align="right">Unit price</TableCell>
-                  <TableCell align="right">Total</TableCell>
-                  {canWrite && isDraft && <TableCell align="right" />}
+                  <TableCell
+                    sx={{ ...LINE_ITEM_CELL_SX, width: cols.description }}
+                  >
+                    Description
+                  </TableCell>
+                  <TableCell
+                    align="right"
+                    sx={{ ...LINE_ITEM_CELL_SX, width: cols.quantity }}
+                  >
+                    Qty
+                  </TableCell>
+                  <TableCell
+                    align="right"
+                    sx={{ ...LINE_ITEM_CELL_SX, width: cols.unitPrice }}
+                  >
+                    Unit price
+                  </TableCell>
+                  <TableCell
+                    align="right"
+                    sx={{ ...LINE_ITEM_CELL_SX, width: cols.total }}
+                  >
+                    Total
+                  </TableCell>
+                  {canEditLines && (
+                    <TableCell
+                      align="right"
+                      sx={{ ...LINE_ITEM_CELL_SX, width: cols.controls }}
+                    />
+                  )}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {chargedLines.length === 0 ? (
+                {invoice.lineItems.length === 0 ? (
                   <TableRow>
-                    <TableCell
-                      colSpan={canWrite && isDraft ? 5 : 4}
-                      align="center"
-                    >
+                    <TableCell colSpan={canEditLines ? 5 : 4} align="center">
                       <Typography color="text.secondary" sx={{ py: 2 }}>
-                        {hiddenLines.length > 0
-                          ? "Nothing charged on this invoice."
-                          : "No line items yet."}
+                        No line items yet.
                       </Typography>
                     </TableCell>
                   </TableRow>
                 ) : (
-                  chargedLines.map((l) => (
-                    <TableRow
+                  /* Editing happens in the row itself. A price correction at a
+                     busy counter is a click and a number, not a dialog. */
+                  invoice.lineItems.map((l) => (
+                    <LineItemRow
                       key={l.lineItemId}
-                      hover
-                      // A return reads as an ordinary line with a minus in front
-                      // of it, which is easy to skim past on a busy counter, so
-                      // the row says what it is.
-                      sx={
-                        Number(l.quantity) < 0
-                          ? { "& td": { color: "warning.dark" } }
-                          : undefined
+                      invoiceId={invoice.invoiceId}
+                      line={l}
+                      item={
+                        l.itemId != null ? itemById.get(l.itemId) : undefined
                       }
-                    >
-                      <TableCell>{l.description}</TableCell>
-                      <TableCell align="right">
-                        {formatLineQuantity(l)}
-                      </TableCell>
-                      <TableCell align="right">
-                        {formatMoney(l.unitPrice)}
-                      </TableCell>
-                      <TableCell align="right">
-                        {formatMoney(l.lineTotal)}
-                      </TableCell>
-                      {canWrite && isDraft && (
-                        <TableCell align="right">
-                          <IconButton
-                            size="small"
-                            aria-label="Edit line"
-                            onClick={() => setEditLine(l)}
-                          >
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            aria-label="Remove line"
-                            onClick={() => void deleteLine(l.lineItemId)}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </TableCell>
-                      )}
-                    </TableRow>
+                      editable={canEditLines}
+                      onSaved={applyInvoice}
+                      onDelete={() => void deleteLine(l.lineItemId)}
+                      onError={setError}
+                    />
                   ))
                 )}
               </TableBody>
             </Table>
           </TableContainer>
 
-          {/* Consumables used during the visit. On the invoice so the stock
-              leaves the shelf and the spend is on record; off the bill and off
-              every printed copy, so the customer never sees them. */}
-          {hiddenLines.length > 0 && (
-            <Paper variant="outlined" sx={{ mt: 2, p: 2 }}>
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ alignItems: "center", mb: 1 }}
-              >
-                <VisibilityOffIcon fontSize="small" color="action" />
-                <Typography variant="subtitle2">Used in the clinic</Typography>
-                <Chip size="small" variant="outlined" label="Not charged" />
-              </Stack>
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mb: 1.5 }}
-              >
-                Kept off the printed invoice and out of the total. Issuing takes
-                these off the shelf and files what they cost as a running cost.
-              </Typography>
-              <Stack spacing={0.5}>
-                {hiddenLines.map((l) => (
-                  <Stack
-                    key={l.lineItemId}
-                    direction="row"
-                    spacing={1}
-                    sx={{ alignItems: "center" }}
-                  >
-                    <Typography variant="body2" sx={{ flex: 1 }}>
-                      {l.description}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {formatLineQuantity(l)}
-                    </Typography>
-                    {canWrite && isDraft && (
-                      <>
-                        <IconButton
-                          size="small"
-                          aria-label="Edit line"
-                          onClick={() => setEditLine(l)}
-                        >
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton
-                          size="small"
-                          aria-label="Remove line"
-                          onClick={() => void deleteLine(l.lineItemId)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </>
-                    )}
-                  </Stack>
-                ))}
-              </Stack>
-            </Paper>
+          {hasHiddenLines && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ mt: 1, display: "block" }}
+            >
+              Lines marked <strong>Clinic use</strong> were consumed during the
+              visit rather than sold. They stay off the printed invoice and out
+              of the total; issuing takes them off the shelf and files what they
+              cost as a running cost under {CLINIC_USE_COST_CATEGORY}.
+            </Typography>
           )}
 
           <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>
@@ -759,15 +723,6 @@ export default function InvoiceDetail({
         serviceOptions={serviceOptions}
         itemOptions={itemOptions}
         onClose={() => setAddLineOpen(false)}
-        onSaved={applyInvoice}
-      />
-      <LineItemDialog
-        open={Boolean(editLine)}
-        invoiceId={invoice.invoiceId}
-        serviceOptions={serviceOptions}
-        itemOptions={itemOptions}
-        line={editLine}
-        onClose={() => setEditLine(null)}
         onSaved={applyInvoice}
       />
       <InvoiceFormDialog

@@ -35,6 +35,7 @@ import type {
 import PatientFormDialog from "./PatientFormDialog";
 import AddRecordDialog from "./AddRecordDialog";
 import ClinicalTimeline from "./ClinicalTimeline";
+import VitalsChart from "./VitalsChart";
 
 interface Props {
   patient: PatientDTO;
@@ -317,6 +318,10 @@ export default function PatientDetail({
               </Stack>
             </Alert>
           )}
+          {/* Above the history, not inside it: the trend is the question a
+              vet asks before reading any single visit. Renders itself away
+              until there are two readings to draw a line between. */}
+          <VitalsChart records={records} />
           <ClinicalTimeline
             records={records}
             patientId={patient.patientId}

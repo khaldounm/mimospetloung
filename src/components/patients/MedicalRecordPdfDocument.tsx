@@ -8,7 +8,9 @@ import {
 } from "@react-pdf/renderer";
 import { CLINIC } from "@/constants/clinic";
 import { formatDate, formatDateTime } from "@/utils/format";
+import { formatTemperature, formatWeight, vitalsHistory } from "@/utils/vitals";
 import type { MedicalRecordDTO } from "@/types/entities";
+import VitalsPdfChart from "./VitalsPdfChart";
 
 const COLORS = {
   text: "#1a1a1a",
@@ -140,6 +142,9 @@ export default function MedicalRecordPdfDocument({
   logoSrc?: string;
 }) {
   const { patient, clientName, records } = record;
+  // Built once here so the chart and the per-visit rows below cannot
+  // disagree about which readings exist.
+  const vitals = vitalsHistory(records);
 
   return (
     <Document
@@ -203,6 +208,8 @@ export default function MedicalRecordPdfDocument({
           </View>
         </View>
 
+        <VitalsPdfChart points={vitals} />
+
         <Text style={styles.historyTitle}>
           Clinical history ({records.length}{" "}
           {records.length === 1 ? "entry" : "entries"})
@@ -216,6 +223,8 @@ export default function MedicalRecordPdfDocument({
               ([, v]) =>
                 v !== null && v !== undefined && String(v).trim() !== "",
             );
+            const temperature = formatTemperature(r.temperature);
+            const weight = formatWeight(r.weight);
             return (
               // A visit should not be split across a page break: `wrap={false}`
               // pushes the whole entry to the next page instead.
@@ -232,6 +241,18 @@ export default function MedicalRecordPdfDocument({
                   </Text>
                 </View>
                 <View style={styles.entryBody}>
+                  {temperature ? (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Temperature</Text>
+                      <Text style={styles.detailValue}>{temperature}</Text>
+                    </View>
+                  ) : null}
+                  {weight ? (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Weight</Text>
+                      <Text style={styles.detailValue}>{weight}</Text>
+                    </View>
+                  ) : null}
                   {details.map(([k, v]) => (
                     <View key={k} style={styles.detailRow}>
                       <Text style={styles.detailLabel}>{humanize(k)}</Text>
