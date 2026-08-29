@@ -921,6 +921,11 @@ export interface PayableOrderOption {
 // The sales figures are scoped to a date range. The balance figures are not:
 // what is owed is a running total, and slicing it by month would be meaningless.
 export interface PartnerMoneyDTO {
+  // What the account was already owed before this database saw any of it, and
+  // the date that figure was true as at. Same convention as the client and
+  // supplier balances: it is part of what is owed, never added on top of it.
+  openingBalance: string;
+  openingBalanceAsOf: string | null;
   // --- range-scoped: what their stock did over the selected period ---
   revenue: string; // what customers paid for their items
   costOfSales: string; // their capital in the items that sold, returning to them

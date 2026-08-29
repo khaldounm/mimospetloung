@@ -1,0 +1,18 @@
+-- Every analytics query over invoices and their line items filters on issued_at
+-- within a fixed status set, and there was no index on issued_at at all. The
+-- planner therefore seq-scanned invoices AND invoice_line_items for every one
+-- of them, so the cost of asking about a single month grew with the whole
+-- history rather than with the range asked for.
+--
+-- Measured on 7,765 invoices and 15,790 lines: the category query planned as a
+-- hash join over both full tables at 5.5 ms. At the selectivity one month has
+-- against several years of history it re-plans as a nested loop with index
+-- scans on both sides, at 0.15 ms. The plan improves on its own as history
+-- accumulates, because any fixed range becomes a smaller fraction of the table.
+--
+-- status leads the index because each query pins a fixed set of statuses, which
+-- leaves issued_at usable as a range scan on the second column.
+--
+-- Built without CONCURRENTLY: Prisma runs migrations in a transaction, and at
+-- this table's size the ACCESS EXCLUSIVE lock is held for milliseconds.
+CREATE INDEX "idx_invoices_status_issued" ON "invoices" ("status", "issued_at");

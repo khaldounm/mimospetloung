@@ -49,48 +49,43 @@ export default function ExchangeRateForm({ initialRate }: Props) {
   }
 
   return (
-    <Box>
-      <Typography variant="h4" sx={{ mb: 3 }}>
-        Settings
-      </Typography>
-      <Paper variant="outlined" sx={{ p: 3, maxWidth: 520 }}>
-        <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
-            <Typography variant="h6">Exchange rate</Typography>
-            <Typography variant="body2" color="text.secondary">
-              How many {SECONDARY_CURRENCY.code} one {CURRENCY.code} is worth.
-              Used for the lira figures shown on invoices and for cash taken at
-              the counter. An invoice keeps the rate it was issued at, so
-              changing this never alters an invoice that has already gone out.
-            </Typography>
-            {error && <Alert severity="error">{error}</Alert>}
-            {saved && <Alert severity="success">{saved}</Alert>}
-            <TextField
-              label={`${SECONDARY_CURRENCY.code} per 1 ${CURRENCY.code}`}
-              type="number"
-              value={rate}
-              onChange={(e) => setRate(e.target.value)}
-              slotProps={{ htmlInput: { min: 1000, step: "100" } }}
-              helperText={
-                valid
-                  ? `$1.00 = ${formatSecondaryMoney(1, parsed)}, $100.00 = ${formatSecondaryMoney(100, parsed)}`
-                  : "Enter a number"
-              }
-              required
-              fullWidth
-            />
-            <Box>
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={saving || !valid}
-              >
-                {saving ? "Saving…" : "Save"}
-              </Button>
-            </Box>
-          </Stack>
-        </form>
-      </Paper>
-    </Box>
+    <Paper variant="outlined" sx={{ p: 3, maxWidth: 520 }}>
+      <form onSubmit={handleSubmit}>
+        <Stack spacing={2}>
+          <Typography variant="h6">Exchange rate</Typography>
+          <Typography variant="body2" color="text.secondary">
+            How many {SECONDARY_CURRENCY.code} one {CURRENCY.code} is worth.
+            Used for the lira figures shown on invoices and for cash taken at
+            the counter. An invoice keeps the rate it was issued at, so changing
+            this never alters an invoice that has already gone out.
+          </Typography>
+          {error && <Alert severity="error">{error}</Alert>}
+          {saved && <Alert severity="success">{saved}</Alert>}
+          <TextField
+            label={`${SECONDARY_CURRENCY.code} per 1 ${CURRENCY.code}`}
+            type="number"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            slotProps={{ htmlInput: { min: 1000, step: "100" } }}
+            helperText={
+              valid
+                ? `$1.00 = ${formatSecondaryMoney(1, parsed)}, $100.00 = ${formatSecondaryMoney(100, parsed)}`
+                : "Enter a number"
+            }
+            required
+            fullWidth
+          />
+          <Box>
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={saving || !valid}
+            >
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </Box>
+        </Stack>
+      </form>
+    </Paper>
   );
 }

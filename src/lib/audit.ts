@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { Session } from "next-auth";
+import { AUDIT_RETENTION_DAYS } from "@/constants/audit";
 import type { AuditAction, AuditEntity } from "@/constants/audit";
 import type { AuditLogDTO } from "@/types/entities";
 
@@ -59,4 +60,41 @@ export async function writeAudit(
   } catch (err) {
     console.error("Failed to write audit log", err);
   }
+}
+
+// How many entries are old enough to be pruned, and the cutoff they are measured
+// against. Read before the confirmation dialog opens so the figure on the button
+// is the figure that will actually go.
+export async function auditPrunePreview(
+  olderThanDays: number = AUDIT_RETENTION_DAYS,
+): Promise<{ prunable: number; cutoff: string; olderThanDays: number }> {
+  const cutoff = cutoffFor(olderThanDays);
+  const prunable = await prisma.auditLog.count({
+    where: { createdAt: { lt: cutoff } },
+  });
+  return { prunable, cutoff: cutoff.toISOString(), olderThanDays };
+}
+
+// Deletes audit entries older than the cutoff. Irreversible: there is no soft
+// delete on audit_log, and nothing else in the app records what it recorded.
+//
+// Returns the number of rows removed. The caller writes an audit entry for the
+// prune afterwards, which is why that entry survives its own operation.
+export async function pruneAuditLog(
+  olderThanDays: number = AUDIT_RETENTION_DAYS,
+): Promise<{ deleted: number; cutoff: string }> {
+  const cutoff = cutoffFor(olderThanDays);
+  const { count } = await prisma.auditLog.deleteMany({
+    where: { createdAt: { lt: cutoff } },
+  });
+  return { deleted: count, cutoff: cutoff.toISOString() };
+}
+
+function cutoffFor(olderThanDays: number): Date {
+  // Guarded rather than trusted: a zero or negative window would mean "delete
+  // everything, including what just happened".
+  const days = Math.max(Math.floor(olderThanDays), 1);
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return cutoff;
 }

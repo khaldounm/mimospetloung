@@ -1,3 +1,9 @@
+// How much audit history the Delete logs button in Settings keeps. Everything
+// older than this goes. Deliberately not a scheduled job: audit entries are what
+// answers "who changed this invoice", so removing them is a decision someone
+// takes deliberately rather than something that happens overnight.
+export const AUDIT_RETENTION_DAYS = 30;
+
 // Audit action verbs recorded in audit_log.action (VarChar(20)). Kept short.
 export const AUDIT_ACTIONS = [
   "create",
@@ -45,6 +51,9 @@ export const AUDIT_ENTITIES = [
   "contact_message",
   "setting",
   "register_closing",
+  // The audit log recording its own pruning. The row survives the delete it
+  // describes, because it is written afterwards.
+  "audit_log",
 ] as const;
 export type AuditEntity = (typeof AUDIT_ENTITIES)[number];
 
@@ -74,6 +83,7 @@ export const AUDIT_ENTITY_LABELS: Record<AuditEntity, string> = {
   contact_message: "Website message",
   setting: "Clinic setting",
   register_closing: "Register close",
+  audit_log: "Audit log",
 };
 
 // MUI Chip colors per action for the viewer.

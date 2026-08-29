@@ -149,6 +149,13 @@ type PartnerStats = {
   toDate: PartnerTotals;
   paidToDate: Prisma.Decimal;
   capitalOnShelf: Prisma.Decimal;
+  // What the account was already owed at `openingAsOf`, before any movement in
+  // this database. Carried the same way clients and suppliers carry theirs: a
+  // partner's accrual comes off sale movements and their payouts off
+  // partner_payouts, and a year-end prune removes both, so a balance that only
+  // counts what survives is not incomplete, it is wrong.
+  opening: Prisma.Decimal;
+  openingAsOf: Date | null;
 };
 
 // Movements that represent a sale or its reversal. A Sold line carries a negative
@@ -219,7 +226,7 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   // so the clinic absorbs the shortfall.
   const clinicShare = grossProfit.minus(partnerShare);
 
-  const balance = toDate.accrued.minus(stats.paidToDate);
+  const balance = stats.opening.plus(toDate.accrued).minus(stats.paidToDate);
 
   // What the partner had in play at that date: the cost of everything that had
   // sold by then (recovered) plus the cost of what was still on the shelf. Not a
@@ -243,6 +250,11 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   // 100% rate these are the same figure; below it, only the owed half can be
   // settled, so using cost would hold back more than the partner is due and
   // drive profitOwed negative.
+  // The opening balance is a single carried figure and says nothing about which
+  // half of the deal it settles, so it is not treated as capital here. It falls
+  // into profitOwed, which is derived as the remainder, and the two halves still
+  // sum to the balance. That is the honest place for a figure whose composition
+  // this database never saw.
   const capitalAccrued = toDate.accruedCost;
   const profitShareToDate = toDate.accrued.minus(capitalAccrued);
   const capitalOutstanding = capitalAccrued.minus(stats.paidToDate);
@@ -252,6 +264,10 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   const profitOwed = balance.minus(capitalOwed);
 
   return {
+    openingBalance: stats.opening.toFixed(2),
+    openingBalanceAsOf: stats.openingAsOf
+      ? toDateOnly(stats.openingAsOf)
+      : null,
     revenue: inRange.revenue.toFixed(2),
     costOfSales: inRange.costOfSales.toFixed(2),
     grossProfit: grossProfit.toFixed(2),
@@ -441,6 +457,7 @@ export async function getPartnersWithStats(
     paidToDateGroups,
     items,
     movedSinceGroups,
+    openings,
   ] = await Promise.all([
     prisma.partner.findMany({
       where: { deletedAt: null },
@@ -495,6 +512,10 @@ export async function getPartnersWithStats(
       },
       _sum: { quantity: true },
     }),
+    prisma.openingBalance.findMany({
+      where: { partnerId: { not: null } },
+      select: { partnerId: true, amount: true, asOfDate: true },
+    }),
   ]);
 
   const movedSince = new Map(
@@ -514,6 +535,8 @@ export async function getPartnersWithStats(
   const paidToDateMap = new Map(
     paidToDateGroups.map((g) => [g.partnerId, g._sum.amount ?? D(0)]),
   );
+  // At most one per partner, so the last write wins harmlessly.
+  const openingMap = new Map(openings.map((o) => [o.partnerId, o]));
 
   return partners.map((p) =>
     toPartnerDTO(p, {
@@ -523,6 +546,8 @@ export async function getPartnersWithStats(
       toDate: toDateMap.get(p.partnerId) ?? emptyTotals(),
       paidToDate: paidToDateMap.get(p.partnerId) ?? D(0),
       capitalOnShelf: shelfMap.get(p.partnerId) ?? D(0),
+      opening: openingMap.get(p.partnerId)?.amount ?? D(0),
+      openingAsOf: openingMap.get(p.partnerId)?.asOfDate ?? null,
     }),
   );
 }
@@ -566,6 +591,7 @@ export async function getPartnerDetail(
     movedSinceGroups,
     earnings,
     payouts,
+    opening,
   ] = await Promise.all([
     prisma.inventoryTransaction.findMany({
       where: {
@@ -634,6 +660,11 @@ export async function getPartnerDetail(
       orderBy: [{ paidOn: "desc" }, { payoutId: "desc" }],
       include: partnerPayoutInclude,
     }),
+    prisma.openingBalance.findFirst({
+      where: { partnerId },
+      orderBy: { asOfDate: "asc" },
+      select: { amount: true, asOfDate: true },
+    }),
   ]);
 
   const movedSince = new Map(
@@ -679,6 +710,8 @@ export async function getPartnerDetail(
       paidInRange: paidInRangeAgg._sum.amount ?? D(0),
       paidToDate: paidToDateAgg._sum.amount ?? D(0),
       capitalOnShelf: sumShelfValue(items, movedSince),
+      opening: opening?.amount ?? D(0),
+      openingAsOf: opening?.asOfDate ?? null,
     }),
     itemPerformance,
     earnings: earnings.map(toPartnerEarningDTO),

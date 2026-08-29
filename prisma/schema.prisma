@@ -687,9 +687,10 @@ model Partner {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  items        InventoryItem[]
-  transactions InventoryTransaction[]
-  payouts      PartnerPayout[]
+  items           InventoryItem[]
+  transactions    InventoryTransaction[]
+  payouts         PartnerPayout[]
+  openingBalances OpeningBalance[]
 
   @@index([name], map: "idx_partners_active")
   @@map("partners")
@@ -789,6 +790,13 @@ model Invoice {
   payments     Payment[]
 
   @@index([clientId], map: "idx_invoices_client")
+  // Every analytics query over invoices and their lines filters on issuedAt
+  // within a status set. Without this the planner seq-scans invoices AND
+  // invoice_line_items, so the cost of asking about one month grew with the
+  // whole history. With it, a narrow range plans as an index nested loop and
+  // the cost tracks the range instead. Leading with status because each query
+  // pins a fixed set of them, which keeps issuedAt usable as a range.
+  @@index([status, issuedAt], map: "idx_invoices_status_issued")
   @@index([status], map: "idx_invoices_status")
   // Newest-first listing, and the same ordering within a status filter.
   @@index([createdAt(sort: Desc), invoiceId(sort: Desc)], map: "idx_invoices_created_at")
@@ -908,6 +916,11 @@ model OpeningBalance {
   // Exactly one of these is set, enforced by a check constraint.
   clientId         Int?     @map("client_id")
   supplierId       Int?     @map("supplier_id")
+  // Consignment partners carry a balance the same way: what the clinic owes
+  // them is accrued from sale movements minus payouts, and both of those are
+  // things a year-end prune would remove. Without a figure to carry forward,
+  // pruning would reset every partner balance to the clinic's advantage.
+  partnerId        Int?     @map("partner_id")
   // Positive means money is owed: by the client to the clinic, or by the clinic
   // to the supplier. Same sign convention as the two accountBalance columns.
   amount           Decimal  @db.Decimal(12, 2)
@@ -925,11 +938,13 @@ model OpeningBalance {
 
   client   Client?   @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
   supplier Supplier? @relation(fields: [supplierId], references: [supplierId], onDelete: Restrict)
+  partner  Partner?  @relation(fields: [partnerId], references: [partnerId], onDelete: Restrict)
 
   // One opening balance per party per date. Makes the import idempotent and
   // makes a duplicated figure impossible rather than merely unlikely.
   @@unique([clientId, asOfDate], map: "uq_opening_balance_client")
   @@unique([supplierId, asOfDate], map: "uq_opening_balance_supplier")
+  @@unique([partnerId, asOfDate], map: "uq_opening_balance_partner")
   @@map("opening_balances")
 }
 
@@ -982,16 +997,16 @@ model Notification {
 // per month. Admin-only; feeds the analytics net-profit figures. Soft-deleted
 // so historical profit reports stay reproducible.
 model RunningCost {
-  costId      Int       @id @default(autoincrement()) @map("cost_id")
+  costId            Int       @id @default(autoincrement()) @map("cost_id")
   // Primary key from the old Access system (ExDetails.ID). See Client.legacyId.
   // Null on a cost typed into this app, which is what keeps a re-import from
   // touching anything staff entered themselves.
-  legacyId    Int?      @unique @map("legacy_id")
-  category    String    @db.VarChar(100)
-  description String    @db.VarChar(200)
-  amount      Decimal   @db.Decimal(12, 2)
-  incurredOn  DateTime  @map("incurred_on") @db.Date
-  notes       String?   @db.Text
+  legacyId          Int?      @unique @map("legacy_id")
+  category          String    @db.VarChar(100)
+  description       String    @db.VarChar(200)
+  amount            Decimal   @db.Decimal(12, 2)
+  incurredOn        DateTime  @map("incurred_on") @db.Date
+  notes             String?   @db.Text
   // Where this cost came from. Both null on one typed in by hand, which is
   // still the normal case. Set on the two kinds the app raises for itself:
   //
@@ -1004,12 +1019,12 @@ model RunningCost {
   // orphans behind. Analytics does not read them at all, which is the point:
   // an app-raised cost is a running cost like any other and lands in the same
   // categories and the same breakdown with no special-casing.
-  invoiceLineItemId Int? @map("invoice_line_item_id")
-  registerClosingId Int? @map("register_closing_id")
-  createdBy   Int?      @map("created_by")
-  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  invoiceLineItemId Int?      @map("invoice_line_item_id")
+  registerClosingId Int?      @map("register_closing_id")
+  createdBy         Int?      @map("created_by")
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   creator         User?            @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
   invoiceLineItem InvoiceLineItem? @relation(fields: [invoiceLineItemId], references: [lineItemId], onDelete: Cascade)
@@ -1062,7 +1077,7 @@ model RegisterClosing {
   closedBy Int?     @map("closed_by")
   closedAt DateTime @default(now()) @map("closed_at") @db.Timestamptz(6)
 
-  closer User?         @relation(fields: [closedBy], references: [userId], onDelete: SetNull)
+  closer  User?         @relation(fields: [closedBy], references: [userId], onDelete: SetNull)
   // The cash drawn out of the till that day. They are running costs, so they
   // reach analytics on their own, in the same categories as every other
   // operating cost.
