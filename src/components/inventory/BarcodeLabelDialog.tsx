@@ -15,6 +15,7 @@ import {
 import PrintIcon from "@mui/icons-material/Print";
 import JsBarcode from "jsbarcode";
 import { LABEL_WIDTH_MM, LABEL_HEIGHT_MM } from "@/constants/inventory";
+import { printHtmlDocument } from "@/utils/print-document";
 
 interface Props {
   open: boolean;
@@ -58,8 +59,6 @@ export default function BarcodeLabelDialog({
 
   function handlePrint() {
     if (!dataUrl) return;
-    const win = window.open("", "_blank", "width=400,height=400");
-    if (!win) return;
     const labels = Array.from({ length: count })
       .map(
         () => `<div class="label">
@@ -68,8 +67,7 @@ export default function BarcodeLabelDialog({
         </div>`,
       )
       .join("");
-    win.document
-      .write(`<!DOCTYPE html><html><head><title>barcode-${escapeHtml(barcode)}</title>
+    printHtmlDocument(`<!DOCTYPE html><html><head><title>barcode-${escapeHtml(barcode)}</title>
       <style>
         @page { size: ${LABEL_WIDTH_MM}mm ${LABEL_HEIGHT_MM}mm; margin: 0; }
         * { box-sizing: border-box; }
@@ -104,10 +102,7 @@ export default function BarcodeLabelDialog({
           max-width: ${LABEL_WIDTH_MM}mm;
           height: auto;
         }
-      </style></head><body>${labels}
-      <script>window.onload=function(){window.focus();window.print();window.close();}<\/script>
-      </body></html>`);
-    win.document.close();
+      </style></head><body>${labels}</body></html>`);
   }
 
   return (

@@ -1,6 +1,7 @@
 import { CLINIC, SECONDARY_CURRENCY } from "@/constants/clinic";
 import { RECEIPT_WIDTH_MM } from "@/constants/invoice";
 import { formatMoney, formatSecondaryMoney } from "@/utils/format";
+import { printHtmlDocument } from "@/utils/print-document";
 import type { InvoiceDTO } from "@/types/entities";
 
 // Escapes a value for safe interpolation into the receipt HTML.
@@ -74,9 +75,12 @@ function receiptHtml(invoice: InvoiceDTO): string {
 <meta charset="utf-8" />
 <title>Receipt ${esc(invoice.number)}</title>
 <style>
-  /* Industry-standard receipt: the page IS the receipt (80mm roll, auto height),
-     so Save-as-PDF yields a clean narrow slip, not a strip lost on an A4 sheet. */
-  @page { size: ${RECEIPT_WIDTH_MM}mm auto; margin: 0; }
+  /* Industry-standard receipt: the page IS the receipt, an 80mm roll cut to the
+     length of the content, so Save-as-PDF yields a clean narrow slip rather
+     than a strip stranded on an A4 sheet. The height cannot be written here
+     because it is not known until the receipt has rendered: printHtmlDocument
+     measures it and appends the real @page rule. */
+  @page { margin: 0; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
@@ -187,41 +191,8 @@ function receiptHtml(invoice: InvoiceDTO): string {
 </html>`;
 }
 
-// Renders the invoice as a thermal receipt and opens the browser print dialog.
-// Uses a hidden iframe so the current page is untouched.
+// Renders the invoice as a thermal receipt and sends it to the printer. On a
+// counter browser launched with kiosk printing it goes straight to the roll.
 export function printInvoiceReceipt(invoice: InvoiceDTO): void {
-  const iframe = document.createElement("iframe");
-  iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "0";
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentWindow?.document;
-  if (!doc) {
-    iframe.remove();
-    return;
-  }
-
-  doc.open();
-  doc.write(receiptHtml(invoice));
-  doc.close();
-
-  const win = iframe.contentWindow;
-  if (!win) {
-    iframe.remove();
-    return;
-  }
-
-  const cleanup = () => {
-    setTimeout(() => iframe.remove(), 1000);
-  };
-
-  win.onafterprint = cleanup;
-  win.focus();
-  win.print();
-  // Fallback removal in case onafterprint never fires.
-  setTimeout(cleanup, 60000);
+  printHtmlDocument(receiptHtml(invoice), { rollWidthMm: RECEIPT_WIDTH_MM });
 }

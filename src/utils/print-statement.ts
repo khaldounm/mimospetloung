@@ -1,6 +1,7 @@
 import { AGING_BUCKETS } from "@/constants/statement";
 import { formatDate, formatDateTime, formatMoney } from "@/utils/format";
 import { formatRangeLabel } from "@/utils/date-range";
+import { printHtmlDocument } from "@/utils/print-document";
 import type { StatementDTO, StatementSupplierDTO } from "@/types/entities";
 
 // Renders the supplier statement as a printable document, separate from the
@@ -209,38 +210,5 @@ ${statement.suppliers.map(supplierBlock).join("")}
 }
 
 export function printSupplierStatement(statement: StatementDTO): void {
-  const iframe = document.createElement("iframe");
-  iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "0";
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentWindow?.document;
-  if (!doc) {
-    iframe.remove();
-    return;
-  }
-
-  doc.open();
-  doc.write(statementHtml(statement));
-  doc.close();
-
-  const win = iframe.contentWindow;
-  if (!win) {
-    iframe.remove();
-    return;
-  }
-
-  const cleanup = () => {
-    setTimeout(() => iframe.remove(), 1000);
-  };
-
-  win.onafterprint = cleanup;
-  win.focus();
-  win.print();
-  // Fallback removal in case onafterprint never fires.
-  setTimeout(cleanup, 60000);
+  printHtmlDocument(statementHtml(statement));
 }

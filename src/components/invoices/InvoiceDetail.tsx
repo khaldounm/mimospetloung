@@ -30,7 +30,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import PaymentsIcon from "@mui/icons-material/Payments";
 import DownloadIcon from "@mui/icons-material/Download";
 import PrintIcon from "@mui/icons-material/Print";
-import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
+// import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import BlockIcon from "@mui/icons-material/Block";
 import MedicalServicesIcon from "@mui/icons-material/MedicalServices";
@@ -44,7 +44,7 @@ import {
   formatSecondaryMoney,
 } from "@/utils/format";
 import { printInvoiceReceipt } from "@/utils/print-receipt";
-import { downloadReceiptImage } from "@/utils/receipt-image";
+// import { downloadReceiptImage } from "@/utils/receipt-image";
 import { INVOICE_STATUS_COLOR } from "@/constants/invoice";
 import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
 import { SECONDARY_CURRENCY } from "@/constants/clinic";
@@ -182,16 +182,19 @@ export default function InvoiceDetail({
     }
   }
 
-  async function saveReceipt() {
-    setError(null);
-    try {
-      await downloadReceiptImage(invoice);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not save the receipt",
-      );
-    }
-  }
+  // Tiny Print: the pocket printer it fed is retired now that the counter has a
+  // roll printer, so the CTA is hidden rather than removed. downloadReceiptImage
+  // and receipt-image.ts are untouched and still work if it is ever wanted back.
+  // async function saveReceipt() {
+  //   setError(null);
+  //   try {
+  //     await downloadReceiptImage(invoice);
+  //   } catch (err) {
+  //     setError(
+  //       err instanceof Error ? err.message : "Could not save the receipt",
+  //     );
+  //   }
+  // }
 
   async function sendWhatsApp() {
     setError(null);
@@ -346,13 +349,13 @@ export default function InvoiceDetail({
           >
             Print invoice
           </Button>
-          <Button
+          {/* <Button
             variant="outlined"
             startIcon={<ReceiptLongIcon />}
             onClick={() => void saveReceipt()}
           >
             Tiny Print
-          </Button>
+          </Button> */}
           <Button
             variant="outlined"
             color="success"
