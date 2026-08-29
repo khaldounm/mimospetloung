@@ -1,7 +1,12 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
-import { DEFAULT_DISCOUNT_UNIT, type DiscountUnit } from "@/constants/order";
+import {
+  DEFAULT_DISCOUNT_UNIT,
+  OPEN_ORDER_STATUSES,
+  type DiscountUnit,
+  type OrderStatusFilter,
+} from "@/constants/order";
 import { netUnitCost } from "@/utils/discount";
 import {
   applyStockMovementTx,
@@ -160,17 +165,118 @@ export function toPurchaseOrderDTO(
 
 // ---- Reads ----
 
-// Orders newest first. The client groups them by supplier for display; sorting
-// by supplier then date here keeps that grouping stable without a second pass.
+export interface OrderListQuery {
+  /** "Open" covers OPEN_ORDER_STATUSES; anything else is one exact status. */
+  status?: OrderStatusFilter;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface OrderListPage {
+  orders: PurchaseOrderDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export const ORDER_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+
+function orderStatusWhere(
+  status: OrderStatusFilter | undefined,
+): Prisma.PurchaseOrderWhereInput {
+  if (!status) return {};
+  if (status === "Open") return { status: { in: OPEN_ORDER_STATUSES } };
+  return { status };
+}
+
+/**
+ * Orders newest first, one page at a time, filtered in SQL.
+ *
+ * Both halves matter. The status used to be a browser-side filter over every
+ * order ever raised, so opening the working view shipped four years of settled
+ * paperwork to find the handful still in flight; and without a page size the
+ * cost of this list grew with every delivery the clinic took. The rows a page
+ * shows are now what a page fetches.
+ *
+ * The client still groups a page by supplier for display, so a supplier with
+ * orders either side of a page boundary heads a group on both.
+ */
 export async function getOrders(
-  status?: PurchaseOrderStatus,
-): Promise<PurchaseOrderDTO[]> {
-  const orders = await prisma.purchaseOrder.findMany({
-    where: { deletedAt: null, ...(status ? { status } : {}) },
-    include: orderInclude,
-    orderBy: [{ createdAt: "desc" }, { orderId: "desc" }],
-  });
-  return orders.map((o) => toPurchaseOrderDTO(o));
+  query: OrderListQuery = {},
+): Promise<OrderListPage> {
+  const pageSize = Math.min(query.pageSize ?? ORDER_PAGE_SIZE, MAX_PAGE_SIZE);
+  const page = Math.max(query.page ?? 1, 1);
+  const where: Prisma.PurchaseOrderWhereInput = {
+    deletedAt: null,
+    ...orderStatusWhere(query.status),
+  };
+
+  const [orders, total] = await Promise.all([
+    prisma.purchaseOrder.findMany({
+      where,
+      include: orderInclude,
+      orderBy: [{ createdAt: "desc" }, { orderId: "desc" }],
+      take: pageSize,
+      skip: (page - 1) * pageSize,
+    }),
+    prisma.purchaseOrder.count({ where }),
+  ]);
+
+  return {
+    orders: orders.map((o) => toPurchaseOrderDTO(o)),
+    total,
+    page,
+    pageSize,
+  };
+}
+
+// The three figures above the orders list. They describe the whole open book
+// rather than the page on screen, so they are counted and summed in SQL: the
+// browser no longer holds every order and could not add them up if it wanted to.
+export interface OrderTotals {
+  drafts: number;
+  /** Placed or Partial: sent to the supplier, not yet fully delivered. */
+  awaiting: number;
+  draftValue: string;
+}
+
+type TotalsRow = { status: string; orders: bigint; value: Prisma.Decimal };
+
+export async function getOrderTotals(): Promise<OrderTotals> {
+  // Lines are summed in a lateral before the join so the order-level charges
+  // are added once per order rather than once per line. Rounding each order to
+  // the piastre before summing matches what the list shows, which rounds the
+  // same way per row.
+  const rows = await prisma.$queryRaw<TotalsRow[]>`
+    SELECT o.status,
+           count(*) AS orders,
+           COALESCE(SUM(ROUND(
+             COALESCE(l.subtotal, 0)
+             - COALESCE(o.discount_amount, 0)
+             + COALESCE(o.shipping_amount, 0)
+             + COALESCE(o.tax_amount, 0)
+           , 2)), 0) AS value
+    FROM purchase_orders o
+    LEFT JOIN LATERAL (
+      SELECT SUM(quantity_ordered * unit_cost) AS subtotal
+      FROM purchase_order_lines
+      WHERE order_id = o.order_id
+    ) l ON TRUE
+    WHERE o.deleted_at IS NULL
+      AND o.status = ANY(${OPEN_ORDER_STATUSES})
+    GROUP BY o.status`;
+
+  const totals: OrderTotals = { drafts: 0, awaiting: 0, draftValue: "0.00" };
+  for (const row of rows) {
+    if (row.status === "Draft") {
+      totals.drafts = Number(row.orders);
+      totals.draftValue = D(row.value).toFixed(2);
+    } else {
+      totals.awaiting += Number(row.orders);
+    }
+  }
+  return totals;
 }
 
 export async function getOrderDetail(

@@ -148,6 +148,9 @@ export default function ServicesTable({ initialServices, canWrite }: Props) {
               defaultExpanded={category === RECORD_TYPES[0]}
               disableGutters
               elevation={0}
+              // Same as the analytics sections: eight of these nine categories
+              // are closed on load, and their tables were being built anyway.
+              slotProps={{ transition: { unmountOnExit: true } }}
               sx={{
                 border: "1px solid",
                 borderColor: "divider",

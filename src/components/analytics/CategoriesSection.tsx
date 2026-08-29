@@ -24,6 +24,7 @@ import {
   EmptyChart,
   KpiCard,
   KpiGrid,
+  SectionPlaceholder,
   money,
 } from "./AnalyticsPrimitives";
 import type {
@@ -92,27 +93,22 @@ function GroupTable({ group }: { group: CategoryTrendGroup }) {
 // year earlier. Both comparisons arrive in one payload, so the toggle is a
 // local state change and never refetches.
 export default function CategoriesSection({
-  initial,
   initialRange,
 }: {
-  initial: CategoriesAnalytics;
   initialRange: AnalyticsRange;
 }) {
-  const { range, data, loading, setRange } =
-    useAnalyticsSection<CategoriesAnalytics>(
-      "categories",
-      initial,
-      initialRange,
-    );
+  const { range, data, loading, error, setRange, load } =
+    useAnalyticsSection<CategoriesAnalytics>("categories", initialRange);
   const [mode, setMode] = useState<Mode>("mom");
-  const comparison = data[mode];
-  const hasData = comparison.groups.length > 0;
+  const comparison = data?.[mode] ?? null;
+  const hasData = (comparison?.groups.length ?? 0) > 0;
 
   return (
     <AnalyticsSection
       title="Category performance"
       subtitle={rangeSummary(range)}
       loading={loading}
+      onExpand={load}
       controls={
         <Stack spacing={2}>
           <DateRangeControl range={range} onChange={setRange} />
@@ -130,70 +126,78 @@ export default function CategoriesSection({
               <ToggleButton value="mom">Month on month</ToggleButton>
               <ToggleButton value="yoy">Year on year</ToggleButton>
             </ToggleButtonGroup>
-            <Typography variant="body2" color="text.secondary">
-              Compared against {formatRangeLabel(comparison.priorRange)}
-            </Typography>
+            {comparison && (
+              <Typography variant="body2" color="text.secondary">
+                Compared against {formatRangeLabel(comparison.priorRange)}
+              </Typography>
+            )}
           </Stack>
         </Stack>
       }
     >
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Billed revenue, not cash collected: a payment settles an invoice rather
-        than a line, so it cannot be split by category. These figures will not
-        match the Collected total in Revenue.
-      </Typography>
+      {comparison ? (
+        <>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Billed revenue, not cash collected: a payment settles an invoice
+            rather than a line, so it cannot be split by category. These figures
+            will not match the Collected total in Revenue.
+          </Typography>
 
-      <KpiGrid>
-        <KpiCard
-          label="Billed this period"
-          value={money(comparison.total.current)}
-        />
-        <KpiCard
-          label="Comparison period"
-          value={money(comparison.total.prior)}
-        />
-        <KpiCard label="Change" value={money(comparison.total.delta)} />
-        <KpiCard
-          label="Growth"
-          value={
-            comparison.total.percent === null
-              ? "-"
-              : `${comparison.total.percent > 0 ? "+" : ""}${comparison.total.percent}%`
-          }
-        />
-      </KpiGrid>
-
-      {!hasData ? (
-        <EmptyChart />
-      ) : (
-        <Stack spacing={2} sx={{ mt: 2 }}>
-          <ChartCard title="Business lines, this period vs comparison" full>
-            <BarChart
-              height={CHART_HEIGHT}
-              xAxis={[
-                {
-                  data: comparison.groups.map((g) => g.label),
-                  scaleType: "band",
-                },
-              ]}
-              series={[
-                {
-                  label: "This period",
-                  data: comparison.groups.map((g) => g.current),
-                  valueFormatter: (v) => money(v ?? 0),
-                },
-                {
-                  label: "Comparison",
-                  data: comparison.groups.map((g) => g.prior),
-                  valueFormatter: (v) => money(v ?? 0),
-                },
-              ]}
+          <KpiGrid>
+            <KpiCard
+              label="Billed this period"
+              value={money(comparison.total.current)}
             />
-          </ChartCard>
-          {comparison.groups.map((group) => (
-            <GroupTable key={group.key} group={group} />
-          ))}
-        </Stack>
+            <KpiCard
+              label="Comparison period"
+              value={money(comparison.total.prior)}
+            />
+            <KpiCard label="Change" value={money(comparison.total.delta)} />
+            <KpiCard
+              label="Growth"
+              value={
+                comparison.total.percent === null
+                  ? "-"
+                  : `${comparison.total.percent > 0 ? "+" : ""}${comparison.total.percent}%`
+              }
+            />
+          </KpiGrid>
+
+          {!hasData ? (
+            <EmptyChart />
+          ) : (
+            <Stack spacing={2} sx={{ mt: 2 }}>
+              <ChartCard title="Business lines, this period vs comparison" full>
+                <BarChart
+                  height={CHART_HEIGHT}
+                  xAxis={[
+                    {
+                      data: comparison.groups.map((g) => g.label),
+                      scaleType: "band",
+                    },
+                  ]}
+                  series={[
+                    {
+                      label: "This period",
+                      data: comparison.groups.map((g) => g.current),
+                      valueFormatter: (v) => money(v ?? 0),
+                    },
+                    {
+                      label: "Comparison",
+                      data: comparison.groups.map((g) => g.prior),
+                      valueFormatter: (v) => money(v ?? 0),
+                    },
+                  ]}
+                />
+              </ChartCard>
+              {comparison.groups.map((group) => (
+                <GroupTable key={group.key} group={group} />
+              ))}
+            </Stack>
+          )}
+        </>
+      ) : (
+        <SectionPlaceholder error={error} />
       )}
     </AnalyticsSection>
   );

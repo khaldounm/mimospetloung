@@ -653,25 +653,6 @@ export interface ItemsAnalytics {
   topSold: ItemPerformanceRow[];
 }
 
-export interface AnalyticsDTO {
-  generatedAt: string;
-  // The range the boxable sections were initially computed for (the default);
-  // each of those sections can be re-queried for a different range on demand.
-  defaultRange: AnalyticsRange;
-  revenue: RevenueAnalytics;
-  clients: ClientsAnalytics;
-  inventory: InventoryAnalytics;
-  bookings: BookingsAnalytics;
-  categories: CategoriesAnalytics;
-  items: ItemsAnalytics;
-  // Only populated for users allowed to see costs (costs:read). Net-profit
-  // figures combine revenue with running costs, which are admin-only.
-  profit?: ProfitAnalytics | null;
-  // Only populated for users allowed to see purchasing (orders:read), since it
-  // exposes what the clinic pays suppliers.
-  purchases?: PurchasesAnalytics | null;
-}
-
 // ── Running costs (operating expenses) ────────────────────
 export interface RunningCostDTO {
   costId: number;
@@ -920,6 +901,18 @@ export interface PurchaseOrderDTO {
   createdByName: string | null;
   createdAt: string;
   lines?: PurchaseOrderLineDTO[];
+}
+
+// One delivered bill as the payment and credit pickers need it: enough to name
+// it, date it, and cap an allocation at what the bill is worth. Deliberately not
+// a PurchaseOrderDTO: the pickers offer every delivered order a supplier ever
+// sent, and carrying the full document for each was most of what the supplier
+// page weighed.
+export interface PayableOrderOption {
+  orderId: number;
+  reference: string | null;
+  receivedOn: string | null;
+  total: string;
 }
 
 // The money side of a consignment relationship, split so the clinic can tell

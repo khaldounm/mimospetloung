@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import {
   getSupplier,
+  getSupplierPayments,
   supplierPaymentInclude,
   toSupplierPaymentDTO,
 } from "@/lib/suppliers";
@@ -20,20 +21,20 @@ async function getSupplierId(params: Promise<{ supplierId: string }>) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ supplierId: string }> },
 ) {
   return handle(async () => {
     await requirePermission("orders:read");
     const supplierId = await getSupplierId(params);
 
-    const payments = await prisma.supplierPayment.findMany({
-      where: { supplierId, deletedAt: null },
-      include: supplierPaymentInclude,
-      orderBy: [{ paidOn: "desc" }, { paymentId: "desc" }],
-    });
+    const pageRaw = new URL(request.url).searchParams.get("page")?.trim();
+    const page = await getSupplierPayments(
+      supplierId,
+      pageRaw ? Number(pageRaw) : 1,
+    );
 
-    return NextResponse.json({ payments: payments.map(toSupplierPaymentDTO) });
+    return NextResponse.json(page);
   });
 }
 

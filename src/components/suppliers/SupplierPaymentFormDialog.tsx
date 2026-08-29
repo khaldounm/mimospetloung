@@ -16,7 +16,7 @@ import {
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney, toDateOnly } from "@/utils/format";
 import { PARTNER_PAYOUT_METHODS } from "@/constants/partner";
-import type { PurchaseOrderDTO, SupplierDTO } from "@/types/entities";
+import type { PayableOrderOption, SupplierDTO } from "@/types/entities";
 
 interface Props {
   open: boolean;
@@ -24,7 +24,7 @@ interface Props {
   supplierName: string;
   balance: string;
   /** Received orders only: an open order has no bill to settle yet. */
-  payableOrders: PurchaseOrderDTO[];
+  payableOrders: PayableOrderOption[];
   onClose: () => void;
   onSaved: (supplier: SupplierDTO | null) => void;
 }

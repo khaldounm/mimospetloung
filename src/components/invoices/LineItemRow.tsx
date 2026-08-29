@@ -134,7 +134,15 @@ function ClinicUseTag() {
 
 function NotCharged() {
   return (
-    <Typography variant="body2" color="text.secondary">
+    // Held on one line: wrapping to "Not / charged" makes a clinic-use row
+    // taller than every other row, which is the alignment this layout exists to
+    // fix. Smaller than the figures it stands in for, because it is a note
+    // rather than an amount.
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      sx={{ whiteSpace: "nowrap" }}
+    >
       Not charged
     </Typography>
   );

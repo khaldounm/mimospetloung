@@ -2,11 +2,8 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { toBookingDTO } from "@/lib/bookings";
-import type {
-  BookingTypeOption,
-  PatientOption,
-  StaffOption,
-} from "@/types/entities";
+import { toDateOnly } from "@/utils/format";
+import type { BookingTypeOption, StaffOption } from "@/types/entities";
 import BookingsTable from "@/components/bookings/BookingsTable";
 
 const bookingInclude = {
@@ -20,8 +17,18 @@ export default async function BookingsPage() {
   const session = await auth();
   const canWrite = hasPermission(session?.user, "bookings:write");
 
-  const [bookings, staff, types, patients] = await Promise.all([
+  // The diary opens on today onwards rather than on every booking ever taken.
+  // Sorted ascending, an unscoped list put the clinic's oldest appointment at
+  // the top and grew by a page a month; looking further back is what the From
+  // field is for.
+  //
+  // Passed to the table as well so its From box agrees with what is on screen,
+  // and so its first refetch asks for the same window rather than widening it.
+  const from = toDateOnly(new Date())!;
+
+  const [bookings, staff, types] = await Promise.all([
     prisma.booking.findMany({
+      where: { startsAt: { gte: new Date(from) } },
       orderBy: { startsAt: "asc" },
       include: bookingInclude,
     }),
@@ -33,11 +40,6 @@ export default async function BookingsPage() {
     prisma.bookingType.findMany({
       orderBy: { name: "asc" },
       select: { typeId: true, name: true, durationMinutes: true },
-    }),
-    prisma.patient.findMany({
-      where: { deletedAt: null },
-      orderBy: { name: "asc" },
-      include: { client: { select: { firstName: true, lastName: true } } },
     }),
   ]);
 
@@ -54,15 +56,10 @@ export default async function BookingsPage() {
     durationMinutes: t.durationMinutes,
   }));
 
-  const patientOptions: PatientOption[] = patients.map((p) => ({
-    patientId: p.patientId,
-    label: `${p.name} (${p.client.firstName} ${p.client.lastName})`,
-  }));
-
   return (
     <BookingsTable
       initialBookings={initialBookings}
-      patientOptions={patientOptions}
+      initialFrom={from}
       staffOptions={staffOptions}
       typeOptions={typeOptions}
       canWrite={canWrite}

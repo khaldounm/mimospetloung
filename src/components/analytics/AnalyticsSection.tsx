@@ -18,6 +18,9 @@ interface Props {
   // Rendered above the content and never dimmed (e.g. the date-range control),
   // so it stays usable while a new range is loading.
   controls?: React.ReactNode;
+  // Called when the section is opened. This is where a section's figures are
+  // fetched from, so nothing is computed for one nobody looks at.
+  onExpand?: () => void;
   children: React.ReactNode;
 }
 
@@ -29,12 +32,20 @@ export default function AnalyticsSection({
   subtitle,
   loading,
   controls,
+  onExpand,
   children,
 }: Props) {
   return (
     <Accordion
       disableGutters
       elevation={0}
+      onChange={(_e, expanded) => {
+        if (expanded) onExpand?.();
+      }}
+      // A collapsed section keeps nothing in the DOM. MUI mounts accordion
+      // children whether or not anyone opens them, so the page was building
+      // fourteen chart surfaces behind seven closed headers.
+      slotProps={{ transition: { unmountOnExit: true } }}
       sx={{
         border: 1,
         borderColor: "divider",

@@ -3,7 +3,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
-import { getAnalytics } from "@/lib/analytics";
+import { defaultRange } from "@/utils/date-range";
 import AnalyticsDashboard from "@/components/analytics/AnalyticsDashboard";
 import AnalyticsGuide from "@/components/analytics/AnalyticsGuide";
 
@@ -16,7 +16,8 @@ export default async function AnalyticsPage() {
   const includeProfit = hasPermission(session?.user, "costs:read");
   // Purchases exposes what suppliers charge, so it follows orders:read.
   const includePurchases = hasPermission(session?.user, "orders:read");
-  const data = await getAnalytics({ includeProfit, includePurchases });
+  // No figures are computed here. Each section fetches its own the first time
+  // someone opens it, which for most visits is none of them.
 
   return (
     <Box>
@@ -33,7 +34,12 @@ export default async function AnalyticsPage() {
         category performance, inventory and bookings each have their own date
         range with quick presets; clients shows the current snapshot.
       </Typography>
-      <AnalyticsDashboard data={data} />
+      <AnalyticsDashboard
+        defaultRange={defaultRange()}
+        generatedAt={new Date().toISOString()}
+        canSeeProfit={includeProfit}
+        canSeePurchases={includePurchases}
+      />
     </Box>
   );
 }

@@ -22,7 +22,7 @@ import AddIcon from "@mui/icons-material/Add";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney, toDateOnly } from "@/utils/format";
 import type {
-  PurchaseOrderDTO,
+  PayableOrderOption,
   SupplierDTO,
   SupplierPaymentDTO,
 } from "@/types/entities";
@@ -33,7 +33,7 @@ interface Props {
   supplierName: string;
   balance: string;
   /** Received orders only: an open order has no bill to credit against yet. */
-  payableOrders: PurchaseOrderDTO[];
+  payableOrders: PayableOrderOption[];
   onClose: () => void;
   onSaved: (
     supplier: SupplierDTO | null,

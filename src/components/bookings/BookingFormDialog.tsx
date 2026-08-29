@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
-  Autocomplete,
   Button,
   Chip,
   CircularProgress,
@@ -17,6 +16,8 @@ import {
   Typography,
 } from "@mui/material";
 import { apiRequest } from "@/utils/api-client";
+import PatientSearchField from "@/components/ui/PatientSearchField";
+import type { PatientSearchResult } from "@/hooks/usePatientSearch";
 import { formatTime, toDateTimeLocal } from "@/utils/format";
 import { BOOKING_STATUSES, type BookingStatus } from "@/types/enums";
 import {
@@ -27,7 +28,6 @@ import {
 import type {
   BookingDTO,
   BookingTypeOption,
-  PatientOption,
   StaffOption,
 } from "@/types/entities";
 
@@ -48,7 +48,6 @@ function toLocalInput(d: Date): string {
 interface Props {
   open: boolean;
   booking?: BookingDTO | null;
-  patientOptions: PatientOption[];
   staffOptions: StaffOption[];
   typeOptions: BookingTypeOption[];
   onClose: () => void;
@@ -83,16 +82,17 @@ type FormProps = Omit<Props, "open">;
 
 function BookingForm({
   booking,
-  patientOptions,
   staffOptions,
   typeOptions,
   onClose,
   onSaved,
 }: FormProps) {
   const editing = Boolean(booking);
-  const [patientId, setPatientId] = useState<number | null>(
-    booking?.patientId ?? null,
-  );
+  // The pet is searched server-side as it is typed rather than picked from a
+  // preloaded list: every pet in the clinic used to come down with the bookings
+  // page to fill this one field.
+  const [patient, setPatient] = useState<PatientSearchResult | null>(null);
+  const patientId = patient?.patientId ?? booking?.patientId ?? null;
   const [staffId, setStaffId] = useState(
     booking?.staffId ? String(booking.staffId) : "",
   );
@@ -245,14 +245,10 @@ function BookingForm({
               {booking!.clientName})
             </Typography>
           ) : (
-            <Autocomplete
-              options={patientOptions}
-              getOptionLabel={(o) => o.label}
-              value={
-                patientOptions.find((o) => o.patientId === patientId) ?? null
-              }
-              onChange={(_e, v) => setPatientId(v?.patientId ?? null)}
-              renderInput={(p) => <TextField {...p} label="Patient" required />}
+            <PatientSearchField
+              value={patient}
+              onChange={setPatient}
+              required
             />
           )}
 

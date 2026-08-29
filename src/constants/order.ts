@@ -21,6 +21,19 @@ export type DiscountUnit = (typeof DISCOUNT_UNITS)[number];
 
 export const DEFAULT_DISCOUNT_UNIT: DiscountUnit = "amount";
 
+// Everything still in flight. Partial belongs here: part of it has arrived and
+// the rest is expected, so it is the most open an order can be. Leaving it out
+// hid such orders from every tab at once.
+export const OPEN_ORDER_STATUSES: PurchaseOrderStatus[] = [
+  "Draft",
+  "Placed",
+  "Partial",
+];
+
+// What the tab strip on the orders list offers. "Open" is the working view and
+// is not a stored status: it stands for OPEN_ORDER_STATUSES.
+export type OrderStatusFilter = "Open" | PurchaseOrderStatus;
+
 // MUI Chip colors per order status.
 export const ORDER_STATUS_COLOR: Record<
   PurchaseOrderStatus,

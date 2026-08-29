@@ -118,6 +118,28 @@ export function EmptyChart() {
   );
 }
 
+// Stands in for a section's figures while they are being fetched, and carries
+// the message if the fetch fails. A section is computed when it is opened, so
+// this is what the first moment after an expand looks like. The wrapper is
+// already showing a progress bar, so this only has to hold the space and say
+// why it is empty.
+export function SectionPlaceholder({ error }: { error?: string | null }) {
+  return (
+    <Box
+      sx={{
+        minHeight: 120,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Typography variant="body2" color={error ? "error" : "text.secondary"}>
+        {error ?? "Working out the figures..."}
+      </Typography>
+    </Box>
+  );
+}
+
 // Horizontal bar chart for ranked label/value lists (services, sold items).
 export function HorizontalBars({
   items,

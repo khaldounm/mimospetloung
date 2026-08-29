@@ -9,19 +9,29 @@ import {
 import { writeAudit } from "@/lib/audit";
 import { purchaseOrderCreateSchema } from "@/schemas/purchase-order";
 import { PURCHASE_ORDER_STATUSES } from "@/types/enums";
+import type { OrderStatusFilter } from "@/constants/order";
 import type { PurchaseOrderStatus } from "@/types/enums";
 
 export async function GET(request: Request) {
   return handle(async () => {
     await requirePermission("orders:read");
 
-    const raw = new URL(request.url).searchParams.get("status")?.trim();
-    const status = PURCHASE_ORDER_STATUSES.includes(raw as PurchaseOrderStatus)
-      ? (raw as PurchaseOrderStatus)
-      : undefined;
+    const sp = new URL(request.url).searchParams;
+    const raw = sp.get("status")?.trim();
+    // "Open" is the working view rather than a stored status, so it is allowed
+    // through alongside the real ones.
+    const status =
+      raw === "Open" ||
+      PURCHASE_ORDER_STATUSES.includes(raw as PurchaseOrderStatus)
+        ? (raw as OrderStatusFilter)
+        : undefined;
+    const pageRaw = sp.get("page")?.trim();
 
-    const orders = await getOrders(status);
-    return NextResponse.json({ orders });
+    const page = await getOrders({
+      status,
+      page: pageRaw ? Number(pageRaw) : 1,
+    });
+    return NextResponse.json(page);
   });
 }
 

@@ -9,13 +9,17 @@ import CategoriesSection from "./CategoriesSection";
 import ClientsSection from "./ClientsSection";
 import InventorySection from "./InventorySection";
 import BookingsSection from "./BookingsSection";
-import type { AnalyticsDTO } from "@/types/entities";
+import type { AnalyticsRange } from "@/types/entities";
 
 // Sectioned analytics: each section is a collapsible accordion. The flow sections
 // (Profitability, Purchases, Revenue, Bookings) carry their own date-range
 // calendar and re-query on demand; the snapshot sections (Clients, Inventory)
 // show current state. Profitability needs costs:read, Purchases needs
 // orders:read.
+//
+// Every section fetches itself the first time it is opened. Nothing here is
+// computed at first paint: the page arrived with all seven already calculated,
+// which was 34 queries to fill accordions that were all closed.
 //
 // Inventory is half snapshot and half flow: stock levels are a position, while
 // the top-sellers and the per-item lookup are range-scoped and share the
@@ -31,43 +35,33 @@ import type { AnalyticsDTO } from "@/types/entities";
 // Purchases sits directly after Profitability so the two are read together and
 // never confused: profit recognises stock cost when it sells, purchases records
 // the cash leaving. Neither figure belongs inside the other.
-export default function AnalyticsDashboard({ data }: { data: AnalyticsDTO }) {
+export default function AnalyticsDashboard({
+  defaultRange,
+  generatedAt,
+  canSeeProfit,
+  canSeePurchases,
+}: {
+  defaultRange: AnalyticsRange;
+  generatedAt: string;
+  canSeeProfit: boolean;
+  canSeePurchases: boolean;
+}) {
   return (
     <Box>
-      {data.profit && (
-        <ProfitabilitySection
-          initial={data.profit}
-          initialRange={data.defaultRange}
-        />
-      )}
-      {data.purchases && (
-        <PurchasesSection
-          initial={data.purchases}
-          initialRange={data.defaultRange}
-        />
-      )}
-      <RevenueSection initial={data.revenue} initialRange={data.defaultRange} />
-      <CategoriesSection
-        initial={data.categories}
-        initialRange={data.defaultRange}
-      />
-      <ClientsSection data={data.clients} />
-      <InventorySection
-        data={data.inventory}
-        initialItems={data.items}
-        initialRange={data.defaultRange}
-      />
-      <BookingsSection
-        initial={data.bookings}
-        initialRange={data.defaultRange}
-      />
+      {canSeeProfit && <ProfitabilitySection initialRange={defaultRange} />}
+      {canSeePurchases && <PurchasesSection initialRange={defaultRange} />}
+      <RevenueSection initialRange={defaultRange} />
+      <CategoriesSection initialRange={defaultRange} />
+      <ClientsSection initialRange={defaultRange} />
+      <InventorySection initialRange={defaultRange} />
+      <BookingsSection initialRange={defaultRange} />
 
       <Typography
         variant="caption"
         color="text.secondary"
         sx={{ display: "block", mt: 2 }}
       >
-        Generated {formatDateTime(data.generatedAt)}
+        Generated {formatDateTime(generatedAt)}
       </Typography>
     </Box>
   );

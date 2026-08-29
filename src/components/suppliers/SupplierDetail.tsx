@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -29,7 +29,9 @@ import { formatDate, formatMoney } from "@/utils/format";
 import { ORDER_STATUS_COLOR } from "@/constants/order";
 import { SETTLEMENT_KIND_LABEL } from "@/constants/supplier";
 import StatCard from "@/components/ui/StatCard";
+import TablePaginationBar from "@/components/ui/TablePaginationBar";
 import type {
+  PayableOrderOption,
   PurchaseOrderDTO,
   SupplierDTO,
   SupplierPaymentDTO,
@@ -40,16 +42,23 @@ import SupplierCreditFormDialog from "./SupplierCreditFormDialog";
 
 interface Props {
   supplier: SupplierDTO;
-  orders: PurchaseOrderDTO[];
-  payments: SupplierPaymentDTO[];
-  payableOrders: PurchaseOrderDTO[];
+  /** Page one of each table, rendered by the server. */
+  initialOrders: PurchaseOrderDTO[];
+  ordersTotal: number;
+  initialPayments: SupplierPaymentDTO[];
+  paymentsTotal: number;
+  pageSize: number;
+  payableOrders: PayableOrderOption[];
   canWrite: boolean;
 }
 
 export default function SupplierDetail({
   supplier,
-  orders,
-  payments,
+  initialOrders,
+  ordersTotal,
+  initialPayments,
+  paymentsTotal,
+  pageSize,
   payableOrders,
   canWrite,
 }: Props) {
@@ -58,6 +67,62 @@ export default function SupplierDetail({
   const [payOpen, setPayOpen] = useState(false);
   const [creditOpen, setCreditOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Page one is never held in state, only pages after it. Copying a prop into
+  // useState freezes it at first mount, and this page leans on router.refresh()
+  // to bring fresh figures down after a payment; reading page one straight from
+  // props means a refresh reaches the table as well as the cards.
+  const [ordersPage, setOrdersPage] = useState(0);
+  const [laterOrders, setLaterOrders] = useState<PurchaseOrderDTO[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const orders = ordersPage === 0 ? initialOrders : laterOrders;
+
+  const [paymentsPage, setPaymentsPage] = useState(0);
+  const [laterPayments, setLaterPayments] = useState<SupplierPaymentDTO[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const payments = paymentsPage === 0 ? initialPayments : laterPayments;
+
+  const loadOrders = useCallback(
+    async (p: number) => {
+      setOrdersPage(p);
+      if (p === 0) return;
+      setOrdersLoading(true);
+      try {
+        const data = await apiRequest<{ orders: PurchaseOrderDTO[] }>(
+          `/api/suppliers/${supplier.supplierId}/orders?page=${p + 1}`,
+        );
+        setLaterOrders(data.orders);
+      } finally {
+        setOrdersLoading(false);
+      }
+    },
+    [supplier.supplierId],
+  );
+
+  const loadPayments = useCallback(
+    async (p: number) => {
+      setPaymentsPage(p);
+      if (p === 0) return;
+      setPaymentsLoading(true);
+      try {
+        const data = await apiRequest<{ payments: SupplierPaymentDTO[] }>(
+          `/api/suppliers/${supplier.supplierId}/payments?page=${p + 1}`,
+        );
+        setLaterPayments(data.payments);
+      } finally {
+        setPaymentsLoading(false);
+      }
+    },
+    [supplier.supplierId],
+  );
+
+  // Anything that settles the account changes what both tables hold, and the
+  // refreshed props only reach page one, so both pagers go back to it.
+  const refresh = useCallback(() => {
+    setOrdersPage(0);
+    setPaymentsPage(0);
+    router.refresh();
+  }, [router]);
 
   // Read straight from props rather than seeding state from them. Copying a prop
   // into useState freezes it at first mount, so router.refresh() would bring
@@ -79,7 +144,7 @@ export default function SupplierDetail({
         `/api/suppliers/${supplier.supplierId}/payments/${payment.paymentId}`,
         { method: "DELETE" },
       );
-      router.refresh();
+      refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete");
     }
@@ -355,7 +420,16 @@ export default function SupplierDetail({
         </Table>
       </TableContainer>
 
-      <Typography variant="h5" sx={{ mb: 2 }}>
+      <TablePaginationBar
+        page={ordersPage}
+        count={ordersTotal}
+        pageSize={pageSize}
+        onChange={(p) => void loadOrders(p)}
+        loading={ordersLoading}
+        noun="orders"
+      />
+
+      <Typography variant="h5" sx={{ mb: 2, mt: 2 }}>
         Payments
       </Typography>
       <TableContainer component={Paper}>
@@ -427,11 +501,20 @@ export default function SupplierDetail({
         </Table>
       </TableContainer>
 
+      <TablePaginationBar
+        page={paymentsPage}
+        count={paymentsTotal}
+        pageSize={pageSize}
+        onChange={(p) => void loadPayments(p)}
+        loading={paymentsLoading}
+        noun="settlements"
+      />
+
       <SupplierFormDialog
         open={editOpen}
         supplier={supplier}
         onClose={() => setEditOpen(false)}
-        onSaved={() => router.refresh()}
+        onSaved={refresh}
       />
       <SupplierPaymentFormDialog
         open={payOpen}
@@ -440,7 +523,7 @@ export default function SupplierDetail({
         balance={money?.balance ?? "0"}
         payableOrders={payableOrders}
         onClose={() => setPayOpen(false)}
-        onSaved={() => router.refresh()}
+        onSaved={refresh}
       />
       <SupplierCreditFormDialog
         open={creditOpen}
@@ -449,7 +532,7 @@ export default function SupplierDetail({
         balance={money?.balance ?? "0"}
         payableOrders={payableOrders}
         onClose={() => setCreditOpen(false)}
-        onSaved={() => router.refresh()}
+        onSaved={refresh}
       />
     </Box>
   );

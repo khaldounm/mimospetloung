@@ -3,7 +3,6 @@ import { BOOKING_STATUSES } from "@/types/enums";
 import {
   buildBuckets,
   bucketKeyOf,
-  defaultRange,
   pickGranularity,
   rangeBounds,
   dateOnlyBounds,
@@ -23,7 +22,6 @@ import {
 } from "@/constants/analytics";
 import type { AnalyticsSection } from "@/schemas/analytics";
 import type {
-  AnalyticsDTO,
   AnalyticsRange,
   BookingsAnalytics,
   CategoriesAnalytics,
@@ -939,7 +937,7 @@ export async function searchAnalyticsItems(
 
 // ---- snapshot sections (not time-boxed) ----
 
-async function getClientsSnapshot(): Promise<ClientsAnalytics> {
+export async function getClientsSnapshot(): Promise<ClientsAnalytics> {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -1008,7 +1006,7 @@ async function getClientsSnapshot(): Promise<ClientsAnalytics> {
 // are a flow and so none of which take a date range. What sold is a flow, and
 // lives in the items section instead, off the invoice lines rather than off
 // stock movements so returns net out of it.
-async function getInventorySnapshot(): Promise<InventoryAnalytics> {
+export async function getInventorySnapshot(): Promise<InventoryAnalytics> {
   const today = startOfToday();
   const in30Days = new Date(today.getTime() + 30 * DAY_MS);
 
@@ -1325,46 +1323,4 @@ export function getAnalyticsSection(
     case "items":
       return getItemsSection(range);
   }
-}
-
-// The initial page payload: every section computed once at the default range
-// (this month for the boxable sections; snapshots ignore the range). Boxable
-// sections can then be re-queried for other ranges via getAnalyticsSection.
-export async function getAnalytics(
-  options: { includeProfit?: boolean; includePurchases?: boolean } = {},
-): Promise<AnalyticsDTO> {
-  const range = defaultRange();
-
-  const [
-    revenue,
-    bookings,
-    categories,
-    items,
-    clients,
-    inventory,
-    profit,
-    purchases,
-  ] = await Promise.all([
-    getRevenueSection(range),
-    getBookingsSection(range),
-    getCategoriesSection(range),
-    getItemsSection(range),
-    getClientsSnapshot(),
-    getInventorySnapshot(),
-    options.includeProfit ? getProfitSection(range) : null,
-    options.includePurchases ? getPurchasesSection(range) : null,
-  ]);
-
-  return {
-    generatedAt: new Date().toISOString(),
-    defaultRange: range,
-    revenue,
-    clients,
-    inventory,
-    bookings,
-    categories,
-    items,
-    profit,
-    purchases,
-  };
 }

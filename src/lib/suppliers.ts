@@ -4,6 +4,7 @@ import { ApiError } from "@/lib/api";
 import { orderInclude, toPurchaseOrderDTO } from "@/lib/purchase-orders";
 import { toDateOnly } from "@/utils/format";
 import type {
+  PayableOrderOption,
   PurchaseOrderDTO,
   SupplierContactDTO,
   SupplierDTO,
@@ -215,66 +216,104 @@ export async function writeSupplierContacts(
 const INVOICED_STATUS = "Received";
 const OPEN_STATUSES = ["Draft", "Placed", "Partial"];
 
-// An order's value, matching exactly what the order page shows: lines at the
+// What a supplier's order book is worth, split the way the balance needs it.
+//
+// An order's value matches exactly what the order page shows: lines at the
 // quantity ordered, plus the charges. For a fully delivered order that is also
 // what arrived. For one closed short it is what was asked for rather than what
 // came, so a short-shipped order reads high until its lines are corrected.
-function orderValue(order: {
-  lines: { quantityOrdered: Prisma.Decimal; unitCost: Prisma.Decimal | null }[];
-  discountAmount: Prisma.Decimal | null;
-  shippingAmount: Prisma.Decimal | null;
-  taxAmount: Prisma.Decimal | null;
-}): Prisma.Decimal {
-  const subtotal = order.lines.reduce(
-    (sum, l) =>
-      l.unitCost ? sum.plus(l.quantityOrdered.times(l.unitCost)) : sum,
-    D(0),
-  );
-  return subtotal
-    .minus(order.discountAmount ?? 0)
-    .plus(order.shippingAmount ?? 0)
-    .plus(order.taxAmount ?? 0);
+export interface SupplierOrderTotals {
+  invoiced: Prisma.Decimal;
+  orderCount: number;
+  inProgress: Prisma.Decimal;
+  openOrderCount: number;
 }
 
-const balanceOrderSelect = {
-  supplierId: true,
-  status: true,
-  discountAmount: true,
-  shippingAmount: true,
-  taxAmount: true,
-  lines: { select: { quantityOrdered: true, unitCost: true } },
-} as const;
+const NO_ORDERS: SupplierOrderTotals = {
+  invoiced: D(0),
+  orderCount: 0,
+  inProgress: D(0),
+  openOrderCount: 0,
+};
 
-type BalanceOrderRow = Prisma.PurchaseOrderGetPayload<{
-  select: typeof balanceOrderSelect;
-}>;
+type OrderTotalsRow = {
+  supplier_id: number;
+  invoiced: Prisma.Decimal;
+  order_count: bigint;
+  in_progress: Prisma.Decimal;
+  open_order_count: bigint;
+};
+
+/**
+ * Every supplier's order totals in one grouped query, or one supplier's when an
+ * id is given.
+ *
+ * This used to pull every purchase order with every line so JavaScript could
+ * add them up: nine hundred lines across the wire, on both the suppliers list
+ * and each supplier page, to produce four numbers per supplier.
+ *
+ * Summed at full precision rather than rounded per order, because that is what
+ * the JavaScript did and the balance is rounded once at the end.
+ */
+async function orderTotalsBySupplier(
+  supplierId?: number,
+): Promise<Map<number, SupplierOrderTotals>> {
+  // Lines are summed in a lateral before the grouping, so the order-level
+  // charges are counted once per order rather than once per line.
+  const rows = await prisma.$queryRaw<OrderTotalsRow[]>`
+    SELECT o.supplier_id,
+           COALESCE(SUM(v.value) FILTER (WHERE o.status = ${INVOICED_STATUS}), 0)
+             AS invoiced,
+           COUNT(*) FILTER (WHERE o.status = ${INVOICED_STATUS})
+             AS order_count,
+           COALESCE(SUM(v.value) FILTER (WHERE o.status = ANY(${OPEN_STATUSES})), 0)
+             AS in_progress,
+           COUNT(*) FILTER (WHERE o.status = ANY(${OPEN_STATUSES}))
+             AS open_order_count
+    FROM purchase_orders o
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(l.subtotal, 0)
+             - COALESCE(o.discount_amount, 0)
+             + COALESCE(o.shipping_amount, 0)
+             + COALESCE(o.tax_amount, 0) AS value
+      FROM (
+        SELECT SUM(quantity_ordered * unit_cost) AS subtotal
+        FROM purchase_order_lines
+        WHERE order_id = o.order_id
+      ) l
+    ) v ON TRUE
+    WHERE o.deleted_at IS NULL
+      AND o.supplier_id IS NOT NULL
+      -- One prepared statement serves both the list and a single supplier.
+      AND (${supplierId ?? null}::int IS NULL OR o.supplier_id = ${supplierId ?? null})
+    GROUP BY o.supplier_id`;
+
+  return new Map(
+    rows.map((r) => [
+      r.supplier_id,
+      {
+        invoiced: D(r.invoiced),
+        orderCount: Number(r.order_count),
+        inProgress: D(r.in_progress),
+        openOrderCount: Number(r.open_order_count),
+      },
+    ]),
+  );
+}
 
 // `opening` is the balance the account was opened with. It has to be in the
 // balance or the figure is not merely incomplete, it has the wrong sign:
 // Libanvet was paid 6,886.30 against 6,566.45 of orders and read as 319.85
 // "in credit" when an opening balance of 937.53 means 617.68 is owed.
 function toMoneyDTO(
-  orders: BalanceOrderRow[],
+  orders: SupplierOrderTotals,
   settled: { paid: Prisma.Decimal; credited: Prisma.Decimal },
   opening: Prisma.Decimal,
   openingAsOf: Date | null,
 ): SupplierMoneyDTO {
-  let invoiced = D(0);
-  let inProgress = D(0);
-  let orderCount = 0;
-  let openOrderCount = 0;
-
-  for (const order of orders) {
-    const value = orderValue(order);
-    if (order.status === INVOICED_STATUS) {
-      invoiced = invoiced.plus(value);
-      orderCount += 1;
-    } else if (OPEN_STATUSES.includes(order.status)) {
-      inProgress = inProgress.plus(value);
-      openOrderCount += 1;
-    }
-    // Cancelled orders are neither: nothing was delivered and nothing is owed.
-  }
+  // Cancelled orders are in neither figure: nothing was delivered and nothing
+  // is owed. The query counts only the two statuses that book.
+  const { invoiced, inProgress, orderCount, openOrderCount } = orders;
 
   // Both kinds settle the account, so both come off the balance. They are
   // reported apart because only one of them was money: a credit note reduces
@@ -300,7 +339,7 @@ function toMoneyDTO(
 // All suppliers with item counts and their balance. Inactive suppliers sort last
 // but stay visible, since their history still matters.
 export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
-  const [suppliers, itemGroups, orders, paidGroups, openingGroups] =
+  const [suppliers, itemGroups, orderTotals, paidGroups, openingGroups] =
     await Promise.all([
       prisma.supplier.findMany({
         where: { deletedAt: null },
@@ -312,10 +351,7 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
         where: { supplierId: { not: null }, deletedAt: null },
         _count: { _all: true },
       }),
-      prisma.purchaseOrder.findMany({
-        where: { deletedAt: null, supplierId: { not: null } },
-        select: balanceOrderSelect,
-      }),
+      orderTotalsBySupplier(),
       prisma.supplierPayment.groupBy({
         by: ["supplierId", "kind"],
         where: { deletedAt: null },
@@ -345,19 +381,11 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
   // At most one per supplier, so the last write wins harmlessly.
   const openingMap = new Map(openingGroups.map((g) => [g.supplierId, g]));
 
-  const ordersBySupplier = new Map<number, BalanceOrderRow[]>();
-  for (const order of orders) {
-    if (order.supplierId == null) continue;
-    const bucket = ordersBySupplier.get(order.supplierId);
-    if (bucket) bucket.push(order);
-    else ordersBySupplier.set(order.supplierId, [order]);
-  }
-
   return suppliers.map((s) =>
     toSupplierDTO(s, {
       itemCount: itemMap.get(s.supplierId) ?? 0,
       money: toMoneyDTO(
-        ordersBySupplier.get(s.supplierId) ?? [],
+        orderTotals.get(s.supplierId) ?? NO_ORDERS,
         settledMap.get(s.supplierId) ?? { paid: D(0), credited: D(0) },
         openingMap.get(s.supplierId)?.amount ?? D(0),
         openingMap.get(s.supplierId)?.asOfDate ?? null,
@@ -385,12 +413,9 @@ export async function getSupplier(
   });
   if (!supplier) return null;
 
-  const [itemCount, orders, paidAgg, openingAgg] = await Promise.all([
+  const [itemCount, orderTotals, paidAgg, openingAgg] = await Promise.all([
     prisma.inventoryItem.count({ where: { supplierId, deletedAt: null } }),
-    prisma.purchaseOrder.findMany({
-      where: { supplierId, deletedAt: null },
-      select: balanceOrderSelect,
-    }),
+    orderTotalsBySupplier(supplierId),
     prisma.supplierPayment.groupBy({
       by: ["kind"],
       _sum: { amount: true },
@@ -406,7 +431,7 @@ export async function getSupplier(
   return toSupplierDTO(supplier, {
     itemCount,
     money: toMoneyDTO(
-      orders,
+      orderTotals.get(supplierId) ?? NO_ORDERS,
       {
         paid: paidAgg.find((g) => g.kind !== "Credit")?._sum.amount ?? D(0),
         credited: paidAgg.find((g) => g.kind === "Credit")?._sum.amount ?? D(0),
@@ -431,10 +456,88 @@ export async function getSupplierContacts(
   return contacts.map(toSupplierContactDTO);
 }
 
+export const SUPPLIER_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+
+function pageBounds(page = 1, pageSize = SUPPLIER_PAGE_SIZE) {
+  const size = Math.min(pageSize, MAX_PAGE_SIZE);
+  return { take: size, skip: (Math.max(page, 1) - 1) * size, pageSize: size };
+}
+
+export interface SupplierOrdersPage {
+  orders: PurchaseOrderDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+// One page of a supplier's order history, newest first. Both tables on the
+// supplier page used to arrive whole: for the largest supplier that was 178
+// orders with every line and every line's item, to fill a table showing six
+// columns of headline figures.
+export async function getSupplierOrders(
+  supplierId: number,
+  page = 1,
+): Promise<SupplierOrdersPage> {
+  const { take, skip, pageSize } = pageBounds(page);
+  const where = { supplierId, deletedAt: null };
+
+  const [orders, total] = await Promise.all([
+    prisma.purchaseOrder.findMany({
+      where,
+      include: orderInclude,
+      orderBy: [{ createdAt: "desc" }, { orderId: "desc" }],
+      take,
+      skip,
+    }),
+    prisma.purchaseOrder.count({ where }),
+  ]);
+
+  return {
+    orders: orders.map((o) => toPurchaseOrderDTO(o)),
+    total,
+    page: Math.max(page, 1),
+    pageSize,
+  };
+}
+
+export interface SupplierPaymentsPage {
+  payments: SupplierPaymentDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export async function getSupplierPayments(
+  supplierId: number,
+  page = 1,
+): Promise<SupplierPaymentsPage> {
+  const { take, skip, pageSize } = pageBounds(page);
+  const where = { supplierId, deletedAt: null };
+
+  const [payments, total] = await Promise.all([
+    prisma.supplierPayment.findMany({
+      where,
+      include: supplierPaymentInclude,
+      orderBy: [{ paidOn: "desc" }, { paymentId: "desc" }],
+      take,
+      skip,
+    }),
+    prisma.supplierPayment.count({ where }),
+  ]);
+
+  return {
+    payments: payments.map(toSupplierPaymentDTO),
+    total,
+    page: Math.max(page, 1),
+    pageSize,
+  };
+}
+
 export interface SupplierDetailData {
   supplier: SupplierDTO;
-  orders: PurchaseOrderDTO[];
-  payments: SupplierPaymentDTO[];
+  orders: SupplierOrdersPage;
+  payments: SupplierPaymentsPage;
 }
 
 export async function getSupplierDetail(
@@ -444,36 +547,58 @@ export async function getSupplierDetail(
   if (!supplier) return null;
 
   const [orders, payments] = await Promise.all([
-    prisma.purchaseOrder.findMany({
-      where: { supplierId, deletedAt: null },
-      include: orderInclude,
-      orderBy: [{ createdAt: "desc" }, { orderId: "desc" }],
-    }),
-    prisma.supplierPayment.findMany({
-      where: { supplierId, deletedAt: null },
-      include: supplierPaymentInclude,
-      orderBy: [{ paidOn: "desc" }, { paymentId: "desc" }],
-    }),
+    getSupplierOrders(supplierId, 1),
+    getSupplierPayments(supplierId, 1),
   ]);
 
-  return {
-    supplier,
-    orders: orders.map((o) => toPurchaseOrderDTO(o)),
-    payments: payments.map(toSupplierPaymentDTO),
-  };
+  return { supplier, orders, payments };
 }
 
+type PayableRow = {
+  order_id: number;
+  reference: string | null;
+  received_on: Date | null;
+  total: Prisma.Decimal;
+};
+
 // Received orders, for the "which bill is this settling?" picker on the payment
-// form. Open orders are excluded: there is no bill to pay yet.
+// and credit forms. Open orders are excluded: there is no bill to pay yet.
+//
+// Every payable order, not a page: the picker has to be able to offer any bill
+// the clinic might be settling. What is bounded instead is the row. Each option
+// is four fields with its total summed in SQL, where this used to hand the
+// pickers a full purchase order document, lines and item details included, for
+// every delivery the supplier ever made.
 export async function getPayableOrders(
   supplierId: number,
-): Promise<PurchaseOrderDTO[]> {
-  const orders = await prisma.purchaseOrder.findMany({
-    where: { supplierId, deletedAt: null, status: INVOICED_STATUS },
-    include: orderInclude,
-    orderBy: [{ receivedOn: "desc" }, { orderId: "desc" }],
-  });
-  return orders.map((o) => toPurchaseOrderDTO(o));
+): Promise<PayableOrderOption[]> {
+  const rows = await prisma.$queryRaw<PayableRow[]>`
+    SELECT o.order_id, o.reference, o.received_on,
+           ROUND(
+             COALESCE(l.subtotal, 0)
+             - COALESCE(o.discount_amount, 0)
+             + COALESCE(o.shipping_amount, 0)
+             + COALESCE(o.tax_amount, 0)
+           , 2) AS total
+    FROM purchase_orders o
+    LEFT JOIN LATERAL (
+      SELECT SUM(quantity_ordered * unit_cost) AS subtotal
+      FROM purchase_order_lines
+      WHERE order_id = o.order_id
+    ) l ON TRUE
+    WHERE o.supplier_id = ${supplierId}
+      AND o.deleted_at IS NULL
+      AND o.status = ${INVOICED_STATUS}
+    -- Most recently delivered first. NULLS FIRST is Postgres' own default for a
+    -- descending sort and is spelled out here so it survives a rewrite.
+    ORDER BY o.received_on DESC NULLS FIRST, o.order_id DESC`;
+
+  return rows.map((r) => ({
+    orderId: r.order_id,
+    reference: r.reference,
+    receivedOn: toDateOnly(r.received_on),
+    total: r.total.toFixed(2),
+  }));
 }
 
 // ---- Credit notes ----

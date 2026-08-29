@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -24,14 +24,14 @@ import { BOOKING_STATUSES, type BookingStatus } from "@/types/enums";
 import type {
   BookingDTO,
   BookingTypeOption,
-  PatientOption,
   StaffOption,
 } from "@/types/entities";
 import BookingFormDialog from "./BookingFormDialog";
 
 interface Props {
   initialBookings: BookingDTO[];
-  patientOptions: PatientOption[];
+  /** The window the server rendered: today, as YYYY-MM-DD. */
+  initialFrom: string;
   staffOptions: StaffOption[];
   typeOptions: BookingTypeOption[];
   canWrite: boolean;
@@ -51,18 +51,19 @@ const STATUS_COLORS: Record<
 
 export default function BookingsTable({
   initialBookings,
-  patientOptions,
+  initialFrom,
   staffOptions,
   typeOptions,
   canWrite,
 }: Props) {
   const [bookings, setBookings] = useState(initialBookings);
-  const [from, setFrom] = useState("");
+  const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState("");
   const [staffId, setStaffId] = useState("");
   const [status, setStatus] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<BookingDTO | null>(null);
+  const firstRender = useRef(true);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -82,7 +83,14 @@ export default function BookingsTable({
     setBookings(data.bookings);
   }, [from, to, staffId, status]);
 
+  // The opening window came down with the document, so only a filter change
+  // from here needs a fetch. Without the guard the page asked for the same
+  // bookings a second time on every visit.
   useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
     const t = setTimeout(() => void load(), 200);
     return () => clearTimeout(t);
   }, [load]);
@@ -219,7 +227,6 @@ export default function BookingsTable({
       <BookingFormDialog
         open={dialogOpen}
         booking={editing}
-        patientOptions={patientOptions}
         staffOptions={staffOptions}
         typeOptions={typeOptions}
         onClose={() => setDialogOpen(false)}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Accordion,
@@ -26,24 +26,26 @@ import DescriptionIcon from "@mui/icons-material/Description";
 import AddIcon from "@mui/icons-material/Add";
 import { formatDate, formatMoney } from "@/utils/format";
 import StatCard from "@/components/ui/StatCard";
+import TablePaginationBar from "@/components/ui/TablePaginationBar";
+import { apiRequest } from "@/utils/api-client";
 import NewOrderDialog from "./NewOrderDialog";
 import {
   ORDER_STATUS_COLOR,
   NO_SUPPLIER_LABEL,
   UNCATEGORISED_ORDER_LABEL,
+  type OrderStatusFilter,
 } from "@/constants/order";
+import type { OrderTotals } from "@/lib/purchase-orders";
 import type { PurchaseOrderDTO, SupplierDTO } from "@/types/entities";
-import type { PurchaseOrderStatus } from "@/types/enums";
-
-type Filter = "Open" | PurchaseOrderStatus;
-
-// Everything still in flight. Partial belongs here: part of it has arrived and
-// the rest is expected, so it is the most open an order can be. Leaving it out
-// hid such orders from every tab at once.
-const OPEN_STATUSES: PurchaseOrderStatus[] = ["Draft", "Placed", "Partial"];
 
 interface Props {
   initialOrders: PurchaseOrderDTO[];
+  /** How many orders match the initial filter, across every page. */
+  initialTotal: number;
+  initialFilter: OrderStatusFilter;
+  pageSize: number;
+  /** Counts and value for the whole open book, not just the page on screen. */
+  totals: OrderTotals;
   suppliers: SupplierDTO[];
 }
 
@@ -54,40 +56,62 @@ interface SupplierGroup {
   value: number;
 }
 
-export default function OrdersTable({ initialOrders, suppliers }: Props) {
+export default function OrdersTable({
+  initialOrders,
+  initialTotal,
+  initialFilter,
+  pageSize,
+  totals,
+  suppliers,
+}: Props) {
   const [creating, setCreating] = useState(false);
+  const [orders, setOrders] = useState(initialOrders);
+  const [total, setTotal] = useState(initialTotal);
+  const [page, setPage] = useState(0); // zero-based, matching the pager
+  const [loading, setLoading] = useState(false);
   // "Open" is the working view: everything still in flight. The terminal
   // statuses are one click away rather than cluttering the default.
-  const [filter, setFilter] = useState<Filter>("Open");
+  const [filter, setFilter] = useState<OrderStatusFilter>(initialFilter);
+  const firstRender = useRef(true);
 
-  const totals = useMemo(() => {
-    let drafts = 0;
-    let awaiting = 0;
-    let draftValue = 0;
-    for (const o of initialOrders) {
-      if (o.status === "Draft") {
-        drafts += 1;
-        draftValue += Number(o.total);
-      }
-      // A Partial order is still waiting on the rest of its delivery, so it
-      // belongs here alongside Placed.
-      if (o.status === "Placed" || o.status === "Partial") awaiting += 1;
+  const load = useCallback(async (f: OrderStatusFilter, p: number) => {
+    const params = new URLSearchParams({
+      status: f,
+      page: String(p + 1),
+    });
+    setLoading(true);
+    try {
+      const data = await apiRequest<{
+        orders: PurchaseOrderDTO[];
+        total: number;
+      }>(`/api/orders?${params}`);
+      setOrders(data.orders);
+      setTotal(data.total);
+    } finally {
+      setLoading(false);
     }
-    return { drafts, awaiting, draftValue };
-  }, [initialOrders]);
+  }, []);
 
-  // Group by supplier, orders inside each group already sorted newest first by
-  // the server. The unassigned bucket is pinned to the top: it is the one that
-  // needs a decision before anything can be ordered.
+  // The first page came down with the document, so only a change from here
+  // needs a fetch.
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    void load(filter, page);
+  }, [filter, page, load]);
+
+  // Group the page by supplier, orders inside each group already sorted newest
+  // first by the server. The unassigned bucket is pinned to the top: it is the
+  // one that needs a decision before anything can be ordered.
+  //
+  // Grouping is per page, so a supplier with orders either side of a page
+  // boundary heads a group on both. The alternative is paging by supplier,
+  // which would put an unbounded number of orders back on one page.
   const groups = useMemo(() => {
-    const visible = initialOrders.filter((o) =>
-      filter === "Open"
-        ? OPEN_STATUSES.includes(o.status)
-        : o.status === filter,
-    );
-
     const map = new Map<string, SupplierGroup>();
-    for (const order of visible) {
+    for (const order of orders) {
       const key = order.supplierId == null ? "none" : String(order.supplierId);
       const group = map.get(key);
       if (group) {
@@ -108,7 +132,7 @@ export default function OrdersTable({ initialOrders, suppliers }: Props) {
       if (b.key === "none") return 1;
       return a.supplierName.localeCompare(b.supplierName);
     });
-  }, [initialOrders, filter]);
+  }, [orders]);
 
   return (
     <Box>
@@ -163,7 +187,12 @@ export default function OrdersTable({ initialOrders, suppliers }: Props) {
         exclusive
         size="small"
         value={filter}
-        onChange={(_e, next: Filter | null) => next && setFilter(next)}
+        onChange={(_e, next: OrderStatusFilter | null) => {
+          if (!next) return;
+          // A new filter invalidates the current offset.
+          setPage(0);
+          setFilter(next);
+        }}
         sx={{ mb: 2, flexWrap: "wrap" }}
       >
         <ToggleButton value="Open">Open</ToggleButton>
@@ -174,7 +203,7 @@ export default function OrdersTable({ initialOrders, suppliers }: Props) {
         <ToggleButton value="Cancelled">Cancelled</ToggleButton>
       </ToggleButtonGroup>
 
-      {groups.length === 0 ? (
+      {groups.length === 0 && !loading ? (
         <Paper variant="outlined" sx={{ p: 4 }}>
           <Typography color="text.secondary" align="center">
             No orders here yet. Tick low-stock items in Inventory and choose Add
@@ -287,6 +316,15 @@ export default function OrdersTable({ initialOrders, suppliers }: Props) {
           </Accordion>
         ))
       )}
+
+      <TablePaginationBar
+        page={page}
+        count={total}
+        pageSize={pageSize}
+        onChange={setPage}
+        loading={loading}
+        noun="orders"
+      />
 
       <NewOrderDialog
         open={creating}
