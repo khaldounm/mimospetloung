@@ -48,6 +48,9 @@ export default function PatientSearchField({
       // matches on the owner's name that the pet's label does not contain.
       filterOptions={(o) => o}
       getOptionLabel={(o) => o.label}
+      // Keyed by id, not label: three pairs of pets share a name AND an owner,
+      // so a label key collides and React may drop one of them from the list.
+      getOptionKey={(o) => o.patientId}
       isOptionEqualToValue={(o, v) => o.patientId === v.patientId}
       renderOption={(props, o) => {
         const { key, ...rest } = props as typeof props & { key: string };

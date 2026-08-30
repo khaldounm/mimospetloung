@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
+import { getFxRate } from "@/lib/settings";
 import { toDateOnly } from "@/utils/format";
 import type { ClientDTO, PatientDTO } from "@/types/entities";
 import ClientDetail from "@/components/clients/ClientDetail";
@@ -17,6 +18,10 @@ export default async function ClientDetailPage({
 
   const session = await auth();
   const canWrite = hasPermission(session?.user, "patients:write");
+  // Taking money is its own permission, the same one the invoice payment
+  // button is gated on.
+  const canPay = hasPermission(session?.user, "payments:write");
+  const fxRate = await getFxRate();
 
   const client = await prisma.client.findFirst({
     where: { clientId: id, deletedAt: null },
@@ -65,5 +70,13 @@ export default async function ClientDetailPage({
     notes: p.notes,
   }));
 
-  return <ClientDetail client={dto} patients={patients} canWrite={canWrite} />;
+  return (
+    <ClientDetail
+      client={dto}
+      patients={patients}
+      canWrite={canWrite}
+      canPay={canPay}
+      fxRate={fxRate}
+    />
+  );
 }

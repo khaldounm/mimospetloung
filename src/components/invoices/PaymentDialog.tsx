@@ -4,11 +4,13 @@ import { useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
+  FormControlLabel,
   MenuItem,
   Stack,
   TextField,
@@ -29,6 +31,9 @@ interface Props {
   open: boolean;
   invoiceId: number;
   balance: string;
+  // The client's WHOLE account balance, which already includes this invoice.
+  // Null for a walk-in, who has no account. See accountDue below.
+  accountBalance: string | null;
   // LBP per 1 USD, from the clinic settings.
   fxRate: number;
   onClose: () => void;
@@ -72,6 +77,7 @@ function Line({
 function PaymentForm({
   invoiceId,
   balance,
+  accountBalance,
   fxRate,
   onClose,
   onSaved,
@@ -97,25 +103,60 @@ function PaymentForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // What the client owed BEFORE this visit. Issuing an invoice already added
+  // its total to the account balance, so the account still contains the invoice
+  // on screen: subtracting it leaves the older debt, which is the only part the
+  // counter can settle on top of what is being paid here.
+  const accountDue =
+    accountBalance != null && !refunding
+      ? Math.max(0, Number(accountBalance) - due)
+      : 0;
+
+  // Nothing older is outstanding, so the whole idea stays off the screen and
+  // the dialog reads exactly as it did before.
+  const canSettleAccount = accountDue > 0;
+  const [settleOn, setSettleOn] = useState(canSettleAccount);
+  // null means "follow the cash": the box shows whatever is left over after the
+  // invoice, capped at the debt, and keeps up as the counter types. Typing in
+  // it pins a figure instead, which is how a customer settles only part of what
+  // they owe.
+  const [settleRaw, setSettleRaw] = useState<string | null>(null);
+
   const usd = Number(usdCash) || 0;
   const lbp = Number(lbpCash) || 0;
   const tendered = usd + lbp / fxRate;
 
-  // What actually settles the invoice. Anything over the balance is change,
-  // and anything under it is a partial payment, which is allowed.
+  // What actually settles the invoice. Anything under the balance is a partial
+  // payment, which is allowed; anything over it is free to go against older
+  // debt, and whatever is not taken for that is change.
   //
   // There is no change on a refund: the shop chooses which notes to hand back,
   // so anything beyond the credit is not change, it is an overpayment the
   // server rejects.
   const applied = Math.min(tendered, owed);
-  const change = refunding ? 0 : Math.max(0, tendered - owed);
+  const spare = refunding ? 0 : Math.max(0, tendered - applied);
+  const autoSettle = Math.min(spare, accountDue);
+  const toAccount = settleOn
+    ? Math.min(
+        settleRaw === null ? autoSettle : Number(settleRaw) || 0,
+        spare,
+        accountDue,
+      )
+    : 0;
+  const settleValue =
+    settleRaw ?? (autoSettle > 0 ? autoSettle.toFixed(2) : "");
+
+  const change = refunding ? 0 : Math.max(0, tendered - applied - toAccount);
   const changeLbp = roundLbpCash(change * fxRate);
   const exactChangeLbp = Math.round(change * fxRate);
 
   // Dollars are applied first and the lira leg covers the rest, so change comes
-  // out of the lira, which is how it is given back at the counter.
+  // out of the lira, which is how it is given back at the counter. The account
+  // legs take what the invoice left of each currency, same order.
   const appliedUsd = Math.min(usd, applied);
   const appliedLbpUsd = applied - appliedUsd;
+  const accountUsd = Math.min(usd - appliedUsd, toAccount);
+  const accountLbpUsd = toAccount - accountUsd;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -142,6 +183,15 @@ function PaymentForm({
               {
                 currency: "LBP",
                 amount: Math.round(appliedLbpUsd * fxRate).toString(),
+              },
+            ],
+            // Cash from the same handover going against older debt. The server
+            // checks it against what is outstanding beyond this invoice.
+            accountTenders: [
+              { currency: "USD", amount: accountUsd.toFixed(2) },
+              {
+                currency: "LBP",
+                amount: Math.round(accountLbpUsd * fxRate).toString(),
               },
             ],
             method,
@@ -176,6 +226,12 @@ function PaymentForm({
               strong
             />
             <Line label="" value={formatSecondaryMoney(owed, fxRate)} />
+            {canSettleAccount && (
+              <Line
+                label="Owed from before this invoice"
+                value={formatMoney(accountDue)}
+              />
+            )}
           </Stack>
 
           <Divider />
@@ -217,6 +273,47 @@ function PaymentForm({
                   ? `Part refund. ${formatMoney(owed - applied)} will still be owed back.`
                   : `Part payment. ${formatMoney(owed - applied)} will still be outstanding.`}
               </Alert>
+            )}
+            {canSettleAccount && (
+              <>
+                <Divider sx={{ my: 1 }} />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={settleOn}
+                      onChange={(e) => setSettleOn(e.target.checked)}
+                    />
+                  }
+                  label="Also settle the account"
+                />
+                {settleOn && (
+                  <>
+                    <TextField
+                      label="Put against the account"
+                      type="number"
+                      value={settleValue}
+                      onChange={(e) => setSettleRaw(e.target.value)}
+                      slotProps={{
+                        htmlInput: { min: 0, max: accountDue, step: "0.01" },
+                        // The figure follows the cash rather than being typed,
+                        // so the label has to be told to get out of its way.
+                        inputLabel: { shrink: true },
+                      }}
+                      helperText={
+                        spare <= 0
+                          ? "Nothing left over yet. Enter the cash received above."
+                          : `Up to ${formatMoney(Math.min(spare, accountDue))} of what is left over`
+                      }
+                      fullWidth
+                    />
+                    <Line
+                      label="Account after this"
+                      value={formatMoney(accountDue - toAccount)}
+                      strong
+                    />
+                  </>
+                )}
+              </>
             )}
             {change > 0 && (
               <>

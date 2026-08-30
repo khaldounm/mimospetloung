@@ -7,6 +7,11 @@ import { computePartnerPayable, effectiveRates } from "@/lib/partners";
 import { toDateOnly } from "@/utils/format";
 import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
 import { clinicToday } from "@/lib/register";
+import {
+  absorbRoundingOvershoot,
+  buildTenderLegs,
+  type Tender,
+} from "@/lib/payments";
 import { INVOICE_STATUSES, SIGNED_TX_TYPES } from "@/types/enums";
 import type {
   InvoiceDTO,
@@ -1270,24 +1275,18 @@ export async function voidInvoice(
   });
 }
 
+export type { Tender };
+
 // Record a payment and derive the new status. Blocks overpayment and payments
 // on non-issued invoices.
-export interface Tender {
-  currency: string;
-  // A POSITIVE magnitude, in that currency. Not the cash handed over: change is
-  // given back at the counter and never reaches the ledger.
-  //
-  // Direction is never sent. Whether this settles a sale or refunds a return is
-  // decided by the invoice's own total, server-side, so the counter types an
-  // amount and cannot get the sign backwards on the one transaction where doing
-  // so would take money off a customer who came in to be paid.
-  amount: number;
-}
 
 export async function recordPayment(
   invoiceId: number,
   data: {
     tenders: Tender[];
+    // Cash from the same handover that settles debt OTHER than this invoice.
+    // See accountTenders on paymentCreateSchema.
+    accountTenders?: Tender[];
     // LBP per 1 USD, used to convert the lira legs.
     fxRate: number;
     method?: PaymentMethod;
@@ -1299,7 +1298,10 @@ export async function recordPayment(
   return prisma.$transaction(async (tx) => {
     const invoice = await tx.invoice.findUnique({
       where: { invoiceId },
-      include: { payments: { select: { amount: true } } },
+      include: {
+        payments: { select: { amount: true } },
+        client: { select: { accountBalance: true } },
+      },
     });
     if (!invoice) throw new ApiError(404, "Invoice not found");
     if (invoice.status !== "Issued" && invoice.status !== "Partial") {
@@ -1334,38 +1336,17 @@ export async function recordPayment(
     const fxRate = D(data.fxRate);
     if (fxRate.lte(0)) throw new ApiError(400, "Invalid exchange rate");
 
-    const legs = data.tenders
-      .filter((t) => t.amount > 0)
-      .map((t) => {
-        // Converted as a magnitude, then pointed the invoice's way. Both figures
-        // take the sign: amount_original is what crossed the counter, and a
-        // drawer counted at close has to net the refunds out of it.
-        const magnitude = D(t.amount).toDecimalPlaces(2);
-        const usd =
-          t.currency === CURRENCY.code
-            ? magnitude
-            : magnitude.dividedBy(fxRate).toDecimalPlaces(2);
-        return {
-          currency: t.currency,
-          original: magnitude.times(direction),
-          usd: usd.times(direction),
-        };
-      });
+    // At least one leg has to land on the invoice itself. Settling only the
+    // account from this route would leave an untouched invoice being restatused
+    // below on a zero movement, and there is a dedicated route for money that
+    // belongs to the account alone.
+    const legs = buildTenderLegs(data.tenders, fxRate, direction);
     if (legs.length === 0) throw new ApiError(400, "Enter an amount");
 
+    // Compared as magnitudes inside the helper, so a refund of exactly the
+    // credit is not rejected for overshooting in the negative direction.
     let amount = legs.reduce((sum, l) => sum.plus(l.usd), D(0));
-
-    // Converting lira to dollars rounds, so a settlement meant to clear the
-    // balance exactly can land a cent over it. Absorb that on the last leg
-    // rather than rejecting a payment the counter got right. Compared as
-    // magnitudes so a refund of exactly the credit is not rejected for
-    // overshooting in the negative direction.
-    const overshoot = amount.abs().minus(balance.abs());
-    if (overshoot.gt(0) && overshoot.lte(D("0.01"))) {
-      const last = legs[legs.length - 1]!;
-      last.usd = last.usd.minus(overshoot.times(direction));
-      amount = balance;
-    }
+    amount = absorbRoundingOvershoot(legs, amount, balance, direction);
     if (amount.abs().gt(balance.abs())) {
       throw new ApiError(
         400,
@@ -1375,29 +1356,75 @@ export async function recordPayment(
       );
     }
 
-    const paidAt = data.paidAt ?? new Date();
-    const payments = [];
-    for (const leg of legs) {
-      payments.push(
-        await tx.payment.create({
-          data: {
-            // A payment belongs to the client's account; the invoice link
-            // records which visit it was taken against. Null for a walk-in,
-            // which has no account.
-            clientId: invoice.clientId,
-            invoiceId,
-            amount: leg.usd,
-            currency: leg.currency,
-            amountOriginal: leg.original,
-            fxRate: leg.currency === CURRENCY.code ? null : fxRate,
-            method: data.method ?? null,
-            reference: data.reference,
-            paidAt,
-            notes: data.notes,
-          },
-        }),
+    // Money from the same handover that clears what the client owed BEFORE this
+    // visit. Issuing an invoice already raised the account balance by its total,
+    // so the account still contains the invoice being settled here: the debt
+    // that can be cleared on top of it is the account MINUS this balance.
+    // Without that subtraction the counter could take the invoice twice, once
+    // as the invoice and again as the account.
+    const accountLegs = buildTenderLegs(data.accountTenders ?? [], fxRate, 1);
+    let accountAmount = D(0);
+    if (accountLegs.length > 0) {
+      // Handing cash back and collecting old debt in one movement has no
+      // counter workflow behind it and the two directions would net into a
+      // single confusing figure on the drawer.
+      if (refunding) {
+        throw new ApiError(400, "A refund cannot also settle the account");
+      }
+      if (invoice.clientId == null || !invoice.client) {
+        throw new ApiError(400, "A walk-in has no account to settle");
+      }
+      const otherDebt = invoice.client.accountBalance.minus(balance);
+      accountAmount = accountLegs.reduce((sum, l) => sum.plus(l.usd), D(0));
+      // Same one-cent absorption as the invoice leg above.
+      accountAmount = absorbRoundingOvershoot(
+        accountLegs,
+        accountAmount,
+        otherDebt,
+        1,
       );
+      if (accountAmount.gt(otherDebt)) {
+        throw new ApiError(
+          400,
+          otherDebt.lte(0)
+            ? "This client has nothing outstanding beyond this invoice"
+            : `Account settlement exceeds the ${otherDebt.toFixed(2)} outstanding beyond this invoice`,
+        );
+      }
     }
+
+    const paidAt = data.paidAt ?? new Date();
+    const createLeg = (
+      leg: { currency: string; original: Prisma.Decimal; usd: Prisma.Decimal },
+      onInvoice: boolean,
+    ) =>
+      tx.payment.create({
+        data: {
+          // A payment belongs to the client's account; the invoice link
+          // records which visit it was taken against. Null for a walk-in,
+          // which has no account, and null on the legs that settle older debt
+          // rather than this visit.
+          clientId: invoice.clientId,
+          invoiceId: onInvoice ? invoiceId : null,
+          amount: leg.usd,
+          currency: leg.currency,
+          amountOriginal: leg.original,
+          fxRate: leg.currency === CURRENCY.code ? null : fxRate,
+          method: data.method ?? null,
+          reference: data.reference,
+          paidAt,
+          notes: data.notes,
+        },
+      });
+
+    const payments = [];
+    for (const leg of legs) payments.push(await createLeg(leg, true));
+    // Recorded against the account with no invoice link, which is what keeps
+    // them out of this invoice's paid total while still counting as cash taken
+    // for the drawer and for collected revenue.
+    const accountPayments = [];
+    for (const leg of accountLegs)
+      accountPayments.push(await createLeg(leg, false));
 
     const newPaid = alreadyPaid.plus(amount);
     // "Settled" means the whole total has been handed over, in whichever
@@ -1416,10 +1443,14 @@ export async function recordPayment(
     // A refund is a negative amount, so this decrement increments, and handing
     // the cash back correctly puts the debt it had cancelled straight back on
     // the account. No branch needed.
+    //
+    // The account legs come off the same balance: they were validated against
+    // what was outstanding beyond this invoice, so the two together can never
+    // take it below zero on a single handover.
     if (invoice.clientId != null) {
       await tx.client.update({
         where: { clientId: invoice.clientId },
-        data: { accountBalance: { decrement: amount } },
+        data: { accountBalance: { decrement: amount.plus(accountAmount) } },
       });
     }
 
@@ -1427,6 +1458,6 @@ export async function recordPayment(
       where: { invoiceId },
       include: invoiceInclude,
     });
-    return { invoice: updated!, payments };
+    return { invoice: updated!, payments, accountPayments };
   });
 }

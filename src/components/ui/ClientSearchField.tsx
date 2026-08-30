@@ -58,6 +58,10 @@ export default function ClientSearchField({
         // hide matches on phone or email that the input text does not contain.
         filterOptions={(o) => o}
         getOptionLabel={(o) => o.label}
+        // Without this the list is keyed by the label, and two clients really do
+        // share a name: the file has six such pairs, so React saw two children
+        // keyed "Ramzi Merhi" and was free to drop one of them from the list.
+        getOptionKey={(o) => o.clientId}
         isOptionEqualToValue={(o, v) => o.clientId === v.clientId}
         renderOption={(props, o) => {
           const { key, ...rest } = props as typeof props & { key: string };

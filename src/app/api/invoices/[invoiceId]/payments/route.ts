@@ -50,23 +50,31 @@ export async function POST(
     // would let a bad or stale page decide what a lira is worth.
     const fxRate = await getFxRate();
 
-    const { invoice, payments } = await recordPayment(invoiceId, {
-      tenders: data.tenders,
-      fxRate,
-      method: data.method,
-      reference: data.reference,
-      paidAt: data.paidAt,
-      notes: data.notes,
-    });
+    const { invoice, payments, accountPayments } = await recordPayment(
+      invoiceId,
+      {
+        tenders: data.tenders,
+        accountTenders: data.accountTenders,
+        fxRate,
+        method: data.method,
+        reference: data.reference,
+        paidAt: data.paidAt,
+        notes: data.notes,
+      },
+    );
 
     // One audit row per currency leg, matching the payment rows themselves.
-    for (const payment of payments) {
+    // The account legs are logged the same way and say so: they were taken on
+    // this invoice's screen but settle debt from before it.
+    for (const payment of [...payments, ...accountPayments]) {
       await writeAudit(session, {
         action: "payment",
         entity: "payment",
         entityId: payment.paymentId,
         changes: {
-          invoiceId,
+          invoiceId: payment.invoiceId,
+          onAccount: payment.invoiceId == null,
+          takenOnInvoiceId: invoiceId,
           amount: payment.amount.toString(),
           currency: payment.currency,
           amountOriginal: payment.amountOriginal.toString(),

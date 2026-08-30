@@ -75,6 +75,9 @@ export default function ItemLookupCard({ range }: { range: AnalyticsRange }) {
         // again here would hide a hit whose barcode the typed text is not in.
         filterOptions={(o) => o}
         getOptionLabel={(o) => o.name}
+        // Item names are not unique, which is why OrderDetail's picker already
+        // drops MUI's label-derived key. Same reason here.
+        getOptionKey={(o) => o.itemId}
         isOptionEqualToValue={(o, v) => o.itemId === v.itemId}
         renderOption={(props, o) => {
           const { key, ...rest } = props as typeof props & { key: string };

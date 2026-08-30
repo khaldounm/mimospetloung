@@ -300,6 +300,7 @@ function LineItemForm({
                       o.barcode ? "" : " (no barcode)"
                     } - ${o.currentStock}${o.unit ? ` ${o.unit}` : ""} in stock`
                   }
+                  getOptionKey={(o) => o.itemId}
                   isOptionEqualToValue={(o, v) => o.itemId === v.itemId}
                   value={null}
                   blurOnSelect

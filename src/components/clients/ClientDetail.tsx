@@ -22,11 +22,13 @@ import {
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import PaymentsIcon from "@mui/icons-material/Payments";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney } from "@/utils/format";
 import type { ClientDTO, PatientDTO } from "@/types/entities";
+import AccountPaymentDialog from "./AccountPaymentDialog";
 import ClientFormDialog from "./ClientFormDialog";
 import PatientFormDialog from "@/components/patients/PatientFormDialog";
 
@@ -34,6 +36,10 @@ interface Props {
   client: ClientDTO;
   patients: PatientDTO[];
   canWrite: boolean;
+  // Taking money is gated separately from editing the client.
+  canPay: boolean;
+  // LBP per 1 USD, from the clinic settings.
+  fxRate: number;
 }
 
 function Field({ label, value }: { label: string; value: string | null }) {
@@ -47,9 +53,16 @@ function Field({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-export default function ClientDetail({ client, patients, canWrite }: Props) {
+export default function ClientDetail({
+  client,
+  patients,
+  canWrite,
+  canPay,
+  fxRate,
+}: Props) {
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
   const [patientOpen, setPatientOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -68,6 +81,11 @@ export default function ClientDetail({ client, patients, canWrite }: Props) {
     }
   }
 
+  const owed = Number(client.accountBalance ?? 0);
+  // Only offered when there is something to settle. A client in credit has
+  // nothing to pay, and the server refuses that case regardless.
+  const canRecordAccountPayment = canPay && owed > 0;
+
   return (
     <Box>
       <Stack
@@ -77,25 +95,37 @@ export default function ClientDetail({ client, patients, canWrite }: Props) {
         <Typography variant="h4">
           {client.firstName} {client.lastName}
         </Typography>
-        {canWrite && (
-          <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1}>
+          {canRecordAccountPayment && (
             <Button
-              variant="outlined"
-              startIcon={<EditIcon />}
-              onClick={() => setEditOpen(true)}
+              variant="contained"
+              color="success"
+              startIcon={<PaymentsIcon />}
+              onClick={() => setPayOpen(true)}
             >
-              Edit
+              Record payment
             </Button>
-            <Button
-              variant="outlined"
-              color="error"
-              startIcon={<DeleteIcon />}
-              onClick={() => setConfirmOpen(true)}
-            >
-              Delete
-            </Button>
-          </Stack>
-        )}
+          )}
+          {canWrite && (
+            <>
+              <Button
+                variant="outlined"
+                startIcon={<EditIcon />}
+                onClick={() => setEditOpen(true)}
+              >
+                Edit
+              </Button>
+              <Button
+                variant="outlined"
+                color="error"
+                startIcon={<DeleteIcon />}
+                onClick={() => setConfirmOpen(true)}
+              >
+                Delete
+              </Button>
+            </>
+          )}
+        </Stack>
       </Stack>
 
       {error && (
@@ -185,6 +215,15 @@ export default function ClientDetail({ client, patients, canWrite }: Props) {
         )}
       </Paper>
 
+      <AccountPaymentDialog
+        open={payOpen}
+        clientId={client.clientId}
+        clientName={`${client.firstName} ${client.lastName}`}
+        balance={String(owed)}
+        fxRate={fxRate}
+        onClose={() => setPayOpen(false)}
+        onSaved={() => router.refresh()}
+      />
       <ClientFormDialog
         open={editOpen}
         client={client}

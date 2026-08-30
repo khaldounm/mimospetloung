@@ -1,6 +1,10 @@
 import { z } from "zod";
-import { optionalString, optionalDate } from "./common";
-import { CURRENCIES, PAYMENT_METHODS } from "@/types/enums";
+import {
+  optionalDate,
+  optionalMethod,
+  optionalString,
+  tenderSchema,
+} from "./common";
 
 // Optional numeric id from a form: "" / null -> undefined, else positive int.
 const optionalId = z.preprocess(
@@ -195,22 +199,17 @@ export const lineItemUpdateSchema = z
 
 // --- Payments (append-only) ---
 
-const optionalMethod = z.preprocess(
-  (v) => (v === "" || v === null ? undefined : v),
-  z.enum(PAYMENT_METHODS).optional(),
-);
-
-// One settlement, which can span currencies: cash comes over the counter as
-// some dollars and the rest in lira. Each leg is the amount APPLIED to the
-// invoice in that currency, not the cash handed over, since change is given
-// back at the counter and never reaches the ledger.
-const tenderSchema = z.object({
-  currency: z.enum(CURRENCIES),
-  amount: z.coerce.number().nonnegative().max(999_999_999_999),
-});
-
 export const paymentCreateSchema = z.object({
   tenders: z.array(tenderSchema).min(1, "Enter an amount"),
+  // Cash from the same handover that goes against the client's OTHER debt
+  // rather than this invoice: the customer at the counter settles the visit and
+  // clears what was outstanding from before, in one go. Same currency legs, but
+  // these become payments with no invoice link.
+  //
+  // Kept as its own array rather than one pooled figure so each row still
+  // records which notes crossed the counter, which is what lets the drawer be
+  // counted at close.
+  accountTenders: z.array(tenderSchema).optional(),
   method: optionalMethod,
   reference: optionalString(100),
   paidAt: optionalDate,

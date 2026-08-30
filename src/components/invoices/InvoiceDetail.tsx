@@ -800,6 +800,7 @@ export default function InvoiceDetail({
         open={paymentOpen}
         invoiceId={invoice.invoiceId}
         balance={invoice.balance}
+        accountBalance={invoice.clientBalance}
         fxRate={fxRate}
         onClose={() => setPaymentOpen(false)}
         onSaved={applyInvoice}
