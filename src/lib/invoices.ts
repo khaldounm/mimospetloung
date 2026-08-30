@@ -1100,20 +1100,24 @@ async function applyServiceLineTx(
     // The money side, as running costs, which is how every other consumable in
     // this app is expensed. Filed against the SERVICE line, so voiding the
     // invoice retires them through the sweep that already exists.
-    for (const c of service.costComponents) {
-      const amount = componentCost(c).times(qty).toDecimalPlaces(2);
-      if (amount.lte(0)) continue;
-      await tx.runningCost.create({
-        data: {
-          category: CLINIC_USE_COST_CATEGORY,
-          description: (c.item?.name ?? c.label ?? service.name).slice(0, 200),
-          amount,
-          incurredOn: today,
-          notes: `Used performing ${service.name} on ${formatInvoiceNumber(invoiceId)}`,
-          invoiceLineItemId: line.lineItemId,
-          createdBy: performedBy,
-        },
-      });
+    //
+    // One insert for the whole recipe rather than one per ingredient: the stock
+    // movements above have to go one at a time because each mutates the item's
+    // stock, but these rows are independent and a ten-item recipe should not
+    // cost ten round trips inside the issue transaction.
+    const costRows = service.costComponents
+      .map((c) => ({
+        category: CLINIC_USE_COST_CATEGORY,
+        description: (c.item?.name ?? c.label ?? service.name).slice(0, 200),
+        amount: componentCost(c).times(qty).toDecimalPlaces(2),
+        incurredOn: today,
+        notes: `Used performing ${service.name} on ${formatInvoiceNumber(invoiceId)}`,
+        invoiceLineItemId: line.lineItemId,
+        createdBy: performedBy,
+      }))
+      .filter((r) => r.amount.greaterThan(0));
+    if (costRows.length > 0) {
+      await tx.runningCost.createMany({ data: costRows });
     }
   }
 

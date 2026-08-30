@@ -21,7 +21,16 @@ const DEBOUNCE_MS = 250;
 //
 // A request id guards against out-of-order responses, so a slow reply for a
 // short prefix cannot overwrite the results for what was typed after it.
-export function useCostItemSearch(query: string): {
+// `enabled` is what keeps a saved recipe from stampeding the endpoint. Each row
+// owns a copy of this hook, so a service with five stock lines would otherwise
+// fire five searches the moment the dialog opens, each of them looking up the
+// name of an item that is ALREADY selected. Off until the field is actually
+// used, which makes the common case (open a service, change the price, close)
+// cost nothing at all.
+export function useCostItemSearch(
+  query: string,
+  enabled = true,
+): {
   options: CostItemOption[];
   loading: boolean;
 } {
@@ -30,6 +39,7 @@ export function useCostItemSearch(query: string): {
   const latest = useRef(0);
 
   useEffect(() => {
+    if (!enabled) return;
     const requestId = ++latest.current;
     const timer = setTimeout(() => {
       setLoading(true);
@@ -59,7 +69,7 @@ export function useCostItemSearch(query: string): {
       })();
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, enabled]);
 
   return { options, loading };
 }

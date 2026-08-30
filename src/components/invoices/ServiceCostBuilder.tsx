@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Alert,
   AlertTitle,
@@ -85,7 +86,10 @@ function ItemRow({
   onChange: (r: CostRow) => void;
   onRemove: () => void;
 }) {
-  const { options, loading } = useCostItemSearch(row.itemName);
+  // A row that already names an item has nothing to search for until somebody
+  // types in it. A blank row does, so opening the picker offers a starting list.
+  const [searching, setSearching] = useState(row.itemId == null);
+  const { options, loading } = useCostItemSearch(row.itemName, searching);
   const noCost = rowHasNoCost(row);
 
   return (
@@ -103,7 +107,9 @@ function ItemRow({
         getOptionKey={(o) => o.itemId}
         inputValue={row.itemName}
         onInputChange={(_e, v, reason) => {
-          if (reason !== "reset") onChange({ ...row, itemName: v });
+          if (reason === "reset") return;
+          setSearching(true);
+          onChange({ ...row, itemName: v });
         }}
         onChange={(_e, v) =>
           onChange(
