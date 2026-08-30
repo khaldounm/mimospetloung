@@ -52,6 +52,7 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
   const [defaultProfitPct, setDefaultProfitPct] = useState(
     partner?.defaultProfitPct ?? "",
   );
+  const [dailyMinimum, setDailyMinimum] = useState(partner?.dailyMinimum ?? "");
   const [notes, setNotes] = useState(partner?.notes ?? "");
   const [isActive, setIsActive] = useState(partner?.isActive ?? true);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +72,7 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
         phone,
         defaultCostPct,
         defaultProfitPct,
+        dailyMinimum,
         notes,
         isActive,
       };
@@ -146,6 +148,22 @@ function PartnerForm({ partner, onClose, onSaved }: FormProps) {
               fullWidth
             />
           </Stack>
+          <TextField
+            label="Daily minimum"
+            type="number"
+            value={dailyMinimum}
+            onChange={(e) => setDailyMinimum(e.target.value)}
+            slotProps={{
+              htmlInput: { min: 0, step: "0.01" },
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">$</InputAdornment>
+                ),
+              },
+            }}
+            helperText="What they take for a day they were here, if their work earned less. Leave blank for no guarantee."
+            fullWidth
+          />
           <PayoutPreview
             costPct={defaultCostPct}
             profitPct={defaultProfitPct}

@@ -25,7 +25,8 @@ export const SAMPLE_PAYOUT_PRICE = 150;
 export const PARTNER_GLOSSARY: { term: string; meaning: string }[] = [
   {
     term: "Revenue",
-    meaning: "What customers paid for the partner's items.",
+    meaning:
+      "What customers paid for the partner's items. Stock only: money billed for services they performed is counted under From services, not here.",
   },
   {
     term: "Capital",
@@ -49,7 +50,17 @@ export const PARTNER_GLOSSARY: { term: string; meaning: string }[] = [
   {
     term: "Owed",
     meaning:
-      "The cost half of the deal plus their profit cut, minus payouts already made. Split into the two so it is clear how much is their money going back and how much is their earnings. Payouts settle capital first.",
+      "Everything the partner has earned, minus payouts already made. That is the cost half of any stock deal, plus their profit cut, plus their cut of services they performed, plus any day the guarantee topped up. Split into capital and earnings so it is clear how much is their money going back and how much is their pay. Payouts settle capital first.",
+  },
+  {
+    term: "From services",
+    meaning:
+      "Their cut of work they performed, rather than of stock they funded. Worked out per invoice line at the moment it was issued: the service price less what performing it cost, at the rate agreed for that service. Frozen there, so re-pricing stock later never moves a payout already earned.",
+  },
+  {
+    term: "Day guarantee",
+    meaning:
+      "What the clinic tops a day up to when the partner was here and the day's work earned less than their daily minimum. Each attended day stands on its own, so a quiet day is topped up even in a week that was busy overall. Only days somebody marked them present for, and only once settled.",
   },
   {
     term: "Performance vs Position",

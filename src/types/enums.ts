@@ -144,3 +144,7 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 // once a staff member opens it, Archived when handled.
 export const CONTACT_MESSAGE_STATUSES = ["New", "Read", "Archived"] as const;
 export type ContactMessageStatus = (typeof CONTACT_MESSAGE_STATUSES)[number];
+
+// Where a partner accrual came from. Mirrors the partner_accruals_source CHECK.
+export const ACCRUAL_SOURCES = ["service", "guarantee"] as const;
+export type AccrualSource = (typeof ACCRUAL_SOURCES)[number];

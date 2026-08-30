@@ -19,11 +19,13 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { apiRequest } from "@/utils/api-client";
 import { formatMoney } from "@/utils/format";
 import { RECORD_TYPES } from "@/types/enums";
@@ -31,6 +33,17 @@ import type { ServiceDTO } from "@/types/entities";
 import ServiceFormDialog from "./ServiceFormDialog";
 
 const CATEGORY_ORDER = [...RECORD_TYPES, null] as (string | null)[];
+
+// A service whose recipe names stock that carries no last cost. Its cost is
+// understated, and where a partner performs it their cut is overstated by the
+// same amount, so it is flagged in the list rather than only inside the form.
+// A component row can never have a zero quantity (the DB CHECK forbids it), so
+// a zero line cost on an item row means the item itself prices at nothing.
+function hasNoCostItem(s: ServiceDTO): boolean {
+  return (s.costComponents ?? []).some(
+    (c) => c.itemId != null && Number(c.lineCost) === 0,
+  );
+}
 
 function groupByCategory(services: ServiceDTO[]) {
   const map = new Map<string | null, ServiceDTO[]>();
@@ -50,9 +63,21 @@ function groupByCategory(services: ServiceDTO[]) {
 interface Props {
   initialServices: ServiceDTO[];
   canWrite: boolean;
+  // Reading a deal and setting one are separate grants. Both are Admin today.
+  canSeeDeal: boolean;
+  canEditDeal: boolean;
+  canSeeCost: boolean;
+  canEditCost: boolean;
 }
 
-export default function ServicesTable({ initialServices, canWrite }: Props) {
+export default function ServicesTable({
+  initialServices,
+  canWrite,
+  canSeeDeal,
+  canEditDeal,
+  canSeeCost,
+  canEditCost,
+}: Props) {
   const [services, setServices] = useState(initialServices);
   const [query, setQuery] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
@@ -187,6 +212,8 @@ export default function ServicesTable({ initialServices, canWrite }: Props) {
                     <TableRow>
                       <TableCell>Name</TableCell>
                       <TableCell align="right">Price</TableCell>
+                      {canSeeCost && <TableCell align="right">Cost</TableCell>}
+                      {canSeeDeal && <TableCell>Partner</TableCell>}
                       <TableCell>Status</TableCell>
                       {canWrite && <TableCell align="right">Edit</TableCell>}
                     </TableRow>
@@ -198,6 +225,55 @@ export default function ServicesTable({ initialServices, canWrite }: Props) {
                         <TableCell align="right">
                           {formatMoney(s.price)}
                         </TableCell>
+                        {canSeeCost && (
+                          <TableCell align="right">
+                            {hasNoCostItem(s) ? (
+                              <Tooltip title="This service uses stock with no last cost, so it prices at $0.00 and any partner's cut is overstated. Set a cost on the item in Inventory.">
+                                <Stack
+                                  direction="row"
+                                  spacing={0.5}
+                                  sx={{
+                                    alignItems: "center",
+                                    justifyContent: "flex-end",
+                                  }}
+                                >
+                                  <WarningAmberIcon
+                                    fontSize="small"
+                                    color="error"
+                                  />
+                                  <Typography
+                                    variant="body2"
+                                    color="error.main"
+                                    sx={{ fontWeight: 700 }}
+                                  >
+                                    {formatMoney(s.costTotal)}
+                                  </Typography>
+                                </Stack>
+                              </Tooltip>
+                            ) : s.costTotal && Number(s.costTotal) > 0 ? (
+                              formatMoney(s.costTotal)
+                            ) : (
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                              >
+                                &mdash;
+                              </Typography>
+                            )}
+                          </TableCell>
+                        )}
+                        {canSeeDeal && (
+                          <TableCell>
+                            {s.partnerName ?? (
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                              >
+                                Clinic
+                              </Typography>
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell>
                           {s.isActive ? (
                             <Chip size="small" color="success" label="Active" />
@@ -229,6 +305,8 @@ export default function ServicesTable({ initialServices, canWrite }: Props) {
       <ServiceFormDialog
         open={dialogOpen}
         service={editing}
+        canEditDeal={canEditDeal}
+        canEditCost={canEditCost}
         onClose={() => setDialogOpen(false)}
         onSaved={() => void load(query, activeOnly)}
       />

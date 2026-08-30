@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
+import {
+  canSeeCost,
+  canSeePartnerDeal,
+  hasPermission,
+} from "@/lib/permissions";
+import { costComponentInclude } from "@/lib/services";
 import { toServiceDTO } from "@/lib/invoices";
 import { writeAudit } from "@/lib/audit";
-import { serviceUpdateSchema } from "@/schemas/service";
+import {
+  serviceUpdateSchema,
+  toCostComponentRows,
+  touchesPartnerDeal,
+} from "@/schemas/service";
 
 async function getServiceId(params: Promise<{ serviceId: string }>) {
   const { serviceId } = await params;
@@ -17,13 +27,23 @@ export async function GET(
   { params }: { params: Promise<{ serviceId: string }> },
 ) {
   return handle(async () => {
-    await requirePermission("invoices:read");
+    const session = await requirePermission("invoices:read");
     const serviceId = await getServiceId(params);
+    const visible = {
+      deal: canSeePartnerDeal(session.user),
+      cost: canSeeCost(session.user),
+    };
 
-    const service = await prisma.service.findUnique({ where: { serviceId } });
+    const service = await prisma.service.findUnique({
+      where: { serviceId },
+      include: {
+        ...(visible.deal ? { partner: { select: { name: true } } } : {}),
+        ...(visible.cost ? { costComponents: costComponentInclude } : {}),
+      },
+    });
     if (!service) throw new ApiError(404, "Service not found");
 
-    return NextResponse.json({ service: toServiceDTO(service) });
+    return NextResponse.json({ service: toServiceDTO(service, visible) });
   });
 }
 
@@ -35,6 +55,21 @@ export async function PATCH(
     const session = await requirePermission("invoices:write");
     const serviceId = await getServiceId(params);
     const data = await parseBody(request, serviceUpdateSchema);
+    // See the POST handler: the deal is a partners:write term, not catalogue
+    // upkeep, so reception editing a price cannot move a partner's cut.
+    if (
+      touchesPartnerDeal(data) &&
+      !hasPermission(session.user, "partners:write")
+    ) {
+      throw new ApiError(403, "You cannot set the partner deal on a service");
+    }
+    // See the POST handler: cost is orders:*, not invoices:*.
+    if (
+      data.costComponents !== undefined &&
+      !hasPermission(session.user, "orders:write")
+    ) {
+      throw new ApiError(403, "You cannot set the cost of a service");
+    }
 
     const existing = await prisma.service.findUnique({ where: { serviceId } });
     if (!existing) throw new ApiError(404, "Service not found");
@@ -49,6 +84,30 @@ export async function PATCH(
         ...(data.description !== undefined
           ? { description: data.description }
           : {}),
+        ...(data.partnerId !== undefined ? { partnerId: data.partnerId } : {}),
+        ...(data.partnerCostPct !== undefined
+          ? { partnerCostPct: data.partnerCostPct }
+          : {}),
+        ...(data.partnerProfitPct !== undefined
+          ? { partnerProfitPct: data.partnerProfitPct }
+          : {}),
+        // The recipe is replaced wholesale, never merged: the form edits the
+        // whole list, so a row the user deleted has to disappear. Absent leaves
+        // the existing components untouched, which is what lets a price edit
+        // stay a price edit. Nested writes run inside the update's own
+        // transaction, so a service is never briefly left with no cost.
+        ...(data.costComponents
+          ? {
+              costComponents: {
+                deleteMany: {},
+                create: toCostComponentRows(data.costComponents),
+              },
+            }
+          : {}),
+      },
+      include: {
+        partner: { select: { name: true } },
+        costComponents: costComponentInclude,
       },
     });
 
@@ -59,7 +118,12 @@ export async function PATCH(
       changes: data,
     });
 
-    return NextResponse.json({ service: toServiceDTO(service) });
+    return NextResponse.json({
+      service: toServiceDTO(service, {
+        deal: canSeePartnerDeal(session.user),
+        cost: canSeeCost(session.user),
+      }),
+    });
   });
 }
 

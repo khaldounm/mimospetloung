@@ -40,6 +40,7 @@ import PartnerFormDialog from "./PartnerFormDialog";
 import PartnerPayoutFormDialog from "./PartnerPayoutFormDialog";
 import PartnerGlossary from "./PartnerGlossary";
 import OwedBreakdownCard from "./OwedBreakdownCard";
+import PartnerDaysCard from "./PartnerDaysCard";
 
 interface Props {
   partner: PartnerDTO;
@@ -169,6 +170,12 @@ export default function PartnerDetail({
         )}
       </Stack>
 
+      <PartnerDaysCard
+        partnerId={partner.partnerId}
+        dailyMinimum={partner.dailyMinimum}
+        canWrite={canWrite}
+      />
+
       <PartnerGlossary />
 
       <Box sx={{ mb: 2 }}>
@@ -263,6 +270,8 @@ export default function PartnerDetail({
           profitOwed={money?.profitOwed}
           profitShareToDate={money?.profitShareToDate}
           asOf={asOf}
+          serviceEarnedToDate={money?.serviceEarnedToDate}
+          guaranteeEarnedToDate={money?.guaranteeEarnedToDate}
         />
       </Box>
 

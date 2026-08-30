@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Autocomplete,
@@ -27,7 +27,7 @@ import { apiRequest } from "@/utils/api-client";
 import { CLINIC_USE_COST_CATEGORY } from "@/constants/running-cost";
 import { toGtin14 } from "@/utils/barcode";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
-import type { InvoiceDTO } from "@/types/entities";
+import type { InvoiceDTO, PartnerDTO } from "@/types/entities";
 
 export interface ServiceLineOption {
   serviceId: number;
@@ -54,6 +54,9 @@ interface Props {
   invoiceId: number;
   serviceOptions: ServiceLineOption[];
   itemOptions: ItemLineOption[];
+  // Whether to offer "performed by". Hidden from anyone who cannot see a
+  // partner's deal, which is everyone but Admin.
+  canSeeDeal: boolean;
   onClose: () => void;
   onSaved: (invoice: InvoiceDTO) => void;
 }
@@ -78,6 +81,7 @@ function LineItemForm({
   invoiceId,
   serviceOptions,
   itemOptions,
+  canSeeDeal,
   onClose,
   onSaved,
 }: FormProps) {
@@ -93,6 +97,10 @@ function LineItemForm({
   // Consumed during the visit rather than sold. Off the bill and off every
   // printed copy; the stock still moves and the cost still lands in analytics.
   const [isHidden, setIsHidden] = useState(false);
+  // Who performed this one, when it was not the partner the service names.
+  // Blank means "follow the service", which is nearly always right.
+  const [performedBy, setPerformedBy] = useState("");
+  const [partners, setPartners] = useState<PartnerDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Raw text from the barcode scanner (or manual entry) before it resolves to
@@ -101,6 +109,22 @@ function LineItemForm({
   const [scanError, setScanError] = useState<string | null>(null);
 
   const isItem = sourceType === "item";
+
+  // Active partners, for the "performed by" override. Only fetched for someone
+  // allowed to see a deal at all; the endpoint would refuse anyone else.
+  useEffect(() => {
+    if (!canSeeDeal) return;
+    let alive = true;
+    apiRequest<{ partners: PartnerDTO[] }>("/api/partners?active=1")
+      .then((data) => {
+        if (alive) setPartners(data.partners);
+      })
+      // Non-fatal: without it the override simply is not offered.
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [canSeeDeal]);
 
   // Prefill description + unit price when a source is picked.
   function pickSource(id: string) {
@@ -211,6 +235,9 @@ function LineItemForm({
             // the pack quantity and the price it bills at.
             ...(loose ? { looseQty } : { quantity, unitPrice }),
             ...(isItem && isHidden ? { isHidden: true } : {}),
+            ...(!isItem && performedBy
+              ? { performedByPartnerId: performedBy }
+              : {}),
           },
         },
       );
@@ -329,6 +356,24 @@ function LineItemForm({
               {serviceOptions.map((o) => (
                 <MenuItem key={o.serviceId} value={String(o.serviceId)}>
                   {o.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+
+          {!isItem && canSeeDeal && partners.length > 0 && (
+            <TextField
+              select
+              label="Performed by"
+              value={performedBy}
+              onChange={(e) => setPerformedBy(e.target.value)}
+              helperText="Only if someone other than the usual partner did it"
+              fullWidth
+            >
+              <MenuItem value="">Service default</MenuItem>
+              {partners.map((p) => (
+                <MenuItem key={p.partnerId} value={String(p.partnerId)}>
+                  {p.name}
                 </MenuItem>
               ))}
             </TextField>

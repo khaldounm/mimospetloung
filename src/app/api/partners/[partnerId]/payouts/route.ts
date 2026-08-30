@@ -33,19 +33,28 @@ export async function POST(
 
     // Block overpayment, mirroring invoice payments: a payout cannot exceed what
     // is currently owed (accrued payable minus payouts already recorded).
-    const [earnedAgg, paidAgg] = await Promise.all([
+    // All THREE streams, or the check blocks paying money that is genuinely
+    // owed. Consigned stock accrues on the movement; services performed and
+    // guaranteed days accrue in partner_accruals. A partner who only ever does
+    // service work has no movements at all, so reading movements alone would
+    // report them owed nothing and refuse every payout.
+    const [earnedAgg, accruedAgg, paidAgg] = await Promise.all([
       prisma.inventoryTransaction.aggregate({
         _sum: { partnerPayable: true },
         where: { partnerId },
+      }),
+      prisma.partnerAccrual.aggregate({
+        _sum: { amount: true },
+        where: { partnerId, reversedAt: null },
       }),
       prisma.partnerPayout.aggregate({
         _sum: { amount: true },
         where: { partnerId, deletedAt: null },
       }),
     ]);
-    const balance = (
-      earnedAgg._sum.partnerPayable ?? new Prisma.Decimal(0)
-    ).minus(paidAgg._sum.amount ?? 0);
+    const balance = (earnedAgg._sum.partnerPayable ?? new Prisma.Decimal(0))
+      .plus(accruedAgg._sum.amount ?? 0)
+      .minus(paidAgg._sum.amount ?? 0);
     if (new Prisma.Decimal(data.amount).gt(balance)) {
       throw new ApiError(
         400,

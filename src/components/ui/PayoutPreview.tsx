@@ -13,9 +13,13 @@ import { SAMPLE_PAYOUT_COST, SAMPLE_PAYOUT_PRICE } from "@/constants/partner";
 export default function PayoutPreview({
   costPct,
   profitPct,
+  // What the sample is a sample OF. Consigned stock is an item; a service the
+  // partner performs is not, and calling it one reads as a mistake on screen.
+  noun = "item",
 }: {
   costPct: string;
   profitPct: string;
+  noun?: string;
 }) {
   const cost = Number(costPct);
   const profit = Number(profitPct);
@@ -40,7 +44,8 @@ export default function PayoutPreview({
         color="text.secondary"
         sx={{ display: "block" }}
       >
-        On an item costing {formatMoney(SAMPLE_PAYOUT_COST)} that sells for{" "}
+        On {/^[aeiou]/i.test(noun) ? "an" : "a"} {noun} costing{" "}
+        {formatMoney(SAMPLE_PAYOUT_COST)} that sells for{" "}
         {formatMoney(SAMPLE_PAYOUT_PRICE)}
       </Typography>
       <Typography variant="body2" sx={{ mt: 0.5 }}>

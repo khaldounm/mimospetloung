@@ -112,6 +112,7 @@ type PartnerRow = {
   phone: string | null;
   defaultCostPct: Prisma.Decimal;
   defaultProfitPct: Prisma.Decimal;
+  dailyMinimum: Prisma.Decimal | null;
   notes: string | null;
   isActive: boolean;
   createdAt: Date;
@@ -130,6 +131,28 @@ type PartnerTotals = {
   accruedCost: Prisma.Decimal;
   unitsSold: Prisma.Decimal;
 };
+
+// What the accrual ledger owes this partner, kept apart from the stock figures
+// rather than folded into them. A service is not a sale of their capital, and
+// blending the two would break the identities the stock figures hold to
+// (partnerShare + clinicShare = grossProfit, and so on) while making neither
+// stream readable on its own.
+type AccrualTotals = {
+  service: Prisma.Decimal;
+  guarantee: Prisma.Decimal;
+  // The cost half, for the rare service deal struck at a non-zero cost rate.
+  // Usually zero: a vet fronts no capital.
+  costPart: Prisma.Decimal;
+};
+
+const emptyAccruals = (): AccrualTotals => ({
+  service: D(0),
+  guarantee: D(0),
+  costPart: D(0),
+});
+
+const totalAccrued = (a: AccrualTotals): Prisma.Decimal =>
+  a.service.plus(a.guarantee);
 
 const emptyTotals = (): PartnerTotals => ({
   revenue: D(0),
@@ -156,6 +179,9 @@ type PartnerStats = {
   // counts what survives is not incomplete, it is wrong.
   opening: Prisma.Decimal;
   openingAsOf: Date | null;
+  // Services performed and days guaranteed. Same range/position split as above.
+  accrualsInRange: AccrualTotals;
+  accrualsToDate: AccrualTotals;
 };
 
 // Movements that represent a sale or its reversal. A Sold line carries a negative
@@ -226,7 +252,13 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   // so the clinic absorbs the shortfall.
   const clinicShare = grossProfit.minus(partnerShare);
 
-  const balance = stats.opening.plus(toDate.accrued).minus(stats.paidToDate);
+  // Everything the partner has earned that is not stock: services they
+  // performed and days their guarantee topped up.
+  const accrualRange = totalAccrued(stats.accrualsInRange);
+  const accrualToDate = totalAccrued(stats.accrualsToDate);
+  const earnedToDate = toDate.accrued.plus(accrualToDate);
+
+  const balance = stats.opening.plus(earnedToDate).minus(stats.paidToDate);
 
   // What the partner had in play at that date: the cost of everything that had
   // sold by then (recovered) plus the cost of what was still on the shelf. Not a
@@ -255,8 +287,10 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
   // into profitOwed, which is derived as the remainder, and the two halves still
   // sum to the balance. That is the honest place for a figure whose composition
   // this database never saw.
-  const capitalAccrued = toDate.accruedCost;
-  const profitShareToDate = toDate.accrued.minus(capitalAccrued);
+  // A service deal at a non-zero cost rate returns capital too, so its cost half
+  // belongs on this side of the split like any other.
+  const capitalAccrued = toDate.accruedCost.plus(stats.accrualsToDate.costPart);
+  const profitShareToDate = earnedToDate.minus(capitalAccrued);
   const capitalOutstanding = capitalAccrued.minus(stats.paidToDate);
   const capitalOwed = capitalOutstanding.greaterThan(0)
     ? capitalOutstanding
@@ -276,7 +310,12 @@ function toMoneyDTO(stats: PartnerStats): PartnerMoneyDTO {
     accrued: inRange.accrued.toFixed(2),
     unitsSold: inRange.unitsSold.toString(),
     paidInRange: stats.paidInRange.toFixed(2),
-    earnedToDate: toDate.accrued.toFixed(2),
+    earnedToDate: earnedToDate.toFixed(2),
+    serviceEarned: stats.accrualsInRange.service.toFixed(2),
+    guaranteeEarned: stats.accrualsInRange.guarantee.toFixed(2),
+    serviceEarnedToDate: stats.accrualsToDate.service.toFixed(2),
+    guaranteeEarnedToDate: stats.accrualsToDate.guarantee.toFixed(2),
+    accrualEarnedInRange: accrualRange.toFixed(2),
     paidToDate: stats.paidToDate.toFixed(2),
     balance: balance.toFixed(2),
     capitalOwed: capitalOwed.toFixed(2),
@@ -317,6 +356,7 @@ export function toPartnerDTO(p: PartnerRow, stats?: PartnerStats): PartnerDTO {
     phone: p.phone,
     defaultCostPct: p.defaultCostPct.toString(),
     defaultProfitPct: p.defaultProfitPct.toString(),
+    dailyMinimum: p.dailyMinimum?.toFixed(2) ?? null,
     notes: p.notes,
     isActive: p.isActive,
     createdAt: p.createdAt.toISOString(),
@@ -360,6 +400,31 @@ export function toPartnerEarningDTO(t: EarningRow): PartnerEarningDTO {
 }
 
 // ---- Ledger reads ----
+
+// Live accruals only: a reversed row keeps its figures for the audit trail but
+// is no longer owed. Dated on earnedOn, a date-only column, so it takes calendar
+// bounds like payouts do rather than timestamp ones.
+const LIVE_ACCRUAL = { reversedAt: null } as const;
+
+type AccrualGroup = {
+  partnerId: number;
+  source: string;
+  _sum: { amount: Prisma.Decimal | null; costPart: Prisma.Decimal | null };
+};
+
+function foldAccruals(rows: AccrualGroup[]): Map<number, AccrualTotals> {
+  const out = new Map<number, AccrualTotals>();
+  for (const r of rows) {
+    const totals = out.get(r.partnerId) ?? emptyAccruals();
+    const amount = r._sum.amount ?? D(0);
+    if (r.source === "guarantee")
+      totals.guarantee = totals.guarantee.plus(amount);
+    else totals.service = totals.service.plus(amount);
+    totals.costPart = totals.costPart.plus(r._sum.costPart ?? 0);
+    out.set(r.partnerId, totals);
+  }
+  return out;
+}
 
 // ---- grouping helpers ----
 
@@ -458,6 +523,8 @@ export async function getPartnersWithStats(
     items,
     movedSinceGroups,
     openings,
+    accrualRangeGroups,
+    accrualToDateGroups,
   ] = await Promise.all([
     prisma.partner.findMany({
       where: { deletedAt: null },
@@ -516,6 +583,21 @@ export async function getPartnersWithStats(
       where: { partnerId: { not: null } },
       select: { partnerId: true, amount: true, asOfDate: true },
     }),
+    // Services and guarantees, the second and third things a partner can be
+    // owed for. Grouped by source so the two read separately on screen.
+    prisma.partnerAccrual.groupBy({
+      by: ["partnerId", "source"],
+      where: {
+        ...LIVE_ACCRUAL,
+        earnedOn: { gte: dateFrom, lt: dateToExclusive },
+      },
+      _sum: { amount: true, costPart: true },
+    }),
+    prisma.partnerAccrual.groupBy({
+      by: ["partnerId", "source"],
+      where: { ...LIVE_ACCRUAL, earnedOn: { lt: dateToExclusive } },
+      _sum: { amount: true, costPart: true },
+    }),
   ]);
 
   const movedSince = new Map(
@@ -537,6 +619,8 @@ export async function getPartnersWithStats(
   );
   // At most one per partner, so the last write wins harmlessly.
   const openingMap = new Map(openings.map((o) => [o.partnerId, o]));
+  const accrualRangeMap = foldAccruals(accrualRangeGroups);
+  const accrualToDateMap = foldAccruals(accrualToDateGroups);
 
   return partners.map((p) =>
     toPartnerDTO(p, {
@@ -548,6 +632,8 @@ export async function getPartnersWithStats(
       capitalOnShelf: shelfMap.get(p.partnerId) ?? D(0),
       opening: openingMap.get(p.partnerId)?.amount ?? D(0),
       openingAsOf: openingMap.get(p.partnerId)?.asOfDate ?? null,
+      accrualsInRange: accrualRangeMap.get(p.partnerId) ?? emptyAccruals(),
+      accrualsToDate: accrualToDateMap.get(p.partnerId) ?? emptyAccruals(),
     }),
   );
 }
@@ -592,6 +678,8 @@ export async function getPartnerDetail(
     earnings,
     payouts,
     opening,
+    accrualRangeGroups,
+    accrualToDateGroups,
   ] = await Promise.all([
     prisma.inventoryTransaction.findMany({
       where: {
@@ -665,6 +753,20 @@ export async function getPartnerDetail(
       orderBy: { asOfDate: "asc" },
       select: { amount: true, asOfDate: true },
     }),
+    prisma.partnerAccrual.groupBy({
+      by: ["partnerId", "source"],
+      where: {
+        partnerId,
+        ...LIVE_ACCRUAL,
+        earnedOn: { gte: dateFrom, lt: dateToExclusive },
+      },
+      _sum: { amount: true, costPart: true },
+    }),
+    prisma.partnerAccrual.groupBy({
+      by: ["partnerId", "source"],
+      where: { partnerId, ...LIVE_ACCRUAL, earnedOn: { lt: dateToExclusive } },
+      _sum: { amount: true, costPart: true },
+    }),
   ]);
 
   const movedSince = new Map(
@@ -712,6 +814,10 @@ export async function getPartnerDetail(
       capitalOnShelf: sumShelfValue(items, movedSince),
       opening: opening?.amount ?? D(0),
       openingAsOf: opening?.asOfDate ?? null,
+      accrualsInRange:
+        foldAccruals(accrualRangeGroups).get(partnerId) ?? emptyAccruals(),
+      accrualsToDate:
+        foldAccruals(accrualToDateGroups).get(partnerId) ?? emptyAccruals(),
     }),
     itemPerformance,
     earnings: earnings.map(toPartnerEarningDTO),

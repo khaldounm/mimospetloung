@@ -1,7 +1,11 @@
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { canSeeCost, hasPermission } from "@/lib/permissions";
+import {
+  canSeeCost,
+  canSeePartnerDeal,
+  hasPermission,
+} from "@/lib/permissions";
 import { invoiceInclude, toInvoiceDTO, toServiceDTO } from "@/lib/invoices";
 import { toInventoryItemDTO } from "@/lib/inventory";
 import { getFxRate } from "@/lib/settings";
@@ -46,8 +50,10 @@ export default async function InvoiceDetailPage({
   // the current setting until it is issued.
   const fxRate = invoice.fxRate ? invoice.fxRate.toNumber() : currentFxRate;
 
+  // Both false: the picker keeps only id, name and price, so the deal and cost
+  // figures would be built and thrown away. Their joins are skipped too.
   const serviceOptions: ServiceLineOption[] = services
-    .map(toServiceDTO)
+    .map((s) => toServiceDTO(s, { deal: false, cost: false }))
     .map((s) => ({ serviceId: s.serviceId, name: s.name, price: s.price }));
 
   const itemOptions: ItemLineOption[] = items
@@ -71,6 +77,7 @@ export default async function InvoiceDetailPage({
       itemOptions={itemOptions}
       canWrite={canWrite}
       canPay={canPay}
+      canSeeDeal={canSeePartnerDeal(session?.user)}
       fxRate={fxRate}
     />
   );

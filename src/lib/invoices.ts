@@ -1,5 +1,11 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  componentCost,
+  serviceCostTotal,
+  toCostComponentDTO,
+  type CostComponentRow,
+} from "@/lib/services";
 import { ApiError } from "@/lib/api";
 import { applyStockMovementTx, isStockCheckViolation } from "@/lib/inventory";
 import { looseConfigOf, looseLine, minLooseQuantity } from "@/utils/inventory";
@@ -48,7 +54,22 @@ type ServiceRow = {
   price: Prisma.Decimal;
   isActive: boolean;
   description: string | null;
+  partnerId: number | null;
+  partnerCostPct: Prisma.Decimal | null;
+  partnerProfitPct: Prisma.Decimal | null;
+  // Both optional so a caller that only needs id/name/price (the invoice line
+  // picker) can skip the joins rather than pay for figures it discards.
+  partner?: { name: string } | null;
+  costComponents?: CostComponentRow[];
 };
+
+// Which of a service's figures this caller is allowed to receive. An object
+// rather than two positional booleans: they are both booleans, they gate
+// different things, and at a call site `false, true` says nothing.
+export interface ServiceVisibility {
+  deal: boolean; // partners:read  — who performs it and their cut
+  cost: boolean; // orders:read    — what performing it costs the clinic
+}
 
 type LineItemRow = {
   lineItemId: number;
@@ -263,7 +284,14 @@ function onVetHold(status: string, vetHoldAt: Date | null): boolean {
 
 // ---- DTO mappers ----
 
-export function toServiceDTO(s: ServiceRow): ServiceDTO {
+// `visible` is required rather than defaulted for the same reason the cost flag
+// is on toInventoryItemDTO: an optional gate leaks the day someone adds a call
+// site and forgets it, a required one makes the compiler name every caller.
+export function toServiceDTO(
+  s: ServiceRow,
+  visible: ServiceVisibility,
+): ServiceDTO {
+  const components = s.costComponents ?? [];
   return {
     serviceId: s.serviceId,
     name: s.name,
@@ -271,6 +299,16 @@ export function toServiceDTO(s: ServiceRow): ServiceDTO {
     price: s.price.toFixed(2),
     isActive: s.isActive,
     description: s.description,
+    partnerId: visible.deal ? s.partnerId : null,
+    partnerName: visible.deal ? (s.partner?.name ?? null) : null,
+    partnerCostPct: visible.deal
+      ? (s.partnerCostPct?.toString() ?? null)
+      : null,
+    partnerProfitPct: visible.deal
+      ? (s.partnerProfitPct?.toString() ?? null)
+      : null,
+    costComponents: visible.cost ? components.map(toCostComponentDTO) : null,
+    costTotal: visible.cost ? serviceCostTotal(components).toFixed(2) : null,
   };
 }
 
@@ -968,6 +1006,157 @@ async function applyHiddenLineTx(
   });
 }
 
+// Bill one service line: put what it consumed off the shelf, expense it, and
+// freeze what the partner who performed it is owed.
+//
+// The service's cost components are a RECIPE, read here and resolved into real
+// movements. Two things follow from that, both deliberate:
+//
+//   - The recipe is expanded whether or not a partner performed the service. A
+//     consultation burns gloves either way, and the stock has to leave the
+//     shelf regardless of who takes a cut.
+//   - Everything is frozen at this moment. The components are priced at the
+//     item's cost TODAY, and the figures written here are never recomputed. A
+//     delivery next week re-prices the recipe for the next invoice, not for
+//     this one.
+//
+// A negative line is a service being given back. It accrues negatively, which
+// claws the partner's cut back on its own because the sign rides on the
+// quantity, and it does NOT put stock back: the gloves were already used, and
+// refunding the customer does not un-use them.
+async function applyServiceLineTx(
+  tx: Tx,
+  params: {
+    invoiceId: number;
+    line: {
+      lineItemId: number;
+      quantity: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+      description: string;
+      performedByPartnerId: number | null;
+    };
+    service: {
+      name: string;
+      partnerId: number | null;
+      partnerCostPct: Prisma.Decimal | null;
+      partnerProfitPct: Prisma.Decimal | null;
+      partner: {
+        defaultCostPct: Prisma.Decimal;
+        defaultProfitPct: Prisma.Decimal;
+      } | null;
+      costComponents: {
+        quantity: Prisma.Decimal | null;
+        label: string | null;
+        amount: Prisma.Decimal | null;
+        itemId: number | null;
+        item: {
+          name: string;
+          lastCost: Prisma.Decimal | null;
+          partnerId: number | null;
+        } | null;
+      }[];
+    };
+    performedBy: number | null;
+  },
+): Promise<void> {
+  const { invoiceId, line, service, performedBy } = params;
+  const qty = line.quantity;
+  const isReturn = qty.lessThan(0);
+  const today = new Date(`${clinicToday()}T00:00:00.000Z`);
+
+  // Per ONE performance. Multiplied by the line quantity below, so a line
+  // billing two of something consumes two recipes' worth.
+  const unitCost = serviceCostTotal(service.costComponents);
+
+  if (!isReturn) {
+    for (const c of service.costComponents) {
+      if (c.itemId == null) continue;
+
+      // Same rule, and the same reason, as a hidden line: a consigned item is
+      // still the partner's until it sells, and consuming it here would use up
+      // stock the clinic still owes somebody for with no sale price to work
+      // their payout out from.
+      if (c.item?.partnerId != null) {
+        throw new ApiError(
+          400,
+          `"${c.item.name}" is consigned from a partner, so it cannot be part of what "${service.name}" costs. Take it off the service, and record it as a purchase from the partner instead.`,
+        );
+      }
+
+      await applyStockMovementTx(tx, {
+        itemId: c.itemId,
+        type: "Used",
+        // unitCost is left out on purpose: a Used movement defaults to the
+        // item's lastCost, and that rule lives in applyStockMovementTx.
+        quantity: c.quantity!.times(qty).toNumber(),
+        referenceType: "invoice",
+        referenceId: invoiceId,
+        notes: `Used performing ${service.name} on ${formatInvoiceNumber(invoiceId)}`,
+        performedBy,
+        allowDeletedItem: true,
+      });
+    }
+
+    // The money side, as running costs, which is how every other consumable in
+    // this app is expensed. Filed against the SERVICE line, so voiding the
+    // invoice retires them through the sweep that already exists.
+    for (const c of service.costComponents) {
+      const amount = componentCost(c).times(qty).toDecimalPlaces(2);
+      if (amount.lte(0)) continue;
+      await tx.runningCost.create({
+        data: {
+          category: CLINIC_USE_COST_CATEGORY,
+          description: (c.item?.name ?? c.label ?? service.name).slice(0, 200),
+          amount,
+          incurredOn: today,
+          notes: `Used performing ${service.name} on ${formatInvoiceNumber(invoiceId)}`,
+          invoiceLineItemId: line.lineItemId,
+          createdBy: performedBy,
+        },
+      });
+    }
+  }
+
+  // Who takes the cut: whoever actually performed it, falling back to the
+  // partner the service names. No partner means the clinic keeps the lot, which
+  // is every service that has not been given one.
+  const partnerId = line.performedByPartnerId ?? service.partnerId;
+  if (partnerId == null) return;
+
+  // A line override names a partner the SERVICE may not, so the rates cannot
+  // always come from the service's own partner. Read the deal in force for
+  // whoever is actually being paid.
+  const partner =
+    line.performedByPartnerId != null &&
+    line.performedByPartnerId !== service.partnerId
+      ? await tx.partner.findUnique({
+          where: { partnerId },
+          select: { defaultCostPct: true, defaultProfitPct: true },
+        })
+      : service.partner;
+
+  const payable = computePartnerPayable(
+    qty,
+    line.unitPrice,
+    unitCost,
+    effectiveRates(service, partner),
+  );
+
+  await tx.partnerAccrual.create({
+    data: {
+      partnerId,
+      source: "service",
+      invoiceId,
+      lineItemId: line.lineItemId,
+      earnedOn: today,
+      revenue: qty.times(line.unitPrice).toDecimalPlaces(2),
+      costBasis: unitCost.times(qty).toDecimalPlaces(2),
+      amount: payable.total,
+      costPart: payable.costPart,
+    },
+  });
+}
+
 export async function issueInvoice(
   invoiceId: number,
   performedBy: number | null,
@@ -994,6 +1183,36 @@ export async function issueInvoice(
                   partnerProfitPct: true,
                   partner: {
                     select: { defaultCostPct: true, defaultProfitPct: true },
+                  },
+                },
+              },
+              // The recipe and the deal, for the service lines. Costs nothing
+              // on an invoice of pure stock lines, where `service` is null on
+              // every row.
+              service: {
+                select: {
+                  name: true,
+                  partnerId: true,
+                  partnerCostPct: true,
+                  partnerProfitPct: true,
+                  partner: {
+                    select: { defaultCostPct: true, defaultProfitPct: true },
+                  },
+                  costComponents: {
+                    orderBy: { componentId: "asc" },
+                    select: {
+                      quantity: true,
+                      label: true,
+                      amount: true,
+                      itemId: true,
+                      item: {
+                        select: {
+                          name: true,
+                          lastCost: true,
+                          partnerId: true,
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -1026,6 +1245,20 @@ export async function issueInvoice(
       );
 
       for (const line of invoice.lineItems) {
+        // A service line bills work, not goods: it has no itemId, so the guard
+        // below would skip it entirely. Its cost, its stock and its partner's
+        // cut are all resolved from the service's recipe. A hidden service line
+        // is not a thing the UI can make (hiding requires an item), so this
+        // needs no isHidden branch.
+        if (line.serviceId != null && line.service != null) {
+          await applyServiceLineTx(tx, {
+            invoiceId,
+            line,
+            service: line.service,
+            performedBy,
+          });
+          continue;
+        }
         if (line.itemId == null) continue;
         // Stock is tracked to 2 decimals, so fractional sell quantities
         // (e.g. 0.5 vial, 2.5 ml) decrement stock as-is.
@@ -1255,6 +1488,15 @@ export async function voidInvoice(
           deletedAt: null,
         },
         data: { deletedAt: new Date() },
+      });
+
+      // And cancel what the service lines accrued to their partners. Soft, so
+      // the row keeps its figures and the trail shows an accrual made and then
+      // withdrawn. Consigned stock needs nothing here: its accrual is frozen on
+      // the movement, and the reversal above already negated it.
+      await tx.partnerAccrual.updateMany({
+        where: { invoiceId, reversedAt: null },
+        data: { reversedAt: new Date() },
       });
     }
 

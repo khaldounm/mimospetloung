@@ -93,6 +93,13 @@ export async function POST(
           looseQty: resolved.looseQty,
           looseUnit: resolved.looseUnit,
           isHidden: data.isHidden ?? false,
+          // Only meaningful on a service line: an item line is sold, not
+          // performed, and letting one carry a performer would accrue against
+          // a partner nobody agreed to.
+          performedByPartnerId:
+            data.serviceId !== undefined
+              ? data.performedByPartnerId
+              : undefined,
         },
       });
       await recomputeInvoiceTotals(tx, invoiceId);

@@ -28,6 +28,14 @@ export const partnerCreateSchema = z.object({
   phone: optionalString(40),
   defaultCostPct: costPct,
   defaultProfitPct: profitPct,
+  // What they take for a day they were here, whatever it earned. Blank clears
+  // it, which puts the partner on no guarantee at all.
+  dailyMinimum: z
+    .preprocess(
+      (v) => (v === "" || v === null ? null : v),
+      z.coerce.number().nonnegative().max(99_999_999.99).nullable(),
+    )
+    .optional(),
   notes: optionalString(5000),
   isActive: z.coerce.boolean().optional(),
 });
@@ -85,3 +93,17 @@ export type PartnerCreateInput = z.infer<typeof partnerCreateSchema>;
 export type PartnerPayoutCreateInput = z.infer<
   typeof partnerPayoutCreateSchema
 >;
+
+// A month as the days view asks for it. Defaults to the current one, so the
+// page can open without the caller working out today's date.
+export const partnerMonthSchema = z.preprocess(
+  (v) => (typeof v === "string" && /^\d{4}-\d{2}$/.test(v) ? v : undefined),
+  z.string().default(() => new Date().toISOString().slice(0, 7)),
+);
+
+// What can happen to one of a partner's days.
+export const partnerDayActionSchema = z.object({
+  action: z.enum(["attend", "absent", "settle", "unsettle"]),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a YYYY-MM-DD date"),
+  notes: z.string().trim().max(500).optional(),
+});

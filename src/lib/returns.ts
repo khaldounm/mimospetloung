@@ -324,6 +324,11 @@ export async function addReturnLines(
           unitPrice: source.unitPrice,
           looseQty,
           looseUnit: source.looseUnit,
+          // Carried over so a service given back claws the cut back off the
+          // partner who was actually paid for it. Without this the clawback
+          // would land on whoever the SERVICE names, which is the wrong person
+          // the moment a locum performed the original.
+          performedByPartnerId: source.performedByPartnerId,
           returnedFromLineId: source.lineItemId,
           returnRestock: entry.restock,
           returnLotNumber: entry.lotNumber ?? null,

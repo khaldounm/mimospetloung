@@ -75,6 +75,7 @@ model User {
   inventoryTransactions InventoryTransaction[]
   runningCosts          RunningCost[]
   partnerPayouts        PartnerPayout[]
+  partnerAttendance     PartnerAttendance[]
   purchaseOrders        PurchaseOrder[]
   supplierPayments      SupplierPayment[]
   auditLogs             AuditLog[]
@@ -536,6 +537,7 @@ model InventoryItem {
 
   partner      Partner?               @relation(fields: [partnerId], references: [partnerId], onDelete: SetNull)
   supplier     Supplier?              @relation(fields: [supplierId], references: [supplierId], onDelete: SetNull)
+  serviceCosts ServiceCostComponent[]
   transactions InventoryTransaction[]
   lineItems    InvoiceLineItem[]
   orderLines   PurchaseOrderLine[]
@@ -681,6 +683,10 @@ model Partner {
   // needs no special case.
   defaultCostPct   Decimal   @default(100) @map("default_cost_pct") @db.Decimal(5, 2)
   defaultProfitPct Decimal   @default(0) @map("default_profit_pct") @db.Decimal(5, 2)
+  // What this partner takes for a day they were here, whatever the day earned.
+  // A floor, not a wage: a day that earns more pays the more. Null for a
+  // partner on no guarantee at all, which is every consignment partner.
+  dailyMinimum     Decimal?  @map("daily_minimum") @db.Decimal(12, 2)
   notes            String?   @db.Text
   isActive         Boolean   @default(true) @map("is_active")
   deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
@@ -688,12 +694,90 @@ model Partner {
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   items           InventoryItem[]
+  services        Service[]
+  accruals        PartnerAccrual[]
+  performedLines  InvoiceLineItem[]
+  attendance      PartnerAttendance[]
   transactions    InventoryTransaction[]
   payouts         PartnerPayout[]
   openingBalances OpeningBalance[]
 
   @@index([name], map: "idx_partners_active")
   @@map("partners")
+}
+
+// What the clinic owes a partner, one frozen row per earning event.
+//
+// Consigned STOCK does not come through here: that accrual is frozen on the
+// InventoryTransaction the sale wrote, which works and is left alone. This
+// table is for what has no stock movement to hang off - a service the partner
+// performed, and (next) a day's guaranteed minimum. The balance is therefore
+// the sum of both streams, which is honest about the fact that they are two
+// different kinds of earning.
+//
+// Every figure is frozen at the moment it is earned and NEVER recomputed. The
+// item costs behind a service move with the next delivery, and a payout agreed
+// in August must not quietly change in September.
+model PartnerAccrual {
+  accrualId  Int      @id @default(autoincrement()) @map("accrual_id")
+  partnerId  Int      @map("partner_id")
+  // 'service' today. 'guarantee' when the daily minimum arrives.
+  source     String   @db.VarChar(20)
+  invoiceId  Int?     @map("invoice_id")
+  lineItemId Int?     @map("line_item_id")
+  // The CLINIC's day, not the server's, so a per-day guarantee compares like
+  // with like and an evening in Beirut does not file against tomorrow.
+  earnedOn   DateTime @map("earned_on") @db.Date
+
+  // What the line billed, and what performing it cost, both frozen. Kept
+  // alongside the payout because a partner statement has to show the working:
+  // "you earned X on revenue Y against cost Z" is checkable, a bare X is not.
+  revenue   Decimal @db.Decimal(12, 2)
+  costBasis Decimal @map("cost_basis") @db.Decimal(12, 2)
+  // What the clinic owes for it, and how much of that is the cost half. Same
+  // pair, and the same reason for freezing the split, as on InventoryTransaction.
+  amount    Decimal @db.Decimal(12, 2)
+  costPart  Decimal @map("cost_part") @db.Decimal(12, 2)
+
+  // Set when the document behind this row is voided. Soft, like every other
+  // financial record here: the row keeps its figures so the trail still shows
+  // the clinic accrued and then cancelled, rather than the accrual never
+  // having existed. Balances filter on it.
+  reversedAt DateTime? @map("reversed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  partner  Partner          @relation(fields: [partnerId], references: [partnerId], onDelete: Restrict)
+  invoice  Invoice?         @relation(fields: [invoiceId], references: [invoiceId], onDelete: SetNull)
+  lineItem InvoiceLineItem? @relation(fields: [lineItemId], references: [lineItemId], onDelete: SetNull)
+
+  // Serves both the balance sum and the per-day comparison the guarantee needs.
+  @@index([partnerId, earnedOn], map: "idx_partner_accruals_partner_day")
+  @@index([invoiceId], map: "idx_partner_accruals_invoice")
+  @@map("partner_accruals")
+}
+
+// A day the partner was here. One row per day they turned up, and nothing at
+// all for a day they did not.
+//
+// This has to be recorded by a human, and cannot be inferred, because of the
+// exact case the guarantee exists for: a partner who sat here all day with no
+// work to do produces no accruals, no bookings and no records. That is
+// indistinguishable from a day off in every table this app has, and the
+// difference is worth a day's minimum.
+model PartnerAttendance {
+  attendanceId Int      @id @default(autoincrement()) @map("attendance_id")
+  partnerId    Int      @map("partner_id")
+  onDate       DateTime @map("on_date") @db.Date
+  notes        String?  @db.Text
+  createdBy    Int?     @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  partner Partner @relation(fields: [partnerId], references: [partnerId], onDelete: Cascade)
+  creator User?   @relation(fields: [createdBy], references: [userId], onDelete: SetNull)
+
+  // Present or not: a day cannot be attended twice.
+  @@unique([partnerId, onDate], map: "uq_partner_attendance_day")
+  @@map("partner_attendance")
 }
 
 // A recorded payment from the clinic to a partner. The running balance owed is
@@ -734,9 +818,63 @@ model Service {
   isActive    Boolean @default(true) @map("is_active")
   description String? @db.Text
 
-  lineItems InvoiceLineItem[]
+  // The partner who performs this service and takes a share of what it makes.
+  // A vet, a groomer, a visiting specialist: whoever they are, the deal is a
+  // partner deal, so it lives on Partner rather than in a second table of
+  // people. Null is every service as it stands today, where the clinic keeps
+  // the lot.
+  //
+  // The two rates mirror the consignment columns on InventoryItem exactly,
+  // including that each overrides the partner default INDEPENDENTLY: a service
+  // can carry its own profit split while still following the partner's standard
+  // cost share. Same field names on purpose, so effectiveRates() in
+  // lib/partners reads a service without knowing it is one.
+  partnerId        Int?     @map("partner_id")
+  partnerCostPct   Decimal? @map("partner_cost_pct") @db.Decimal(5, 2)
+  partnerProfitPct Decimal? @map("partner_profit_pct") @db.Decimal(5, 2)
 
+  partner        Partner?               @relation(fields: [partnerId], references: [partnerId], onDelete: SetNull)
+  lineItems      InvoiceLineItem[]
+  costComponents ServiceCostComponent[]
+
+  @@index([partnerId], map: "idx_services_partner")
   @@map("services")
+}
+
+// One ingredient of what a service costs the clinic to perform, in two shapes
+// that share a table because they are the same thing to every reader of it:
+//
+//   item  an inventory line, naming what one performance consumes. Ops
+//         consumables (gloves, pads, detergent) and a test cartridge are the
+//         same shape here, because they are the same thing in this database.
+//   flat  a label and an amount, for a cost with nothing behind it on a shelf.
+//
+// Exactly one shape per row, enforced by service_cost_components_one_shape.
+// Prisma cannot express that CHECK, so it lives in the migration alongside
+// every other integrity rule, which is where this schema keeps them.
+//
+// The row says what a service costs; it does NOT move stock or money on its
+// own. Nothing reads it at billing time yet.
+model ServiceCostComponent {
+  componentId Int      @id @default(autoincrement()) @map("component_id")
+  serviceId   Int      @map("service_id")
+  itemId      Int?     @map("item_id")
+  // How much of the item ONE performance consumes. Decimal for the same reason
+  // stock is: half a vial, a quarter bottle of detergent.
+  quantity    Decimal? @db.Decimal(10, 3)
+  label       String?  @db.VarChar(200)
+  amount      Decimal? @db.Decimal(12, 2)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  service Service        @relation(fields: [serviceId], references: [serviceId], onDelete: Cascade)
+  // Restrict, not SetNull: an item silently detaching would leave a row that
+  // claims a cost and names nothing, quietly understating the service.
+  // Inventory items are soft-deleted anyway, so this blocks nothing real.
+  item    InventoryItem? @relation(fields: [itemId], references: [itemId], onDelete: Restrict)
+
+  @@index([serviceId], map: "idx_service_cost_components_service")
+  @@index([itemId], map: "idx_service_cost_components_item")
+  @@map("service_cost_components")
 }
 
 model Invoice {
@@ -788,6 +926,7 @@ model Invoice {
   attendingVet User?             @relation("InvoiceAttendingVet", fields: [attendingVetId], references: [userId], onDelete: SetNull)
   lineItems    InvoiceLineItem[]
   payments     Payment[]
+  accruals     PartnerAccrual[]
 
   @@index([clientId], map: "idx_invoices_client")
   // Every analytics query over invoices and their lines filters on issuedAt
@@ -805,48 +944,53 @@ model Invoice {
 }
 
 model InvoiceLineItem {
-  lineItemId         Int       @id @default(autoincrement()) @map("line_item_id")
+  lineItemId           Int       @id @default(autoincrement()) @map("line_item_id")
   // Primary key from the old Access system. See Client.legacyId.
   // See Client.needsReview.
-  needsReview        Boolean   @default(false) @map("needs_review")
-  reviewNote         String?   @map("review_note") @db.Text
-  legacyId           Int?      @unique @map("legacy_id")
-  invoiceId          Int       @map("invoice_id")
-  serviceId          Int?      @map("service_id")
-  itemId             Int?      @map("item_id")
-  description        String    @db.VarChar(255)
-  quantity           Decimal   @default(1) @db.Decimal(10, 3)
-  unitPrice          Decimal   @map("unit_price") @db.Decimal(12, 2)
+  needsReview          Boolean   @default(false) @map("needs_review")
+  reviewNote           String?   @map("review_note") @db.Text
+  legacyId             Int?      @unique @map("legacy_id")
+  invoiceId            Int       @map("invoice_id")
+  serviceId            Int?      @map("service_id")
+  itemId               Int?      @map("item_id")
+  description          String    @db.VarChar(255)
+  quantity             Decimal   @default(1) @db.Decimal(10, 3)
+  unitPrice            Decimal   @map("unit_price") @db.Decimal(12, 2)
   // What the customer actually asked for on a loose line (2 kg rather than 0.1
   // of a bag), so the printed invoice reads the way the sale happened. Record
   // only: quantity above stays in stocking units, which is why stock, COGS and
   // partner payouts needed no changes for loose selling.
-  looseQty           Decimal?  @map("loose_qty") @db.Decimal(10, 3)
-  looseUnit          String?   @map("loose_unit") @db.VarChar(20)
+  looseQty             Decimal?  @map("loose_qty") @db.Decimal(10, 3)
+  looseUnit            String?   @map("loose_unit") @db.VarChar(20)
   // Consumed during the visit, not sold: gloves, pads, a syringe. The line
   // exists so the stock comes off the shelf and the spend is on record, but the
   // customer is neither shown it nor charged for it. Hidden lines are left out
   // of the subtotal and off every printed copy, and issuing writes a Used
   // movement plus a running cost instead of a sale.
-  isHidden           Boolean   @default(false) @map("is_hidden")
+  isHidden             Boolean   @default(false) @map("is_hidden")
   // GENERATED ALWAYS AS (quantity * unit_price) STORED — computed by Postgres.
-  lineTotal          Decimal   @default(dbgenerated()) @map("line_total") @db.Decimal(12, 2)
+  lineTotal            Decimal   @default(dbgenerated()) @map("line_total") @db.Decimal(12, 2)
   // The sale line this one gives back. Set only on a return, where quantity is
   // negative and the price stays positive, so line_total nets on its own. Null
   // on an untraceable return (a legacy line, or stock sold before batching),
   // which is the honest answer rather than a guess. Enforced by
   // invoice_lines_return_is_negative.
-  returnedFromLineId Int?      @map("returned_from_line_id")
+  returnedFromLineId   Int?      @map("returned_from_line_id")
   // What happens to the goods coming back, decided per line: true puts them on
   // the shelf, false writes them off. A write-off still moves stock both ways at
   // issue (Returned then Damaged) so the loss stays countable.
-  returnRestock      Boolean?  @map("return_restock")
+  returnRestock        Boolean?  @map("return_restock")
   // The lot the goods go back INTO, pre-filled from the batch the sale drew from
   // and confirmed at the counter. An undated batch sorts FIRST in FEFO, so a
   // perishable put back without a date would be sold ahead of stock with a known
   // expiry. Null on an untracked item, which has no batches at all.
-  returnLotNumber    String?   @map("return_lot_number") @db.VarChar(100)
-  returnExpiryDate   DateTime? @map("return_expiry_date") @db.Date
+  returnLotNumber      String?   @map("return_lot_number") @db.VarChar(100)
+  returnExpiryDate     DateTime? @map("return_expiry_date") @db.Date
+  // Who actually performed this service, when it was not the partner the
+  // service usually goes to. Null means "whoever the service names", which is
+  // the normal case; this exists because two vets perform the same procedure
+  // and the cut follows the one who did it, not the catalogue entry.
+  performedByPartnerId Int?      @map("performed_by_partner_id")
 
   invoice      Invoice           @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
   service      Service?          @relation(fields: [serviceId], references: [serviceId], onDelete: SetNull)
@@ -854,6 +998,8 @@ model InvoiceLineItem {
   returnedFrom InvoiceLineItem?  @relation("InvoiceLineReturns", fields: [returnedFromLineId], references: [lineItemId], onDelete: SetNull)
   returns      InvoiceLineItem[] @relation("InvoiceLineReturns")
   runningCosts RunningCost[]
+  performedBy  Partner?          @relation(fields: [performedByPartnerId], references: [partnerId], onDelete: Restrict)
+  accruals     PartnerAccrual[]
 
   @@index([invoiceId], map: "idx_lineitems_invoice")
   @@index([returnedFromLineId], map: "idx_invoice_lines_returned_from")

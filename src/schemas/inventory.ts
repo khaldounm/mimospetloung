@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { optionalString, optionalDate } from "./common";
+import {
+  optionalCostPct,
+  optionalDate,
+  optionalLinkId,
+  optionalProfitPct,
+  optionalString,
+} from "./common";
 import { INVENTORY_TX_TYPES, SIGNED_TX_TYPES } from "@/types/enums";
 
 // Non-negative money value (sale price / cost). Blank -> undefined.
@@ -18,33 +24,6 @@ const optionalQuantity = z.preprocess(
   (v) => (v === "" || v === null ? undefined : v),
   z.coerce.number().nonnegative().max(1_000_000).optional(),
 );
-
-// Optional link to another row (sourcing partner, usual supplier). Blank / 0 ->
-// null, which clears the link rather than leaving it untouched.
-const optionalLinkId = z
-  .preprocess(
-    (v) => (v === "" || v === null || v === 0 || v === "0" ? null : v),
-    z.coerce.number().int().positive().nullable(),
-  )
-  .optional();
-
-// Optional per-item profit-share override (0..100). Blank -> null, meaning the
-// item follows the partner's default.
-const optionalProfitPct = z
-  .preprocess(
-    (v) => (v === "" || v === null ? null : v),
-    z.coerce.number().min(0).max(100).nullable(),
-  )
-  .optional();
-
-// Optional per-item cost-share override. Allowed above 100 for the same reason
-// as the partner default: that is how an uplift on cost is written.
-const optionalCostPct = z
-  .preprocess(
-    (v) => (v === "" || v === null ? null : v),
-    z.coerce.number().min(0).max(999.99).nullable(),
-  )
-  .optional();
 
 // Loose selling config. Each is nullable so the setup can be cleared, and the
 // three are validated together below: an item is either set up for loose sale

@@ -16,6 +16,35 @@ export const optionalDate = z.preprocess((v) => {
   return v;
 }, z.coerce.date().optional());
 
+// --- Partner deals (consigned stock, and services a partner performs) ---
+
+// Optional link to another row (sourcing partner, usual supplier). Blank / 0 ->
+// null, which clears the link rather than leaving it untouched.
+export const optionalLinkId = z
+  .preprocess(
+    (v) => (v === "" || v === null || v === 0 || v === "0" ? null : v),
+    z.coerce.number().int().positive().nullable(),
+  )
+  .optional();
+
+// Optional profit-share override (0..100). Blank -> null, meaning the row
+// follows the partner's default.
+export const optionalProfitPct = z
+  .preprocess(
+    (v) => (v === "" || v === null ? null : v),
+    z.coerce.number().min(0).max(100).nullable(),
+  )
+  .optional();
+
+// Optional cost-share override. Allowed above 100 for the same reason as the
+// partner default: that is how an uplift on cost is written.
+export const optionalCostPct = z
+  .preprocess(
+    (v) => (v === "" || v === null ? null : v),
+    z.coerce.number().min(0).max(999.99).nullable(),
+  )
+  .optional();
+
 // --- Payments ---
 
 export const optionalMethod = z.preprocess(

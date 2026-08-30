@@ -190,6 +190,47 @@ export interface ServiceDTO {
   price: string;
   isActive: boolean;
   description: string | null;
+  // The partner who performs it and their agreed cut. All four are null for a
+  // caller without partners:read, not just for a service nobody partners on:
+  // the rates state the clinic's margin, so they are stripped in the mapper the
+  // way item cost is. See canSeePartnerDeal.
+  partnerId: number | null;
+  partnerName: string | null;
+  partnerCostPct: string | null; // per-service override, null = partner default
+  partnerProfitPct: string | null; // per-service override, null = partner default
+  // What performing it costs the clinic, and what that figure is made of. Both
+  // null (not empty, not zero) for a caller without orders:read: an itemised
+  // cost discloses exactly what an item's lastCost does, so it takes the same
+  // gate. See canSeeCost.
+  costComponents: ServiceCostComponentDTO[] | null;
+  costTotal: string | null;
+}
+
+// One ingredient of a service's cost. Either an item line (itemId, quantity) or
+// a flat line (label, amount), never both, matching the DB CHECK.
+export interface ServiceCostComponentDTO {
+  componentId: number;
+  itemId: number | null;
+  itemName: string | null;
+  quantity: string | null;
+  label: string | null;
+  amount: string | null;
+  // The money this row contributes, resolved server-side: an item line is
+  // quantity x the item's current lastCost, so it moves when stock re-prices.
+  lineCost: string;
+}
+
+// One day in a partner's month: whether they were here, what their work earned,
+// and what the guarantee adds on top.
+export interface PartnerDayDTO {
+  date: string; // YYYY-MM-DD
+  attended: boolean;
+  earned: string; // service accruals that day
+  minimum: string | null; // null when the partner is on no guarantee
+  // What settling adds, or what it added if the day is already settled. Frozen
+  // once settled, so it stops tracking later corrections.
+  topUp: string;
+  settled: boolean;
 }
 
 export interface InvoiceLineItemDTO {
@@ -939,7 +980,19 @@ export interface PartnerMoneyDTO {
   // A balance is a point in time, not a span, so these are cumulative up to and
   // including the last day of the range. With a range ending today they equal
   // the all-time figures; with a past range they are the position as it stood.
+  // Everything earned up to that date: consigned sales PLUS services performed
+  // PLUS days the guarantee topped up. This is the figure `balance` is built
+  // from, so it is the one that has to be complete.
   earnedToDate: string;
+  // The two non-stock streams, broken out. Range-scoped and cumulative, matching
+  // the pattern above. Kept separate from revenue/grossProfit/partnerShare,
+  // which describe consigned STOCK only and would stop adding up if services
+  // were folded into them.
+  serviceEarned: string;
+  guaranteeEarned: string;
+  serviceEarnedToDate: string;
+  guaranteeEarnedToDate: string;
+  accrualEarnedInRange: string; // services + guarantee over the range
   paidToDate: string;
   balance: string; // earnedToDate minus paidToDate, the amount owed at that point
   // The balance split into its two halves, which always sum back to it. Payouts
@@ -963,6 +1016,8 @@ export interface PartnerDTO {
   // above 100 = an agreed uplift); profit is their cut of the sale's upside.
   defaultCostPct: string; // e.g. "100.00"
   defaultProfitPct: string; // e.g. "20.00"
+  // The floor for a day they attended. Null means no guarantee.
+  dailyMinimum: string | null;
   notes: string | null;
   isActive: boolean;
   itemCount?: number; // consigned items sourced from this partner

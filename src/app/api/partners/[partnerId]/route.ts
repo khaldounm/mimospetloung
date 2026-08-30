@@ -68,6 +68,9 @@ export async function PATCH(
         ...(data.defaultCostPct !== undefined
           ? { defaultCostPct: data.defaultCostPct }
           : {}),
+        ...(data.dailyMinimum !== undefined
+          ? { dailyMinimum: data.dailyMinimum }
+          : {}),
         ...(data.defaultProfitPct !== undefined
           ? { defaultProfitPct: data.defaultProfitPct }
           : {}),

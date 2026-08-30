@@ -111,6 +111,9 @@ export const lineItemCreateSchema = z
   .object({
     serviceId: optionalId,
     itemId: optionalId,
+    // Who performed this service, when it was not the partner the service
+    // names. Ignored on an item line, which nobody performs.
+    performedByPartnerId: optionalId,
     // Optional label/price overrides; default to the source name/price.
     description: optionalString(255),
     // Pack quantity. Optional only when looseQty is given instead, since the

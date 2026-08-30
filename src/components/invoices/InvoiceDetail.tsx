@@ -70,6 +70,9 @@ interface Props {
   itemOptions: ItemLineOption[];
   canWrite: boolean;
   canPay: boolean;
+  // Whether this user may see, and set, who performed a service line. Admin
+  // only, the same gate as the rest of a partner's deal.
+  canSeeDeal: boolean;
   // LBP per 1 USD. The invoice's own frozen rate once issued, the current
   // clinic setting while it is still a draft.
   fxRate: number;
@@ -99,6 +102,7 @@ export default function InvoiceDetail({
   itemOptions,
   canWrite,
   canPay,
+  canSeeDeal,
   fxRate,
 }: Props) {
   const [invoice, setInvoice] = useState(initialInvoice);
@@ -780,6 +784,7 @@ export default function InvoiceDetail({
         invoiceId={invoice.invoiceId}
         serviceOptions={serviceOptions}
         itemOptions={itemOptions}
+        canSeeDeal={canSeeDeal}
         onClose={() => setAddLineOpen(false)}
         onSaved={applyInvoice}
       />

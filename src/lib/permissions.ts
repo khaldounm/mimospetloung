@@ -29,6 +29,19 @@ export function canSeeCost(user: PermissionHolder | null | undefined): boolean {
   return hasPermission(user, COST_PERMISSION);
 }
 
+// Who may see a partner's cut. The rates ARE the clinic's margin on a service
+// (a 60% profit share says what the other 40% is), so they follow the same rule
+// as item cost: named in one place, stripped server-side, Admin only. Reusing
+// partners:read rather than minting a permission keeps it the same answer as
+// "may this person open the Partners module".
+export const PARTNER_DEAL_PERMISSION = "partners:read";
+
+export function canSeePartnerDeal(
+  user: PermissionHolder | null | undefined,
+): boolean {
+  return hasPermission(user, PARTNER_DEAL_PERMISSION);
+}
+
 export function hasAnyPermission(
   user: PermissionHolder | null | undefined,
   permissions: string[],
