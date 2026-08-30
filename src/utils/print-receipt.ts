@@ -85,28 +85,39 @@ function receiptHtml(invoice: InvoiceDTO): string {
   html, body { margin: 0; padding: 0; }
   body {
     width: ${RECEIPT_WIDTH_MM}mm;
-    font-family: "Courier New", monospace;
+    /* A thermal head is 203 DPI and one bit deep: it cannot lay down a thin
+       stroke, only decide whether each dot burns. Courier's hairlines fell
+       below that threshold and came out grey and broken. A sturdy sans at a
+       larger size gives the head solid runs to burn, which is the whole of why
+       the old till slips read cleanly and ours did not. */
+    font-family: Arial, Helvetica, sans-serif;
     color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .receipt {
-    padding: 6mm 4mm;
-    font-size: 12px;
-    line-height: 1.45;
+    padding: 4mm 3mm 6mm;
+    font-size: 13px;
+    line-height: 1.35;
   }
   .center { text-align: center; }
-  .name { font-size: 16px; font-weight: bold; }
+  .name { font-size: 20px; font-weight: 700; }
+  .addr { font-size: 12px; }
   .muted { color: #000; }
-  .sep { border-top: 1px dashed #000; margin: 6px 0; }
+  /* Solid, not dashed. A dashed rule is a row of isolated dots at this
+     resolution and half of them fail to register. */
+  .sep { border-top: 1px solid #000; margin: 2mm 0; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 1px 0; vertical-align: top; font-weight: normal; }
-  thead th { text-align: left; border-bottom: 1px dashed #000; padding-bottom: 3px; }
+  th, td { padding: 0.6mm 0; vertical-align: top; font-weight: normal; }
+  thead th { text-align: left; font-weight: 700; border-bottom: 1px solid #000; padding-bottom: 1mm; }
   .qty { width: 12%; }
   .desc { width: 46%; word-break: break-word; }
   .num { width: 21%; text-align: right; }
   th.num { text-align: right; }
+  .meta { font-weight: 700; }
   .totline { display: flex; justify-content: space-between; }
-  .totline.strong { font-weight: bold; font-size: 14px; margin-top: 4px; }
-  .foot { margin-top: 10px; text-align: center; }
+  .totline.strong { font-weight: 700; font-size: 15px; margin-top: 1mm; }
+  .foot { margin-top: 4mm; text-align: center; font-weight: 700; }
   .heart { color: #000; }
 </style>
 </head>
@@ -114,14 +125,16 @@ function receiptHtml(invoice: InvoiceDTO): string {
   <div class="receipt">
   <div class="center">
     <div class="name">${esc(CLINIC.name)}</div>
-    ${addr}
-    ${CLINIC.phone ? `<div>${esc(CLINIC.phone)}</div>` : ""}
-    ${CLINIC.website ? `<div>${esc(CLINIC.website)}</div>` : ""}
+    <div class="addr">
+      ${addr}
+      ${CLINIC.phone ? `<div>${esc(CLINIC.phone)}</div>` : ""}
+      ${CLINIC.website ? `<div>${esc(CLINIC.website)}</div>` : ""}
+    </div>
   </div>
 
   <div class="sep"></div>
   <div>${esc(stamp)}</div>
-  <div><strong>INVOICE# ${esc(invoice.number)}</strong></div>
+  <div class="meta">INVOICE# ${esc(invoice.number)}</div>
   <div>Bill to: ${esc(invoice.clientName)}</div>
 
   <div class="sep"></div>
