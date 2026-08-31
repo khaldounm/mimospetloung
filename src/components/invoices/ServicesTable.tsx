@@ -39,6 +39,18 @@ import ServiceFormDialog from "./ServiceFormDialog";
 //
 // Only the visible columns are allocated, so hiding Cost or Partner widens the
 // name instead of leaving a gap where the column used to be.
+//
+// Percentages of a phone-width table leave every column too narrow for what
+// goes in it, and a fixed layout does not grow to fit: it lets the contents
+// spill, which put the Edit buttons outside the card and clipped the status
+// chips to their first letter. Below this width the table keeps these
+// proportions and the page scrolls to it instead.
+//
+// 700 rather than a rounder 640: Status is 13% of it, and once cell padding is
+// taken off, anything narrower leaves the "Active" chip about two pixels short
+// and it renders as "Acti...".
+const SERVICES_MIN_WIDTH = 700;
+
 function serviceColumnWidths(opts: {
   cost: boolean;
   partner: boolean;
@@ -257,163 +269,190 @@ export default function ServicesTable({
           No services found.
         </Typography>
       ) : (
-        groups.map(({ category, services: group }) => {
-          const key = groupKey(category);
-          return (
-            <Accordion
-              key={key}
-              expanded={openKeys.has(key)}
-              onChange={(_e, isOpen) =>
-                setOpenKeys((prev) => {
-                  const next = new Set(prev);
-                  if (isOpen) next.add(key);
-                  else next.delete(key);
-                  return next;
-                })
-              }
-              disableGutters
-              elevation={0}
-              // Same as the analytics sections: eight of these nine categories
-              // are closed on load, and their tables were being built anyway.
-              slotProps={{ transition: { unmountOnExit: true } }}
-              sx={{
-                border: "1px solid",
-                borderColor: "divider",
-                "&:not(:last-child)": { borderBottom: 0 },
-                "&::before": { display: "none" },
-              }}
-            >
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack
-                  direction="row"
-                  spacing={1}
-                  sx={{ alignItems: "center" }}
-                >
-                  <Typography
+        // One scroller around every category, not one per table. The shared
+        // column percentages exist so the sections read as a single table down
+        // the page, and per-section scrollers would let them drift out of
+        // alignment the moment one was scrolled.
+        <Box sx={{ overflowX: "auto" }}>
+          {groups.map(({ category, services: group }) => {
+            const key = groupKey(category);
+            return (
+              <Accordion
+                key={key}
+                expanded={openKeys.has(key)}
+                onChange={(_e, isOpen) =>
+                  setOpenKeys((prev) => {
+                    const next = new Set(prev);
+                    if (isOpen) next.add(key);
+                    else next.delete(key);
+                    return next;
+                  })
+                }
+                disableGutters
+                elevation={0}
+                // Same as the analytics sections: eight of these nine categories
+                // are closed on load, and their tables were being built anyway.
+                slotProps={{ transition: { unmountOnExit: true } }}
+                sx={{
+                  border: "1px solid",
+                  borderColor: "divider",
+                  "&:not(:last-child)": { borderBottom: 0 },
+                  "&::before": { display: "none" },
+                  // The card grows with the table it holds. Without this it
+                  // stayed at the viewport width while the table inside it ran
+                  // to 700, so the right-hand columns sat outside their own
+                  // border with nothing framing them.
+                  minWidth: SERVICES_MIN_WIDTH,
+                }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  {/* Pinned to the left edge of the scroller, so scrolling out
+                      to the Status and Edit columns on a phone does not take
+                      the name of the category you are looking at with it. */}
+                  <Stack
+                    direction="row"
+                    spacing={1}
                     sx={{
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                      fontSize: "0.8rem",
-                      letterSpacing: 0.5,
+                      alignItems: "center",
+                      position: "sticky",
+                      left: 0,
                     }}
                   >
-                    {category ?? "Uncategorized"}
-                  </Typography>
-                  <Chip
-                    label={group.length}
+                    <Typography
+                      sx={{
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                        fontSize: "0.8rem",
+                        letterSpacing: 0.5,
+                      }}
+                    >
+                      {category ?? "Uncategorized"}
+                    </Typography>
+                    <Chip
+                      label={group.length}
+                      size="small"
+                      sx={{ height: 18, fontSize: "0.7rem" }}
+                    />
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails sx={{ p: 0 }}>
+                  <Table
                     size="small"
-                    sx={{ height: 18, fontSize: "0.7rem" }}
-                  />
-                </Stack>
-              </AccordionSummary>
-              <AccordionDetails sx={{ p: 0 }}>
-                <Table size="small" sx={{ tableLayout: "fixed" }}>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ width: cols.name }}>Name</TableCell>
-                      <TableCell align="right" sx={{ width: cols.price }}>
-                        Price
-                      </TableCell>
-                      {canSeeCost && (
-                        <TableCell align="right" sx={{ width: cols.cost }}>
-                          Cost
-                        </TableCell>
-                      )}
-                      {canSeeDeal && (
-                        <TableCell sx={{ width: cols.partner }}>
-                          Partner
-                        </TableCell>
-                      )}
-                      <TableCell sx={{ width: cols.status }}>Status</TableCell>
-                      {canWrite && (
-                        <TableCell align="right" sx={{ width: cols.edit }}>
-                          Edit
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {group.map((s) => (
-                      <TableRow key={s.serviceId} hover>
-                        <TableCell>{s.name}</TableCell>
-                        <TableCell align="right">
-                          {formatMoney(s.price)}
+                    sx={{ tableLayout: "fixed", minWidth: SERVICES_MIN_WIDTH }}
+                  >
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ width: cols.name }}>Name</TableCell>
+                        <TableCell align="right" sx={{ width: cols.price }}>
+                          Price
                         </TableCell>
                         {canSeeCost && (
-                          <TableCell align="right">
-                            {hasNoCostItem(s) ? (
-                              <Tooltip title="This service uses stock with no last cost, so it prices at $0.00 and any partner's cut is overstated. Set a cost on the item in Inventory.">
-                                <Stack
-                                  direction="row"
-                                  spacing={0.5}
-                                  sx={{
-                                    alignItems: "center",
-                                    justifyContent: "flex-end",
-                                  }}
-                                >
-                                  <WarningAmberIcon
-                                    fontSize="small"
-                                    color="error"
-                                  />
-                                  <Typography
-                                    variant="body2"
-                                    color="error.main"
-                                    sx={{ fontWeight: 700 }}
-                                  >
-                                    {formatMoney(s.costTotal)}
-                                  </Typography>
-                                </Stack>
-                              </Tooltip>
-                            ) : s.costTotal && Number(s.costTotal) > 0 ? (
-                              formatMoney(s.costTotal)
-                            ) : (
-                              <Typography
-                                variant="body2"
-                                color="text.secondary"
-                              >
-                                &mdash;
-                              </Typography>
-                            )}
+                          <TableCell align="right" sx={{ width: cols.cost }}>
+                            Cost
                           </TableCell>
                         )}
                         {canSeeDeal && (
-                          <TableCell>
-                            {s.partnerName ?? (
-                              <Typography
-                                variant="body2"
-                                color="text.secondary"
-                              >
-                                Clinic
-                              </Typography>
-                            )}
+                          <TableCell sx={{ width: cols.partner }}>
+                            Partner
                           </TableCell>
                         )}
-                        <TableCell>
-                          {s.isActive ? (
-                            <Chip size="small" color="success" label="Active" />
-                          ) : (
-                            <Chip size="small" label="Inactive" />
-                          )}
+                        <TableCell sx={{ width: cols.status }}>
+                          Status
                         </TableCell>
                         {canWrite && (
-                          <TableCell align="right">
-                            <IconButton
-                              size="small"
-                              aria-label="Edit service"
-                              onClick={() => openEdit(s)}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
+                          <TableCell align="right" sx={{ width: cols.edit }}>
+                            Edit
                           </TableCell>
                         )}
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </AccordionDetails>
-            </Accordion>
-          );
-        })
+                    </TableHead>
+                    <TableBody>
+                      {group.map((s) => (
+                        <TableRow key={s.serviceId} hover>
+                          <TableCell>{s.name}</TableCell>
+                          <TableCell align="right">
+                            {formatMoney(s.price)}
+                          </TableCell>
+                          {canSeeCost && (
+                            <TableCell align="right">
+                              {hasNoCostItem(s) ? (
+                                <Tooltip title="This service uses stock with no last cost, so it prices at $0.00 and any partner's cut is overstated. Set a cost on the item in Inventory.">
+                                  <Stack
+                                    direction="row"
+                                    spacing={0.5}
+                                    sx={{
+                                      alignItems: "center",
+                                      justifyContent: "flex-end",
+                                    }}
+                                  >
+                                    <WarningAmberIcon
+                                      fontSize="small"
+                                      color="error"
+                                    />
+                                    <Typography
+                                      variant="body2"
+                                      color="error.main"
+                                      sx={{ fontWeight: 700 }}
+                                    >
+                                      {formatMoney(s.costTotal)}
+                                    </Typography>
+                                  </Stack>
+                                </Tooltip>
+                              ) : s.costTotal && Number(s.costTotal) > 0 ? (
+                                formatMoney(s.costTotal)
+                              ) : (
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                >
+                                  &mdash;
+                                </Typography>
+                              )}
+                            </TableCell>
+                          )}
+                          {canSeeDeal && (
+                            <TableCell>
+                              {s.partnerName ?? (
+                                <Typography
+                                  variant="body2"
+                                  color="text.secondary"
+                                >
+                                  Clinic
+                                </Typography>
+                              )}
+                            </TableCell>
+                          )}
+                          <TableCell>
+                            {s.isActive ? (
+                              <Chip
+                                size="small"
+                                color="success"
+                                label="Active"
+                              />
+                            ) : (
+                              <Chip size="small" label="Inactive" />
+                            )}
+                          </TableCell>
+                          {canWrite && (
+                            <TableCell align="right">
+                              <IconButton
+                                size="small"
+                                aria-label="Edit service"
+                                onClick={() => openEdit(s)}
+                              >
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </AccordionDetails>
+              </Accordion>
+            );
+          })}
+        </Box>
       )}
 
       <ServiceFormDialog

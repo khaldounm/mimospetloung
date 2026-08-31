@@ -1166,3 +1166,66 @@ export interface RegisterClosingDTO {
   closedAt: string;
   payouts: RegisterPayoutDTO[];
 }
+
+// ---- Client statement (accounts receivable) ----
+
+// One item off an invoice, shown only in the detailed statement. Priced as the
+// customer was charged, so the figures add up to the invoice line above them.
+export interface ClientStatementItemDTO {
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  lineTotal: string;
+  // What the customer actually asked for on a loose line ("2 kg"), when the
+  // stocking quantity above would read as a fraction of a pack.
+  looseLabel: string | null;
+}
+
+export interface ClientStatementLineDTO {
+  // "opening" is the balance the account was opened with, a charge-side row
+  // dated whenever that balance was struck.
+  kind: "opening" | "invoice" | "payment";
+  date: string;
+  reference: string;
+  description: string;
+  charge: string; // "0.00" on a payment row
+  payment: string; // "0.00" on a charge row
+  balance: string; // running account balance after this row
+  href: string | null;
+  // Payment rows only: how it was settled, and the invoice it was applied to.
+  method: string | null;
+  appliedTo: string | null;
+  // Invoice rows only. Empty in the summary view, which never fetches them.
+  items: ClientStatementItemDTO[];
+}
+
+export interface ClientStatementDTO {
+  clinicName: string;
+  currency: string;
+  clientId: number;
+  clientName: string;
+  clientPhone: string | null;
+  clientEmail: string | null;
+  range: AnalyticsRange;
+  asAt: string; // the last day of the period, which balances are stated as at
+  generatedAt: string;
+  // What the account stood at the moment the period began: the balance carried
+  // in from the old system plus everything billed and paid before `from`.
+  broughtForward: string;
+  invoiced: string;
+  paid: string;
+  // broughtForward + invoiced - paid, derived from the lines below.
+  closingBalance: string;
+  // The figure stored on the client row, which is what the counter collects.
+  accountBalance: string;
+  // False when the documents on file do not account for the whole balance,
+  // which the old system's carried-forward figures make possible. Surfaced,
+  // never hidden, and never quietly papered over.
+  ties: boolean;
+  // closingBalance - accountBalance when they disagree, else "0.00".
+  unreconciled: string;
+  // The immutable dated row the account was opened with, when it has one. It is
+  // ALREADY inside accountBalance and is never added to it.
+  openingEntry: { amount: string; asOfDate: string } | null;
+  lines: ClientStatementLineDTO[];
+}

@@ -40,3 +40,13 @@ export type AccountPaymentCreateInput = z.infer<
 >;
 export type ClientCreateInput = z.infer<typeof clientCreateSchema>;
 export type ClientUpdateInput = z.infer<typeof clientUpdateSchema>;
+
+// Sending a client their statement. The period is optional: without it the
+// statement covers the whole account, which is the default the page opens on.
+// `detailed` decides whether every invoice is opened out into what was billed,
+// so the client receives the statement staff were actually looking at.
+export const clientStatementSendSchema = z.object({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  detailed: z.boolean().optional(),
+});

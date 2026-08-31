@@ -15,9 +15,11 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { apiRequest } from "@/utils/api-client";
 import { formatAccountBalance } from "@/utils/format";
 import AlphabetBar from "@/components/ui/AlphabetBar";
@@ -229,21 +231,10 @@ export default function ClientsTable({
                   <TableCell>{c.phone ?? "-"}</TableCell>
                   <TableCell>{c.email ?? "-"}</TableCell>
                   <TableCell align="right">
-                    {c.accountBalance != null &&
-                    Number(c.accountBalance) !== 0 ? (
-                      <Typography
-                        variant="body2"
-                        color={
-                          Number(c.accountBalance) > 0
-                            ? "warning.main"
-                            : "info.main"
-                        }
-                      >
-                        {formatAccountBalance(c.accountBalance).text}
-                      </Typography>
-                    ) : (
-                      "-"
-                    )}
+                    <BalanceCell
+                      clientId={c.clientId}
+                      balance={c.accountBalance}
+                    />
                   </TableCell>
                   <TableCell align="right">{c.patientCount ?? 0}</TableCell>
                 </TableRow>
@@ -267,5 +258,68 @@ export default function ClientsTable({
         onSaved={() => void load(query, letter, page, reviewOnly, balance)}
       />
     </Box>
+  );
+}
+
+// An unsettled balance is the one figure on this row somebody is going to ask
+// about, so it is the way through to the answer rather than a number to read
+// and then go hunting from. A settled account has nothing to explain and stays
+// a plain dash: making every row a button would bury the ones that matter.
+function BalanceCell({
+  clientId,
+  balance,
+}: {
+  clientId: number;
+  balance: string | null | undefined;
+}) {
+  if (balance == null || Number(balance) === 0) return <>-</>;
+
+  const owes = Number(balance) > 0;
+  const tone = owes ? "warning" : "info";
+
+  return (
+    <Tooltip title="Open the statement of account">
+      <Box
+        component={Link}
+        href={`/clients/${clientId}/statement`}
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          // One size for every row, with the chevron pinned to the right edge,
+          // so the column reads as a stack of identical buttons instead of a
+          // ragged one whose width tracks how much is owed. minWidth rather
+          // than width: an unusually long figure grows the pill rather than
+          // being clipped, and money is never worth truncating.
+          justifyContent: "space-between",
+          minWidth: 148,
+          minHeight: 34,
+          gap: 0.5,
+          pl: 1.5,
+          pr: 1,
+          borderRadius: 1,
+          border: 1.5,
+          borderColor: `${tone}.main`,
+          fontSize: 14,
+          fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
+          whiteSpace: "nowrap",
+          textDecoration: "none",
+          transition: "background-color 120ms, color 120ms",
+          // `:visited` is spelled out because CssBaseline styles `a, a:visited`
+          // with `color: inherit`, and that selector outranks a bare emotion
+          // class. Without it the pill dropped to plain ink the moment anyone
+          // had opened that client's statement once, so the colour said which
+          // rows had been looked at rather than which ones owed money.
+          "&, &:visited": { color: `${tone}.main` },
+          "&:hover, &:visited:hover": {
+            bgcolor: `${tone}.main`,
+            color: `${tone}.contrastText`,
+          },
+        }}
+      >
+        {formatAccountBalance(balance).text}
+        <ChevronRightIcon sx={{ fontSize: 18 }} />
+      </Box>
+    </Tooltip>
   );
 }

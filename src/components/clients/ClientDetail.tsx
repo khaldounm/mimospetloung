@@ -23,6 +23,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import PaymentsIcon from "@mui/icons-material/Payments";
+import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { apiRequest } from "@/utils/api-client";
@@ -96,6 +97,16 @@ export default function ClientDetail({
           {client.firstName} {client.lastName}
         </Typography>
         <Stack direction="row" spacing={1}>
+          {/* Always offered, not just when money is owed: a client asking what
+              they were charged for is as common as one asking what they owe. */}
+          <Button
+            component={Link}
+            href={`/clients/${client.clientId}/statement`}
+            variant="outlined"
+            startIcon={<ReceiptLongIcon />}
+          >
+            Statement
+          </Button>
           {canRecordAccountPayment && (
             <Button
               variant="contained"

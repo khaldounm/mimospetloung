@@ -1,6 +1,8 @@
 import { CLINIC } from "@/constants/clinic";
 import { formatMoney } from "@/utils/format";
+import { formatRangeLabel } from "@/utils/date-range";
 import type {
+  ClientStatementDTO,
   InvoiceDTO,
   MedicalRecordDTO,
   PurchaseOrderDTO,
@@ -92,4 +94,39 @@ export function medicalRecordFileName(record: MedicalRecordDTO): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
   return `medical-record-${slug || record.patient.patientId}.pdf`;
+}
+
+// Composes the WhatsApp message body (caption) sent to a client with their
+// statement PDF. The ledger itself stays in the attachment: a caption long
+// enough to list documents pushes the file off a phone screen. What is repeated
+// outside it is the one figure the message is about.
+export function clientStatementWhatsAppMessage(
+  statement: ClientStatementDTO,
+): string {
+  const owed = Number(statement.accountBalance);
+  const lines = [
+    `Hello ${statement.clientName},`,
+    "",
+    "Please find your statement of account attached.",
+    `Period: ${formatRangeLabel(statement.range)}`,
+  ];
+  if (owed > 0) {
+    lines.push(`Balance due: ${formatMoney(owed)}`);
+  } else if (owed < 0) {
+    lines.push(`Your account is in credit: ${formatMoney(Math.abs(owed))}`);
+  } else {
+    lines.push("Your account is fully settled. Thank you.");
+  }
+  lines.push("", "Thank you,", CLINIC.name);
+  return lines.join("\n");
+}
+
+// Filename the client sees on their phone: named for them and dated, so a
+// second statement sent later does not overwrite the first in their downloads.
+export function clientStatementFileName(statement: ClientStatementDTO): string {
+  const slug = statement.clientName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `statement-${slug || statement.clientId}-${statement.asAt}.pdf`;
 }
