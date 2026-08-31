@@ -64,6 +64,12 @@ function serviceColumnWidths(opts: {
 // same amount, so it is flagged in the list rather than only inside the form.
 // A component row can never have a zero quantity (the DB CHECK forbids it), so
 // a zero line cost on an item row means the item itself prices at nothing.
+// Uncategorised has no name to key on, so it gets a reserved one. Shared by the
+// accordion key and the open-sections state so the two cannot drift apart.
+function groupKey(category: string | null): string {
+  return category ?? "__none__";
+}
+
 function hasNoCostItem(s: ServiceDTO): boolean {
   return (s.costComponents ?? []).some(
     (c) => c.itemId != null && Number(c.lineCost) === 0,
@@ -160,6 +166,37 @@ export default function ServicesTable({
   }
 
   const groups = groupByCategory(services);
+
+  // Which sections are open, held here rather than left to each Accordion's own
+  // defaultExpanded. Two reasons:
+  //
+  //   1. defaultExpanded is read once, at mount. Deriving it from the filtered
+  //      groups meant it changed as soon as somebody typed in the search box,
+  //      which React cannot act on and MUI warns about.
+  //   2. A search whose only match sits in a collapsed section looks like no
+  //      match at all. Searching therefore opens everything, so a hit is
+  //      visible wherever it lands.
+  //
+  // Reconciled during render rather than in an effect, which is the documented
+  // way to adjust state when an input changes: no second paint, and no flash of
+  // the previous set.
+  const [openKeys, setOpenKeys] = useState<Set<string>>(
+    () => new Set(groups[0] ? [groupKey(groups[0].category)] : []),
+  );
+  const [lastQuery, setLastQuery] = useState(query);
+  if (lastQuery !== query) {
+    setLastQuery(query);
+    setOpenKeys(
+      new Set(
+        query.trim()
+          ? groups.map((g) => groupKey(g.category))
+          : groups[0]
+            ? [groupKey(groups[0].category)]
+            : [],
+      ),
+    );
+  }
+
   const cols = serviceColumnWidths({
     cost: canSeeCost,
     partner: canSeeDeal,
@@ -215,11 +252,19 @@ export default function ServicesTable({
         </Typography>
       ) : (
         groups.map(({ category, services: group }) => {
-          const key = category ?? "__none__";
+          const key = groupKey(category);
           return (
             <Accordion
               key={key}
-              defaultExpanded={category === groups[0]?.category}
+              expanded={openKeys.has(key)}
+              onChange={(_e, isOpen) =>
+                setOpenKeys((prev) => {
+                  const next = new Set(prev);
+                  if (isOpen) next.add(key);
+                  else next.delete(key);
+                  return next;
+                })
+              }
               disableGutters
               elevation={0}
               // Same as the analytics sections: eight of these nine categories
