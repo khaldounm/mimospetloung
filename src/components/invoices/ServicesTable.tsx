@@ -183,9 +183,15 @@ export default function ServicesTable({
   const [openKeys, setOpenKeys] = useState<Set<string>>(
     () => new Set(groups[0] ? [groupKey(groups[0].category)] : []),
   );
-  const [lastQuery, setLastQuery] = useState(query);
-  if (lastQuery !== query) {
-    setLastQuery(query);
+  // Keyed on the GROUPS, not on the query. The search box updates `query`
+  // immediately but the results arrive 300ms later, so reconciling on the query
+  // expanded the sections of the list being replaced and left the incoming
+  // matches shut. Reacting to the group set means this runs when the answer
+  // actually changes.
+  const groupSig = groups.map((g) => groupKey(g.category)).join("|");
+  const [lastSig, setLastSig] = useState(groupSig);
+  if (lastSig !== groupSig) {
+    setLastSig(groupSig);
     setOpenKeys(
       new Set(
         query.trim()
