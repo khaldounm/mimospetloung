@@ -32,7 +32,32 @@ import { RECORD_TYPES } from "@/types/enums";
 import type { ServiceDTO } from "@/types/entities";
 import ServiceFormDialog from "./ServiceFormDialog";
 
-const CATEGORY_ORDER = [...RECORD_TYPES, null] as (string | null)[];
+// Every category renders its own <Table>, and an auto layout sizes each one from
+// its own contents: Grooming's long names push its Price column right, and no
+// two groups line up down the page. Fixed percentages, shared by all of them,
+// make the sections read as one table rather than a stack of unrelated ones.
+//
+// Only the visible columns are allocated, so hiding Cost or Partner widens the
+// name instead of leaving a gap where the column used to be.
+function serviceColumnWidths(opts: {
+  cost: boolean;
+  partner: boolean;
+  edit: boolean;
+}) {
+  const price = 13;
+  const cost = opts.cost ? 13 : 0;
+  const partner = opts.partner ? 18 : 0;
+  const status = 13;
+  const edit = opts.edit ? 8 : 0;
+  return {
+    name: `${100 - price - cost - partner - status - edit}%`,
+    price: `${price}%`,
+    cost: `${cost}%`,
+    partner: `${partner}%`,
+    status: `${status}%`,
+    edit: `${edit}%`,
+  };
+}
 
 // A service whose recipe names stock that carries no last cost. Its cost is
 // understated, and where a partner performs it their cut is overstated by the
@@ -45,6 +70,16 @@ function hasNoCostItem(s: ServiceDTO): boolean {
   );
 }
 
+// Group the catalogue for display, showing EVERY category it actually has.
+//
+// This used to walk a fixed list of the four clinical record types, which
+// silently dropped any service categorised as anything else. On this clinic's
+// live data that hid 44 of 60 services, including every Diagnostics, Surgery,
+// Dental and Veterinary one, from the page whose whole job is to list them:
+// they could not be seen, searched or edited, and nothing said they existed.
+//
+// The record types still lead, since they are the categories the clinic thinks
+// in, and anything else follows alphabetically. Uncategorised sorts last.
 function groupByCategory(services: ServiceDTO[]) {
   const map = new Map<string | null, ServiceDTO[]>();
   for (const s of services) {
@@ -54,7 +89,16 @@ function groupByCategory(services: ServiceDTO[]) {
   }
   for (const arr of map.values())
     arr.sort((a, b) => a.name.localeCompare(b.name));
-  return CATEGORY_ORDER.filter((c) => map.has(c)).map((c) => ({
+
+  const known: (string | null)[] = RECORD_TYPES.filter((c) => map.has(c));
+  const rest = [...map.keys()]
+    .filter(
+      (c): c is string =>
+        c !== null && !(RECORD_TYPES as readonly string[]).includes(c),
+    )
+    .sort((a, b) => a.localeCompare(b));
+
+  return [...known, ...rest, ...(map.has(null) ? [null] : [])].map((c) => ({
     category: c,
     services: map.get(c)!,
   }));
@@ -116,6 +160,11 @@ export default function ServicesTable({
   }
 
   const groups = groupByCategory(services);
+  const cols = serviceColumnWidths({
+    cost: canSeeCost,
+    partner: canSeeDeal,
+    edit: canWrite,
+  });
 
   return (
     <Box>
@@ -170,7 +219,7 @@ export default function ServicesTable({
           return (
             <Accordion
               key={key}
-              defaultExpanded={category === RECORD_TYPES[0]}
+              defaultExpanded={category === groups[0]?.category}
               disableGutters
               elevation={0}
               // Same as the analytics sections: eight of these nine categories
@@ -207,15 +256,29 @@ export default function ServicesTable({
                 </Stack>
               </AccordionSummary>
               <AccordionDetails sx={{ p: 0 }}>
-                <Table size="small">
+                <Table size="small" sx={{ tableLayout: "fixed" }}>
                   <TableHead>
                     <TableRow>
-                      <TableCell>Name</TableCell>
-                      <TableCell align="right">Price</TableCell>
-                      {canSeeCost && <TableCell align="right">Cost</TableCell>}
-                      {canSeeDeal && <TableCell>Partner</TableCell>}
-                      <TableCell>Status</TableCell>
-                      {canWrite && <TableCell align="right">Edit</TableCell>}
+                      <TableCell sx={{ width: cols.name }}>Name</TableCell>
+                      <TableCell align="right" sx={{ width: cols.price }}>
+                        Price
+                      </TableCell>
+                      {canSeeCost && (
+                        <TableCell align="right" sx={{ width: cols.cost }}>
+                          Cost
+                        </TableCell>
+                      )}
+                      {canSeeDeal && (
+                        <TableCell sx={{ width: cols.partner }}>
+                          Partner
+                        </TableCell>
+                      )}
+                      <TableCell sx={{ width: cols.status }}>Status</TableCell>
+                      {canWrite && (
+                        <TableCell align="right" sx={{ width: cols.edit }}>
+                          Edit
+                        </TableCell>
+                      )}
                     </TableRow>
                   </TableHead>
                   <TableBody>
