@@ -421,6 +421,26 @@ export interface RoleOption {
   name: string;
 }
 
+// One row of the permission matrix: a module, and the catalogue permissions that
+// stand for reading and writing it. Either can be null, because not every module
+// has both halves (payments is write only, the audit log is read only).
+export interface PermissionMatrixRow {
+  module: string;
+  label: string;
+  hint?: string;
+  readPermission: string | null;
+  writePermission: string | null;
+}
+
+// The whole matrix in one payload: the columns, the rows, and which permissions
+// each role currently holds. Grants are keyed by roleId as a string, because a
+// JSON object cannot have numeric keys.
+export interface PermissionMatrixDTO {
+  roles: RoleOption[];
+  rows: PermissionMatrixRow[];
+  grants: Record<string, string[]>;
+}
+
 // An upcoming booking within the reminder window, with the status of its
 // reminder notification (if one has been created from the reminder template).
 export interface UpcomingBookingDTO {

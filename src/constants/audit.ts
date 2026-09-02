@@ -51,6 +51,9 @@ export const AUDIT_ENTITIES = [
   "purchase_order_line",
   "contact_message",
   "setting",
+  // A role's permission grants, changed from the matrix in Settings. entityId is
+  // the role, and the payload names the permission that moved.
+  "role",
   "register_closing",
   // The audit log recording its own pruning. The row survives the delete it
   // describes, because it is written afterwards.
@@ -84,6 +87,7 @@ export const AUDIT_ENTITY_LABELS: Record<AuditEntity, string> = {
   purchase_order_line: "Purchase order line",
   contact_message: "Website message",
   setting: "Clinic setting",
+  role: "Role permissions",
   register_closing: "Register close",
   audit_log: "Audit log",
 };
