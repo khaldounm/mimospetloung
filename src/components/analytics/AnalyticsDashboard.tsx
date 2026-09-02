@@ -11,15 +11,19 @@ import InventorySection from "./InventorySection";
 import BookingsSection from "./BookingsSection";
 import type { AnalyticsRange } from "@/types/entities";
 
-// Sectioned analytics: each section is a collapsible accordion. The flow sections
-// (Profitability, Purchases, Revenue, Bookings) carry their own date-range
-// calendar and re-query on demand; the snapshot sections (Clients, Inventory)
-// show current state. Profitability needs costs:read, Purchases needs
-// orders:read.
+// Sectioned analytics: each section is a collapsible accordion. Every section
+// carries its own date-range calendar and re-queries on demand; the figures that
+// are a position rather than a period (stock on hand, clients on file) are
+// labelled as such inside their section. Profitability needs costs:read,
+// Purchases needs orders:read.
 //
 // Every section fetches itself the first time it is opened. Nothing here is
 // computed at first paint: the page arrived with all seven already calculated,
 // which was 34 queries to fill accordions that were all closed.
+//
+// Clients starts on a year where the others start on the current month, because
+// its lapsed list is the question "who has not been in", and asked of a single
+// month the answer is very nearly every client on file.
 //
 // Inventory is half snapshot and half flow: stock levels are a position, while
 // the top-sellers and the per-item lookup are range-scoped and share the
@@ -37,11 +41,13 @@ import type { AnalyticsRange } from "@/types/entities";
 // the cash leaving. Neither figure belongs inside the other.
 export default function AnalyticsDashboard({
   defaultRange,
+  clientsRange,
   generatedAt,
   canSeeProfit,
   canSeePurchases,
 }: {
   defaultRange: AnalyticsRange;
+  clientsRange: AnalyticsRange;
   generatedAt: string;
   canSeeProfit: boolean;
   canSeePurchases: boolean;
@@ -52,7 +58,7 @@ export default function AnalyticsDashboard({
       {canSeePurchases && <PurchasesSection initialRange={defaultRange} />}
       <RevenueSection initialRange={defaultRange} />
       <CategoriesSection initialRange={defaultRange} />
-      <ClientsSection initialRange={defaultRange} />
+      <ClientsSection initialRange={clientsRange} />
       <InventorySection initialRange={defaultRange} />
       <BookingsSection initialRange={defaultRange} />
 

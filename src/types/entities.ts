@@ -525,14 +525,37 @@ export interface RevenueAnalytics {
   byService: NamedValue[]; // top services by billed revenue within the range
 }
 
+// One client on the top or lapsed list. Both lists carry the same fields so a
+// download reads the same whichever it came from; each table on screen shows
+// only the columns its own question needs.
+export interface ClientActivityRow {
+  clientId: number;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  invoices: number; // invoices issued to them inside the range
+  billed: number; // billed to them inside the range
+  lifetimeBilled: number; // billed to them ever, up to the range end
+  accountBalance: number; // positive means they owe the clinic
+  // "YYYY-MM-DD" of their last invoice or booking as at the range end, or null
+  // for a client who has never been billed and never had an appointment.
+  lastActivity: string | null;
+}
+
 export interface ClientsAnalytics {
-  totalActive: number;
-  newThisMonth: number;
-  lapsed: number; // active clients with no booking in the last 6 months
+  totalActive: number; // clients on file now, a snapshot rather than a period
+  newInPeriod: number; // clients added inside the range
+  lapsed: number; // active clients with no invoice and no booking in the range
   totalPatients: number;
   avgPatientsPerClient: number;
-  newTrend: NamedCount[]; // new clients per month, 12 months
+  newTrend: NamedCount[]; // new clients per bucket across the range
   speciesMix: NamedCount[]; // patient species distribution
+  // Null, rather than empty, for a reader who may see the analytics module but
+  // not client records. The counts above are aggregates and stay visible; these
+  // name people, so they follow patients:read.
+  topClients: ClientActivityRow[] | null; // highest billed in the range
+  lapsedClients: ClientActivityRow[] | null; // most recently seen first
+  tradingCount: number; // how many clients were billed anything in the range
 }
 
 export interface InventoryAnalytics {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Chip, Paper, Typography } from "@mui/material";
+import { Box, Chip, Paper, Stack, Typography } from "@mui/material";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { formatMoney } from "@/utils/format";
 import type { NamedCount, NamedValue } from "@/types/entities";
@@ -83,19 +83,29 @@ export function ChartCard({
   title,
   children,
   full,
+  // Sits at the right of the card heading, for a control that belongs to this
+  // card rather than to the section (a download icon, say).
+  action,
 }: {
   title: string;
   children: React.ReactNode;
   full?: boolean;
+  action?: React.ReactNode;
 }) {
   return (
     <Paper
       variant="outlined"
       sx={{ p: 2, gridColumn: full ? { md: "1 / -1" } : undefined }}
     >
-      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
-        {title}
-      </Typography>
+      <Stack
+        direction="row"
+        sx={{ alignItems: "center", justifyContent: "space-between", mb: 1 }}
+      >
+        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+          {title}
+        </Typography>
+        {action}
+      </Stack>
       {children}
     </Paper>
   );

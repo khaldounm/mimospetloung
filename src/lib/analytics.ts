@@ -3,6 +3,7 @@ import { BOOKING_STATUSES } from "@/types/enums";
 import {
   buildBuckets,
   bucketKeyOf,
+  formatLocalDate,
   pickGranularity,
   rangeBounds,
   dateOnlyBounds,
@@ -13,6 +14,8 @@ import {
 import {
   AD_HOC_LABEL,
   CATEGORY_GROUPS,
+  CLIENT_LIST_LIMIT,
+  COUNTER_SALE_LEGACY_CLIENT_ID,
   GROOMING_SERVICE_CATEGORY,
   ITEM_SEARCH_LIMIT,
   NON_TRADE_SERVICE_CATEGORIES,
@@ -20,7 +23,7 @@ import {
   UNCATEGORISED_LABEL,
   type CategoryGroupKey,
 } from "@/constants/analytics";
-import type { AnalyticsSection } from "@/schemas/analytics";
+import type { AnalyticsSection, ClientListKind } from "@/schemas/analytics";
 import type {
   AnalyticsRange,
   BookingsAnalytics,
@@ -28,6 +31,7 @@ import type {
   CategoryComparison,
   CategoryTrendGroup,
   CategoryTrendRow,
+  ClientActivityRow,
   ClientsAnalytics,
   InventoryAnalytics,
   ItemPerformanceDetail,
@@ -935,51 +939,221 @@ export async function searchAnalyticsItems(
   return items;
 }
 
-// ---- snapshot sections (not time-boxed) ----
+// ---- clients ----
 
-export async function getClientsSnapshot(): Promise<ClientsAnalytics> {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const twelveStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+// Booking statuses that never put the client in front of anyone. A cancellation
+// and a no-show are appointments that did not happen, so neither counts as a
+// visit and neither keeps a client off the lapsed list. Anything else does.
+const NON_VISIT_BOOKING_STATUSES = ["Cancelled", "No Show"];
 
-  const [
-    totalActive,
-    newThisMonth,
-    lapsed,
-    totalPatients,
-    newRows,
-    speciesGroups,
-  ] = await Promise.all([
-    prisma.client.count({ where: { deletedAt: null } }),
-    prisma.client.count({
-      where: { deletedAt: null, createdAt: { gte: monthStart } },
-    }),
-    prisma.client.count({
-      where: {
-        deletedAt: null,
-        bookings: { none: { startsAt: { gte: sixMonthsAgo } } },
-      },
-    }),
-    prisma.patient.count({ where: { deletedAt: null } }),
-    prisma.client.findMany({
-      where: { deletedAt: null, createdAt: { gte: twelveStart } },
-      select: { createdAt: true },
-    }),
-    prisma.patient.groupBy({
-      by: ["species"],
-      where: { deletedAt: null },
-      _count: { _all: true },
-      orderBy: { _count: { species: "desc" } },
-    }),
-  ]);
+// The top and lapsed lists in full, before the section trims them to a page.
+interface ClientLists {
+  top: ClientActivityRow[];
+  lapsed: ClientActivityRow[];
+}
 
-  const buckets = buildBuckets(twelveStart, nextMonth, "month");
+// Both client lists come out of one pass, because they are the same question
+// asked from either end: who traded in this window, and who did not.
+//
+// Activity means an issued invoice or an attended booking. Reading bookings
+// alone, which is what the lapsed count used to do, marks very nearly the whole
+// book lapsed: this clinic sells over the counter, and the imported history
+// carries thousands of invoices with no appointment behind them.
+//
+// Everything is measured as at the range end, so a client added after it is not
+// reported as having gone quiet during a window they did not exist in.
+async function buildClientLists(range: AnalyticsRange): Promise<ClientLists> {
+  const { from, toExclusive } = rangeBounds(range);
+
+  const [clients, periodBilling, lifetimeBilling, lastBookings] =
+    await Promise.all([
+      prisma.client.findMany({
+        where: {
+          deletedAt: null,
+          createdAt: { lt: toExclusive },
+          // Spelled as an OR because `legacyId: { not: n }` compiles to
+          // `legacy_id <> n`, which is NULL, and so false, for every client
+          // created in this app rather than imported. That silently drops them
+          // from both lists.
+          OR: [
+            { legacyId: null },
+            { legacyId: { not: COUNTER_SALE_LEGACY_CLIENT_ID } },
+          ],
+        },
+        select: {
+          clientId: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          phone2: true,
+          email: true,
+          accountBalance: true,
+        },
+      }),
+      prisma.invoice.groupBy({
+        by: ["clientId"],
+        // A walk-in belongs to no account, so it can neither top the list nor
+        // fall off it.
+        where: {
+          clientId: { not: null },
+          ...tradedInvoiceFilter(from, toExclusive),
+        },
+        _sum: { total: true },
+        _count: { _all: true },
+      }),
+      // Lifetime rather than in-period: it is what dates the last visit, and on
+      // the lapsed list it is what says whether the client walking away was
+      // worth chasing.
+      prisma.invoice.groupBy({
+        by: ["clientId"],
+        where: {
+          clientId: { not: null },
+          status: { in: REVENUE_STATUSES },
+          issuedAt: { lt: toExclusive },
+        },
+        _sum: { total: true },
+        _max: { issuedAt: true },
+      }),
+      prisma.booking.groupBy({
+        by: ["clientId"],
+        where: {
+          status: { notIn: NON_VISIT_BOOKING_STATUSES },
+          startsAt: { lt: toExclusive },
+        },
+        _max: { startsAt: true },
+      }),
+    ]);
+
+  const period = new Map(
+    periodBilling.flatMap((g) =>
+      g.clientId === null
+        ? []
+        : [
+            [
+              g.clientId,
+              {
+                billed: g._sum.total?.toNumber() ?? 0,
+                invoices: g._count._all,
+              },
+            ] as const,
+          ],
+    ),
+  );
+  const lifetime = new Map(
+    lifetimeBilling.flatMap((g) =>
+      g.clientId === null
+        ? []
+        : [
+            [
+              g.clientId,
+              {
+                billed: g._sum.total?.toNumber() ?? 0,
+                lastAt: g._max.issuedAt,
+              },
+            ] as const,
+          ],
+    ),
+  );
+  const lastBooking = new Map(
+    lastBookings.map((g) => [g.clientId, g._max.startsAt] as const),
+  );
+
+  const top: ClientActivityRow[] = [];
+  const lapsed: ClientActivityRow[] = [];
+
+  for (const c of clients) {
+    const traded = period.get(c.clientId);
+    const ever = lifetime.get(c.clientId);
+    const booked = lastBooking.get(c.clientId) ?? null;
+    const invoiced = ever?.lastAt ?? null;
+    // The later of the two, and null only for a client who has never been
+    // billed and never had an appointment.
+    const seenAt =
+      invoiced && booked
+        ? invoiced > booked
+          ? invoiced
+          : booked
+        : (invoiced ?? booked);
+
+    const row: ClientActivityRow = {
+      clientId: c.clientId,
+      name: `${c.firstName} ${c.lastName}`.trim(),
+      // Falls back to the second number: for many imported clients that is the
+      // one that actually reaches them.
+      phone: c.phone ?? c.phone2 ?? null,
+      email: c.email,
+      invoices: traded?.invoices ?? 0,
+      billed: round2(traded?.billed ?? 0),
+      lifetimeBilled: round2(ever?.billed ?? 0),
+      accountBalance: c.accountBalance.toNumber(),
+      lastActivity: seenAt ? formatLocalDate(seenAt) : null,
+    };
+
+    if (traded) top.push(row);
+    // Nothing seen inside the window. Both halves of seenAt are capped at the
+    // range end, so "before the window opened" is the whole of it.
+    if (!seenAt || seenAt < from) lapsed.push(row);
+  }
+
+  top.sort(
+    (a, b) =>
+      b.billed - a.billed ||
+      b.invoices - a.invoices ||
+      a.name.localeCompare(b.name),
+  );
+  // Most recently seen first: the freshest lapses are the ones still worth a
+  // phone call, and the client who has never been in at all goes last.
+  lapsed.sort(
+    (a, b) =>
+      (b.lastActivity ?? "").localeCompare(a.lastActivity ?? "") ||
+      a.name.localeCompare(b.name),
+  );
+
+  return { top, lapsed };
+}
+
+// One client list in full, for the download. The table on screen shows a page
+// of the same list, so the file is never a different answer to the same
+// question, only a longer one.
+export async function getClientListExport(
+  list: ClientListKind,
+  range: AnalyticsRange,
+): Promise<ClientActivityRow[]> {
+  const lists = await buildClientLists(range);
+  return list === "top" ? lists.top : lists.lapsed;
+}
+
+// Clients and patients over a window. The head-count figures (clients on file,
+// patients, patients per client) are a position and stay a snapshot of right
+// now; everything else follows the range picked at the top of the section.
+async function getClientsSection(
+  range: AnalyticsRange,
+): Promise<ClientsAnalytics> {
+  const { from, toExclusive, granularity, buckets } = prepare(range);
+
+  const [totalActive, totalPatients, newRows, speciesGroups, lists] =
+    await Promise.all([
+      prisma.client.count({ where: { deletedAt: null } }),
+      prisma.patient.count({ where: { deletedAt: null } }),
+      prisma.client.findMany({
+        where: {
+          deletedAt: null,
+          createdAt: { gte: from, lt: toExclusive },
+        },
+        select: { createdAt: true },
+      }),
+      prisma.patient.groupBy({
+        by: ["species"],
+        where: { deletedAt: null },
+        _count: { _all: true },
+        orderBy: { _count: { species: "desc" } },
+      }),
+      buildClientLists(range),
+    ]);
+
   const newMap = zeroMap(buckets);
   for (const row of newRows) {
-    addTo(newMap, bucketKeyOf(row.createdAt, "month"), 1);
+    addTo(newMap, bucketKeyOf(row.createdAt, granularity), 1);
   }
   const newTrend: NamedCount[] = buckets.map((b) => ({
     label: b.label,
@@ -992,15 +1166,20 @@ export async function getClientsSnapshot(): Promise<ClientsAnalytics> {
 
   return {
     totalActive,
-    newThisMonth,
-    lapsed,
+    newInPeriod: newRows.length,
+    lapsed: lists.lapsed.length,
     totalPatients,
     avgPatientsPerClient:
       totalActive > 0 ? round2(totalPatients / totalActive) : 0,
     newTrend,
     speciesMix,
+    topClients: lists.top.slice(0, CLIENT_LIST_LIMIT),
+    lapsedClients: lists.lapsed.slice(0, CLIENT_LIST_LIMIT),
+    tradingCount: lists.top.length,
   };
 }
+
+// ---- snapshot sections (not time-boxed) ----
 
 // Stock as it stands right now: levels, valuation and warnings, none of which
 // are a flow and so none of which take a date range. What sold is a flow, and
@@ -1308,6 +1487,7 @@ export function getAnalyticsSection(
   | BookingsAnalytics
   | CategoriesAnalytics
   | ItemsAnalytics
+  | ClientsAnalytics
 > {
   switch (section) {
     case "revenue":
@@ -1322,5 +1502,7 @@ export function getAnalyticsSection(
       return getCategoriesSection(range);
     case "items":
       return getItemsSection(range);
+    case "clients":
+      return getClientsSection(range);
   }
 }

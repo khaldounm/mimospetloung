@@ -3,7 +3,8 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
-import { defaultRange } from "@/utils/date-range";
+import { defaultRange, resolvePreset } from "@/utils/date-range";
+import { CLIENTS_DEFAULT_PRESET_ID } from "@/constants/analytics";
 import AnalyticsDashboard from "@/components/analytics/AnalyticsDashboard";
 import AnalyticsGuide from "@/components/analytics/AnalyticsGuide";
 
@@ -18,6 +19,10 @@ export default async function AnalyticsPage() {
   const includePurchases = hasPermission(session?.user, "orders:read");
   // No figures are computed here. Each section fetches its own the first time
   // someone opens it, which for most visits is none of them.
+  //
+  // Ranges are resolved on the server and passed down, so a section starts on
+  // the same dates the markup was rendered with rather than on whatever the
+  // browser's clock says a moment later.
 
   return (
     <Box>
@@ -30,12 +35,13 @@ export default async function AnalyticsPage() {
         <AnalyticsGuide />
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Expand a section to explore it. Profitability, purchases, revenue,
-        category performance, inventory and bookings each have their own date
-        range with quick presets; clients shows the current snapshot.
+        Expand a section to explore it. Every section has its own date range
+        with quick presets, so one can be read over a year while another stays
+        on this month.
       </Typography>
       <AnalyticsDashboard
         defaultRange={defaultRange()}
+        clientsRange={resolvePreset(CLIENTS_DEFAULT_PRESET_ID)!}
         generatedAt={new Date().toISOString()}
         canSeeProfit={includeProfit}
         canSeePurchases={includePurchases}

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // The analytics sections that can be re-queried for a custom date range. The
-// snapshot sections (clients, inventory) are not time-boxed and so are not here.
+// snapshot section (inventory) is not time-boxed and so is not here.
 export const ANALYTICS_SECTIONS = [
   "revenue",
   "profit",
@@ -9,6 +9,7 @@ export const ANALYTICS_SECTIONS = [
   "bookings",
   "categories",
   "items",
+  "clients",
 ] as const;
 export type AnalyticsSection = (typeof ANALYTICS_SECTIONS)[number];
 
@@ -19,14 +20,14 @@ const dateString = z
 // The sections that are a position rather than a period. They take no range,
 // and since every section is now fetched when it is opened rather than computed
 // at first paint, they need a route of their own to arrive through.
-export const ANALYTICS_SNAPSHOTS = ["clients", "inventory"] as const;
+export const ANALYTICS_SNAPSHOTS = ["inventory"] as const;
 export type AnalyticsSnapshot = (typeof ANALYTICS_SNAPSHOTS)[number];
 
 export type AnalyticsPanel = AnalyticsSection | AnalyticsSnapshot;
 
 // Validates the /api/analytics query. A boxable section must carry an inclusive,
 // correctly-ordered range; a snapshot must not be given one, which is what
-// keeps "the clients section for last March" from looking like a real request.
+// keeps "the inventory section for last March" from looking like a real request.
 export const analyticsPanelQuerySchema = z.union([
   z
     .object({
@@ -66,3 +67,25 @@ export const itemSearchQuerySchema = z.object({
 });
 
 export type ItemSearchQuery = z.infer<typeof itemSearchQuerySchema>;
+
+// The two client lists the clients section builds, and which of them a download
+// is asking for. They are the same question from either end: who traded in this
+// window, and who did not.
+export const CLIENT_LISTS = ["top", "lapsed"] as const;
+export type ClientListKind = (typeof CLIENT_LISTS)[number];
+
+// Validates a client-list download. It carries the range the section was set to
+// when the icon was clicked, so the file and the table on screen always describe
+// the same window.
+export const clientListExportQuerySchema = z
+  .object({
+    list: z.enum(CLIENT_LISTS),
+    from: dateString,
+    to: dateString,
+  })
+  .refine((d) => d.from <= d.to, {
+    message: "from must be on or before to",
+    path: ["from"],
+  });
+
+export type ClientListExportQuery = z.infer<typeof clientListExportQuerySchema>;

@@ -1,8 +1,21 @@
 "use client";
 
+import Link from "next/link";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { PieChart } from "@mui/x-charts/PieChart";
 import { useAnalyticsSection } from "@/hooks/useAnalyticsSection";
+import { formatDate } from "@/utils/format";
+import { formatRangeLabel, rangeSummary } from "@/utils/date-range";
+import DateRangeControl from "@/components/ui/DateRangeControl";
+import DownloadCsvButton from "@/components/ui/DownloadCsvButton";
 import AnalyticsSection from "./AnalyticsSection";
 import {
   CHART_HEIGHT,
@@ -12,38 +25,269 @@ import {
   KpiCard,
   KpiGrid,
   SectionPlaceholder,
+  money,
   toPieData,
 } from "./AnalyticsPrimitives";
-import type { AnalyticsRange, ClientsAnalytics } from "@/types/entities";
+import type {
+  AnalyticsRange,
+  ClientActivityRow,
+  ClientsAnalytics,
+} from "@/types/entities";
+import type { ClientListKind } from "@/schemas/analytics";
 
-// Clients & patients are point-in-time counts, so this section is a current
-// snapshot rather than time-boxed. The new-clients chart shows the last 12 months
-// for context.
+// The day a client was last seen. One who has never been billed and never had
+// an appointment is told so, rather than shown a blank cell that reads as
+// missing data instead of as a fact.
+function LastActivity({ date }: { date: string | null }) {
+  if (!date) {
+    return (
+      <Typography variant="body2" color="text.secondary" component="span">
+        Never
+      </Typography>
+    );
+  }
+  return <>{formatDate(date)}</>;
+}
+
+// A client's name, linked to their record. Every one of these lists is read in
+// order to go and do something about one of the rows.
+function ClientLink({ row }: { row: ClientActivityRow }) {
+  return (
+    <Link
+      href={`/clients/${row.clientId}`}
+      style={{ color: "inherit", textDecoration: "none" }}
+    >
+      {row.name || `Client ${row.clientId}`}
+    </Link>
+  );
+}
+
+// Under each table: what is on screen against what the file holds, so nobody
+// reads ten rows as the whole answer.
+function ListFooter({ shown, total }: { shown: number; total: number }) {
+  if (total === 0) return null;
+  return (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      sx={{ display: "block", mt: 1 }}
+    >
+      {shown < total
+        ? `Showing ${shown} of ${total}. Download for the full list.`
+        : `${total} client${total === 1 ? "" : "s"}.`}
+    </Typography>
+  );
+}
+
+function EmptyRow({ span, children }: { span: number; children: string }) {
+  return (
+    <TableRow>
+      <TableCell colSpan={span}>
+        <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
+          {children}
+        </Typography>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+// The download icon on a list card. The file is built by the server for the
+// dates on screen, so it holds every row rather than the page above it.
+function ListDownload({
+  list,
+  range,
+  title,
+  empty,
+}: {
+  list: ClientListKind;
+  range: AnalyticsRange;
+  title: string;
+  empty: boolean;
+}) {
+  const query = new URLSearchParams({ list, from: range.from, to: range.to });
+  return (
+    <DownloadCsvButton
+      url={`/api/analytics/clients/export?${query.toString()}`}
+      filename={`${list}-clients-${range.from}-to-${range.to}.csv`}
+      title={title}
+      disabled={empty}
+    />
+  );
+}
+
+// Who spent the most over the dates the section is set to. Walk-ins are absent
+// by construction: a counter sale belongs to no account.
+function TopClientsCard({
+  rows,
+  total,
+  range,
+}: {
+  rows: ClientActivityRow[];
+  total: number;
+  range: AnalyticsRange;
+}) {
+  return (
+    <ChartCard
+      title="Top clients"
+      full
+      action={
+        <ListDownload
+          list="top"
+          range={range}
+          title="Download every client billed in these dates"
+          empty={total === 0}
+        />
+      }
+    >
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Client</TableCell>
+            <TableCell>Phone</TableCell>
+            <TableCell align="right">Invoices</TableCell>
+            <TableCell align="right">Billed</TableCell>
+            <TableCell align="right">Last activity</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.length === 0 ? (
+            <EmptyRow span={5}>Nobody was billed in these dates.</EmptyRow>
+          ) : (
+            rows.map((row) => (
+              <TableRow key={row.clientId} hover>
+                <TableCell>
+                  <ClientLink row={row} />
+                </TableCell>
+                <TableCell>{row.phone ?? "-"}</TableCell>
+                <TableCell align="right">{row.invoices}</TableCell>
+                <TableCell align="right">{money(row.billed)}</TableCell>
+                <TableCell align="right">
+                  <LastActivity date={row.lastActivity} />
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      <ListFooter shown={rows.length} total={total} />
+    </ChartCard>
+  );
+}
+
+// Who was not seen at all over those dates. The recall list: most recently seen
+// first, because the freshest lapses are the ones still worth a phone call.
+function LapsedClientsCard({
+  rows,
+  total,
+  range,
+}: {
+  rows: ClientActivityRow[];
+  total: number;
+  range: AnalyticsRange;
+}) {
+  return (
+    <ChartCard
+      title="Lapsed clients"
+      full
+      action={
+        <ListDownload
+          list="lapsed"
+          range={range}
+          title="Download every client not seen in these dates"
+          empty={total === 0}
+        />
+      }
+    >
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        On file, with no invoice and no appointment between{" "}
+        {formatRangeLabel(range)}. Most recently seen first. Lifetime billed is
+        everything they have ever been charged, so the list can be worked from
+        the top or by what the clinic stands to lose.
+      </Typography>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Client</TableCell>
+            <TableCell>Phone</TableCell>
+            <TableCell align="right">Last activity</TableCell>
+            <TableCell align="right">Lifetime billed</TableCell>
+            <TableCell align="right">Balance</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.length === 0 ? (
+            <EmptyRow span={5}>
+              Every client on file was seen in these dates.
+            </EmptyRow>
+          ) : (
+            rows.map((row) => (
+              <TableRow key={row.clientId} hover>
+                <TableCell>
+                  <ClientLink row={row} />
+                </TableCell>
+                <TableCell>{row.phone ?? "-"}</TableCell>
+                <TableCell align="right">
+                  <LastActivity date={row.lastActivity} />
+                </TableCell>
+                <TableCell align="right">{money(row.lifetimeBilled)}</TableCell>
+                <TableCell align="right">{money(row.accountBalance)}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      <ListFooter shown={rows.length} total={total} />
+    </ChartCard>
+  );
+}
+
+// Clients and patients.
+//
+// The head-count figures are a position and stay a snapshot of right now: how
+// many clients are on file, how many animals, and how many animals each. What
+// happened to those clients is a flow, so the two lists, the lapsed count and
+// the new-clients trend all follow the dates picked at the top of the section.
+//
+// The section opens on a year rather than on the current month. "Who has not
+// been in this month" is very nearly the entire client book, and a recall list
+// that long is not a list.
+//
+// The lists arrive null for a reader allowed into analytics but not into client
+// records, in which case the counts are shown without the names behind them.
 export default function ClientsSection({
   initialRange,
 }: {
-  // Unused for the figures, which are a position rather than a period. Taken so
-  // every section is constructed the same way.
   initialRange: AnalyticsRange;
 }) {
-  const { data, loading, error, load } = useAnalyticsSection<ClientsAnalytics>(
-    "clients",
-    initialRange,
-  );
+  const { range, data, loading, error, setRange, load } =
+    useAnalyticsSection<ClientsAnalytics>("clients", initialRange);
 
   return (
     <AnalyticsSection
       title="Clients & patients"
-      subtitle="Current snapshot"
+      subtitle={`Head count now, activity ${rangeSummary(range).toLowerCase()}`}
       loading={loading}
       onExpand={load}
+      controls={<DateRangeControl range={range} onChange={setRange} />}
     >
       {data ? (
         <>
           <KpiGrid>
-            <KpiCard label="Active clients" value={String(data.totalActive)} />
-            <KpiCard label="New this month" value={String(data.newThisMonth)} />
-            <KpiCard label="Lapsed (6 mo)" value={String(data.lapsed)} />
+            <KpiCard
+              label="Active clients"
+              value={String(data.totalActive)}
+              hint="On file today"
+            />
+            <KpiCard
+              label="New in period"
+              value={String(data.newInPeriod)}
+              hint={formatRangeLabel(range)}
+            />
+            <KpiCard
+              label="Lapsed"
+              value={String(data.lapsed)}
+              hint="No visit in this period"
+            />
             <KpiCard
               label="Total patients"
               value={String(data.totalPatients)}
@@ -53,8 +297,9 @@ export default function ClientsSection({
               value={String(data.avgPatientsPerClient)}
             />
           </KpiGrid>
+
           <ChartGrid>
-            <ChartCard title="New clients (12 months)">
+            <ChartCard title="New clients">
               <BarChart
                 height={CHART_HEIGHT}
                 xAxis={[
@@ -71,6 +316,7 @@ export default function ClientsSection({
                 ]}
               />
             </ChartCard>
+
             <ChartCard title="Patients by species">
               {data.speciesMix.length > 0 ? (
                 <PieChart
@@ -81,6 +327,22 @@ export default function ClientsSection({
                 <EmptyChart />
               )}
             </ChartCard>
+
+            {data.topClients && (
+              <TopClientsCard
+                rows={data.topClients}
+                total={data.tradingCount}
+                range={range}
+              />
+            )}
+
+            {data.lapsedClients && (
+              <LapsedClientsCard
+                rows={data.lapsedClients}
+                total={data.lapsed}
+                range={range}
+              />
+            )}
           </ChartGrid>
         </>
       ) : (

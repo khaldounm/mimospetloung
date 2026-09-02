@@ -1,12 +1,9 @@
 import { NextResponse } from "next/server";
 import { ApiError, handle, requirePermission } from "@/lib/api";
 import { hasPermission } from "@/lib/permissions";
-import {
-  getAnalyticsSection,
-  getClientsSnapshot,
-  getInventorySnapshot,
-} from "@/lib/analytics";
+import { getAnalyticsSection, getInventorySnapshot } from "@/lib/analytics";
 import { analyticsPanelQuerySchema } from "@/schemas/analytics";
+import type { ClientsAnalytics } from "@/types/entities";
 
 // Serves one analytics section. The dashboard calls this the first time a
 // section is expanded, and again whenever the user changes its date range.
@@ -54,15 +51,31 @@ export async function GET(request: Request) {
     // The absence of a range is what tells the two apart, and it is also how
     // the parse discriminated them.
     if (!("from" in query)) {
-      const data =
-        query.section === "clients"
-          ? await getClientsSnapshot()
-          : await getInventorySnapshot();
+      const data = await getInventorySnapshot();
       return NextResponse.json({ section: query.section, data });
     }
 
     const range = { from: query.from, to: query.to };
     const data = await getAnalyticsSection(query.section, range);
+
+    // The clients section counts anyone, but its two lists name them and carry
+    // their phone number, email and balance. Those are client records, so they
+    // follow the permission client records follow everywhere else. The counts
+    // are aggregates and stay: they are the same figures this section has always
+    // shown. Stripped here rather than in the component, so nothing that is not
+    // allowed on the screen is sent to the browser in the first place.
+    if (
+      query.section === "clients" &&
+      !hasPermission(session.user, "patients:read")
+    ) {
+      const clients = data as ClientsAnalytics;
+      return NextResponse.json({
+        section: query.section,
+        range,
+        data: { ...clients, topClients: null, lapsedClients: null },
+      });
+    }
+
     return NextResponse.json({ section: query.section, range, data });
   });
 }

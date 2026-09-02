@@ -189,11 +189,37 @@ export default function AnalyticsGuide() {
 
             <Section title="Clients & patients">
               <Term label="Active clients">
-                Clients on file who are not archived.
+                Clients on file who are not archived. A head count of right now,
+                not of the dates picked at the top of the section.
               </Term>
-              <Term label="New this month / Lapsed (6 mo)">
-                Clients added this month, and clients with no visit in the last
-                six months.
+              <Term label="New in period">
+                Clients added between the dates picked at the top of the
+                section.
+              </Term>
+              <Term label="Lapsed">
+                Clients on file with no invoice and no appointment between those
+                dates. Change the dates to change what counts as gone quiet: a
+                year asks who has stopped coming, a month asks who has not been
+                in lately.
+              </Term>
+              <Term label="Last activity">
+                The day a client was last billed or last had an appointment,
+                whichever came later. Cancellations and no-shows do not count,
+                because neither one put the animal in front of anyone.
+              </Term>
+              <Term label="Top clients">
+                Ranked by what they were billed between those dates. Walk-ins
+                are left out: a counter sale belongs to no account.
+              </Term>
+              <Term label="Lifetime billed">
+                Everything a client has ever been charged, up to the end of the
+                dates picked. On the lapsed list it is what says whether the
+                client walking away is worth a phone call.
+              </Term>
+              <Term label="Download">
+                The icon on either list saves it as a spreadsheet for the dates
+                on screen. The table shows the first ten; the file holds every
+                row.
               </Term>
               <Term label="Total patients">
                 Animals registered across all clients.
