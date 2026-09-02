@@ -32,7 +32,10 @@ export default auth((req) => {
     return NextResponse.next();
   }
 
-  const isAuthPage = path === "/login" || path === "/reset-password";
+  // Only the sign-in screen is reachable signed out. /reset-password is no
+  // longer one of these: it is now the signed-in "change my password" page, so
+  // reaching it without a session should bounce to login like any other page.
+  const isAuthPage = path === "/login";
 
   if (!isLoggedIn) {
     if (isAuthPage) return NextResponse.next();

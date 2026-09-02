@@ -41,10 +41,15 @@ import ShoppingCartIcon from "@mui/icons-material/ShoppingCart";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
+import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { NAV_MODULES, hasPermission } from "@/lib/permissions";
 import { useColorMode } from "./ThemeRegistry";
 import { navTokens } from "./theme";
+
+// Your own account page. Not in NAV_MODULES: it has no permission of its own
+// and belongs to everyone, so it hangs off the name in the footer instead.
+const ACCOUNT_HREF = "/reset-password";
 
 const DRAWER_WIDTH = 240;
 const COLLAPSED_WIDTH = 64;
@@ -274,6 +279,22 @@ export default function DashboardShell({
             {mini ? (
               <Stack spacing={1} sx={{ alignItems: "center" }}>
                 <Tooltip
+                  title={`${displayName} — change password`}
+                  placement="right"
+                >
+                  <IconButton
+                    component={Link}
+                    href={ACCOUNT_HREF}
+                    aria-label="Your account"
+                    sx={{
+                      color:
+                        pathname === ACCOUNT_HREF ? nav.text : nav.textMuted,
+                    }}
+                  >
+                    <AccountCircleIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip
                   title={mode === "light" ? "Dark mode" : "Light mode"}
                   placement="right"
                 >
@@ -297,18 +318,56 @@ export default function DashboardShell({
               </Stack>
             ) : (
               <>
-                <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
-                  {displayName}
-                </Typography>
-                {roleName && (
-                  <Typography
-                    variant="caption"
-                    noWrap
-                    sx={{ display: "block", color: nav.textMuted }}
+                {/* The name is the way in to your own account: there is no
+                    module for it in the nav, and every role has one. */}
+                <Tooltip title="Your account" placement="right">
+                  <Box
+                    component={Link}
+                    href={ACCOUNT_HREF}
+                    onClick={() => setMobileOpen(false)}
+                    sx={{
+                      display: "block",
+                      textDecoration: "none",
+                      color: "inherit",
+                      borderRadius: 1,
+                      px: 1,
+                      py: 0.5,
+                      mx: -1,
+                      backgroundColor:
+                        pathname === ACCOUNT_HREF ? nav.hoverBg : "transparent",
+                      "&:hover": { backgroundColor: nav.hoverBg },
+                    }}
                   >
-                    {roleName}
-                  </Typography>
-                )}
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      sx={{ alignItems: "center", minWidth: 0 }}
+                    >
+                      <AccountCircleIcon
+                        fontSize="small"
+                        sx={{ color: nav.textMuted, flexShrink: 0 }}
+                      />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography
+                          variant="body2"
+                          noWrap
+                          sx={{ fontWeight: 600 }}
+                        >
+                          {displayName}
+                        </Typography>
+                        {roleName && (
+                          <Typography
+                            variant="caption"
+                            noWrap
+                            sx={{ display: "block", color: nav.textMuted }}
+                          >
+                            {roleName}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Stack>
+                  </Box>
+                </Tooltip>
                 <Stack spacing={0.5} sx={{ mt: 1.5 }}>
                   <Button
                     fullWidth

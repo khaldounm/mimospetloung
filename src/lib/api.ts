@@ -14,12 +14,21 @@ export class ApiError extends Error {
   }
 }
 
+// Resolves the session and asserts nothing more. For the handful of endpoints
+// that belong to whoever is signed in rather than to a module: changing your own
+// password is one, and gating that on a permission would mean a role could exist
+// that cannot change its own credentials.
+export async function requireSession(): Promise<Session> {
+  const session = await auth();
+  if (!session?.user) throw new ApiError(401, "Unauthorized");
+  return session;
+}
+
 // Resolves the session and asserts the given permission. The middleware already
 // gates *read* access by path prefix; handlers call this to enforce the
 // write/read permission appropriate to the HTTP method.
 export async function requirePermission(permission: string): Promise<Session> {
-  const session = await auth();
-  if (!session?.user) throw new ApiError(401, "Unauthorized");
+  const session = await requireSession();
   if (!hasPermission(session.user, permission)) {
     throw new ApiError(403, "Forbidden");
   }

@@ -54,6 +54,12 @@ export function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, BCRYPT_ROUNDS);
 }
 
+// Checks a plaintext attempt against a stored hash. Used where someone has to
+// prove who they are before a change, rather than at sign-in.
+export function verifyPassword(plain: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(plain, hash);
+}
+
 // Whether a role grants user-management rights. Used to decide if a change
 // would remove the last admin.
 export async function roleCanManageUsers(roleId: number): Promise<boolean> {

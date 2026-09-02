@@ -33,6 +33,16 @@ export const userUpdateSchema = z
 
 export const passwordResetSchema = z.object({ password });
 
+// Someone changing their OWN password. The current one is proof of identity, so
+// it is required but deliberately not held to the strength rules: it was set
+// under whatever rules applied at the time, and rejecting it here would lock out
+// exactly the person we are trying to let re-key.
+export const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required").max(72),
+  newPassword: password,
+});
+
 export type UserCreateInput = z.infer<typeof userCreateSchema>;
 export type UserUpdateInput = z.infer<typeof userUpdateSchema>;
 export type PasswordResetInput = z.infer<typeof passwordResetSchema>;
+export type PasswordChangeInput = z.infer<typeof passwordChangeSchema>;
