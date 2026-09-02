@@ -1,3 +1,4 @@
+import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { getFxRate } from "@/lib/settings";
@@ -15,9 +16,23 @@ export default async function SettingsPage() {
   return (
     <Stack spacing={4}>
       <Typography variant="h4">Settings</Typography>
-      <ExchangeRateForm initialRate={fxRate} />
+
+      {/* The two small cards share a row and stretch to the same height; the
+          matrix takes the full width underneath, because it needs every pixel
+          it can get before it starts scrolling sideways. One column on a
+          phone, where side by side would leave neither card readable. */}
+      <Box
+        sx={{
+          display: "grid",
+          gap: 4,
+          gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+        }}
+      >
+        <ExchangeRateForm initialRate={fxRate} />
+        <DeleteLogsCard />
+      </Box>
+
       <PermissionMatrix initial={matrix} />
-      <DeleteLogsCard />
     </Stack>
   );
 }

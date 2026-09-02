@@ -89,7 +89,12 @@ export default function DeleteLogsCard() {
     <>
       <Paper
         variant="outlined"
-        sx={{ p: 3, maxWidth: 520, borderColor: "error.main", borderWidth: 2 }}
+        sx={{
+          p: 3,
+          height: "100%",
+          borderColor: "error.main",
+          borderWidth: 2,
+        }}
       >
         <Stack spacing={2}>
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>

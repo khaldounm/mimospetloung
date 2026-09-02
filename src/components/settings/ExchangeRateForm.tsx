@@ -49,7 +49,7 @@ export default function ExchangeRateForm({ initialRate }: Props) {
   }
 
   return (
-    <Paper variant="outlined" sx={{ p: 3, maxWidth: 520 }}>
+    <Paper variant="outlined" sx={{ p: 3, height: "100%" }}>
       <form onSubmit={handleSubmit}>
         <Stack spacing={2}>
           <Typography variant="h6">Exchange rate</Typography>
@@ -74,6 +74,9 @@ export default function ExchangeRateForm({ initialRate }: Props) {
             }
             required
             fullWidth
+            // The card is half the page wide now; a rate is four or five
+            // digits, so the field stops well short of the card's edge.
+            sx={{ maxWidth: 320 }}
           />
           <Box>
             <Button
