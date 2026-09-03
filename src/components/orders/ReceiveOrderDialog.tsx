@@ -49,6 +49,11 @@ interface Props {
   order: PurchaseOrderDTO;
   onClose: () => void;
   onReceived: (order: PurchaseOrderDTO) => void;
+  /**
+   * The order after a line was added from in here, which happens the moment the
+   * item is put on the delivery rather than when the delivery is submitted.
+   */
+  onOrderChanged: (order: PurchaseOrderDTO) => void;
 }
 
 export default function ReceiveOrderDialog({ open, onClose, ...rest }: Props) {
@@ -114,16 +119,25 @@ function DeliveryCell({
 
 type FormProps = Omit<Props, "open">;
 
-function ReceiveForm({ order, onClose, onReceived }: FormProps) {
-  // Only lines with something still expected can take a delivery.
-  const orderedLines = (order.lines ?? []).filter(
-    (l) => Number(l.quantityOutstanding) > 0,
-  );
+function ReceiveForm({
+  order,
+  onClose,
+  onReceived,
+  onOrderChanged,
+}: FormProps) {
   // Lines added from inside this dialog, for goods that turned up without being
   // ordered. Held here rather than re-seeding the whole form from a refreshed
   // order: a delivery can be dozens of lines of typing, and remounting to pick
   // up one new row would throw all of it away.
   const [addedLines, setAddedLines] = useState<PurchaseOrderLineDTO[]>([]);
+  // Only lines with something still expected can take a delivery. One added in
+  // here arrives back in the order prop as well, since the page is told the
+  // moment it is saved, so the prop's copy is dropped in favour of the local
+  // one: carrying both would put the same carton on the delivery twice.
+  const addedIds = new Set(addedLines.map((l) => l.lineId));
+  const orderedLines = (order.lines ?? []).filter(
+    (l) => Number(l.quantityOutstanding) > 0 && !addedIds.has(l.lineId),
+  );
   const [addingItem, setAddingItem] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   // A product just created from inside this dialog, waiting to be told how much
@@ -135,6 +149,13 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
   const [pendingQty, setPendingQty] = useState("");
   const [pendingCost, setPendingCost] = useState("");
   const outstanding = [...orderedLines, ...addedLines];
+  // Two different empty orders, needing opposite things said about them. One
+  // whose lines are all delivered is finished; one that never had a line is a
+  // walk-in waiting for the goods on the counter to be keyed in below.
+  const emptyNote =
+    (order.lines ?? []).length === 0
+      ? "Nothing on this order yet. Add what the supplier brought."
+      : "Everything on this order has already been received.";
 
   const [quantities, setQuantities] = useState<Record<number, string>>(() =>
     Object.fromEntries(
@@ -450,6 +471,10 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
       setAddedLines((prev) => [...prev, line]);
       setQuantities((prev) => ({ ...prev, [line.lineId]: pendingQty }));
       setCosts((prev) => ({ ...prev, [line.lineId]: pendingCost }));
+      // The line is on the order from here on, delivery or no delivery. The
+      // page showed an empty sheet until it was told, which made cancelling the
+      // receipt look like it had discarded the product that was just created.
+      onOrderChanged(res.order);
       setPendingItem(null);
       setPendingQty("");
       setPendingCost("");
@@ -640,7 +665,7 @@ function ReceiveForm({ order, onClose, onReceived }: FormProps) {
                       <TableCell colSpan={anyPerishable ? 7 : 6} align="center">
                         <Typography color="text.secondary" sx={{ py: 2 }}>
                           {outstanding.length === 0
-                            ? "Everything on this order has already been received."
+                            ? emptyNote
                             : "Nothing on this order matches what you typed."}
                         </Typography>
                       </TableCell>

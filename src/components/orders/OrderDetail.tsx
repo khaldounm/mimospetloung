@@ -24,6 +24,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DownloadIcon from "@mui/icons-material/Download";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
@@ -43,6 +44,7 @@ import type {
   SupplierContactDTO,
   SupplierDTO,
 } from "@/types/entities";
+import InventoryItemFormDialog from "@/components/inventory/InventoryItemFormDialog";
 import ReceiveOrderDialog from "./ReceiveOrderDialog";
 import SendOrderDialog from "./SendOrderDialog";
 import SupplierReturnDialog from "./SupplierReturnDialog";
@@ -142,6 +144,7 @@ export default function OrderDetail({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState<InventoryItemDTO | null>(null);
+  const [addingItem, setAddingItem] = useState(false);
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -166,6 +169,21 @@ export default function OrderDetail({
     const onOrder = new Set(lines.map((l) => l.itemId));
     return items.filter((i) => !onOrder.has(i.itemId));
   }, [items, lines]);
+
+  // A delivery can be booked against an order that has nothing on it yet. That
+  // is the walk-in: the supplier is at the counter with goods nobody ordered,
+  // and the items get created inside the receipt as the boxes come out. Gating
+  // on hasOutstanding alone (false for zero lines) left a fresh order with no
+  // way forward at all, since the only in-flow item creator lives in there.
+  const canDeliver = order.hasOutstanding || lines.length === 0;
+
+  // Both walk-in actions need to know who the goods came from. Receiving books
+  // the stock and the bill against the supplier (the server refuses without
+  // one), and a product created here is filed under the rep who brought it, so
+  // creating it on a supplier-less order quietly makes an orphan that lands
+  // back on this same pile next time it is reordered. Blocked at the button
+  // rather than at the save, since the picker that fixes it is right above.
+  const needsSupplier = order.supplierId == null;
 
   const missingCost = lines.filter((l) => l.unitCost == null).length;
 
@@ -336,15 +354,27 @@ export default function OrderDetail({
               Place order
             </Button>
           )}
-          {canWrite && canReceive && receivable && order.hasOutstanding && (
-            <Button
-              variant="contained"
-              color="success"
-              disabled={busy}
-              onClick={() => setReceiveOpen(true)}
+          {canWrite && canReceive && receivable && canDeliver && (
+            // A disabled MUI button fires no mouse events, so the tooltip needs
+            // a wrapper of its own or the reason never shows.
+            <Tooltip
+              title={
+                needsSupplier
+                  ? "Pick this order's supplier first, so the stock is recorded against who it came from."
+                  : ""
+              }
             >
-              {order.status === "Partial" ? "Receive rest" : "Receive"}
-            </Button>
+              <span>
+                <Button
+                  variant="contained"
+                  color="success"
+                  disabled={busy || needsSupplier}
+                  onClick={() => setReceiveOpen(true)}
+                >
+                  {order.status === "Partial" ? "Receive rest" : "Receive"}
+                </Button>
+              </span>
+            </Tooltip>
           )}
           {canWrite && order.status === "Partial" && (
             <Button
@@ -407,10 +437,12 @@ export default function OrderDetail({
         </Alert>
       )}
 
-      {order.supplierId == null && (
+      {needsSupplier && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          These items have no usual supplier. Pick one below to place the order,
-          or set each item&apos;s supplier from Inventory.
+          This order has no supplier yet. Pick one below to place it, receive it
+          or add a new product to it, so the stock and the bill are recorded
+          against who they came from. Setting each item&apos;s usual supplier
+          from Inventory keeps future orders off this pile.
         </Alert>
       )}
 
@@ -690,6 +722,30 @@ export default function OrderDetail({
           >
             Add
           </Button>
+          {/* The picker can only offer what the catalogue already holds, and a
+              rep who walks in with something new to try is exactly the case it
+              cannot express. Creating the product needs inventory:write, which
+              is the same permission receiving needs, so it rides on canReceive
+              rather than on canWrite. */}
+          {canReceive && (
+            <Tooltip
+              title={
+                needsSupplier
+                  ? "Pick this order's supplier first, so the new product is filed against the rep who brought it."
+                  : ""
+              }
+            >
+              <span>
+                <Button
+                  startIcon={<AddIcon />}
+                  disabled={busy || needsSupplier}
+                  onClick={() => setAddingItem(true)}
+                >
+                  New item
+                </Button>
+              </span>
+            </Tooltip>
+          )}
         </Stack>
       )}
 
@@ -709,6 +765,24 @@ export default function OrderDetail({
         />
       </Paper>
 
+      {/* Outside every form on the page: the item dialog carries a <form> of
+          its own, and React events propagate up the component tree rather than
+          the DOM, so nesting it inside one makes its Save submit that too. */}
+      <InventoryItemFormDialog
+        open={addingItem}
+        canViewSuppliers
+        canCreateSuppliers={false}
+        defaults={{ category: order.category, supplierId: order.supplierId }}
+        // The order is what will put these units on the shelf, when it is
+        // received. An opening stock here as well would count them twice.
+        allowOpeningStock={false}
+        onClose={() => setAddingItem(false)}
+        // Straight onto the order at the usual reorder quantity, the same as
+        // picking an existing item. The line's quantity and cost are editable
+        // in the table above, which is where the real figures get keyed.
+        onSaved={(created) => void addItem(created)}
+      />
+
       <SupplierReturnDialog
         open={returnOpen}
         orderId={order.orderId}
@@ -722,6 +796,15 @@ export default function OrderDetail({
         order={order}
         onClose={() => setReceiveOpen(false)}
         onReceived={(next) => {
+          setOrder(next);
+          router.refresh();
+        }}
+        // An item put on the order from inside the receipt is saved there and
+        // then. Waiting for the delivery to be submitted left a cancelled
+        // receipt looking like it had thrown the new product away, when the
+        // line was on the order the whole time. The refresh also puts the new
+        // product into the picker above.
+        onOrderChanged={(next) => {
           setOrder(next);
           router.refresh();
         }}
