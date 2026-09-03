@@ -2,6 +2,10 @@
 
 import Link from "next/link";
 import {
+  Alert,
+  Button,
+  Checkbox,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -9,13 +13,16 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import LocalOfferIcon from "@mui/icons-material/LocalOffer";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { PieChart } from "@mui/x-charts/PieChart";
+import { useState } from "react";
 import { useAnalyticsSection } from "@/hooks/useAnalyticsSection";
 import { formatDate } from "@/utils/format";
 import { formatRangeLabel, rangeSummary } from "@/utils/date-range";
 import DateRangeControl from "@/components/ui/DateRangeControl";
 import DownloadCsvButton from "@/components/ui/DownloadCsvButton";
+import OfferPickerDialog from "@/components/offers/OfferPickerDialog";
 import AnalyticsSection from "./AnalyticsSection";
 import {
   CHART_HEIGHT,
@@ -117,31 +124,92 @@ function ListDownload({
 
 // Who spent the most over the dates the section is set to. Walk-ins are absent
 // by construction: a counter sale belongs to no account.
+//
+// Rows are selectable so an offer can be given to several at once. One button
+// for the whole selection rather than an Apply on every row: rewarding the top
+// ten is one decision, and ten dialogs is not how anyone would take it.
 function TopClientsCard({
   rows,
   total,
   range,
+  canGrantOffer,
+  canManageOffers,
 }: {
   rows: ClientActivityRow[];
   total: number;
   range: AnalyticsRange;
+  canGrantOffer: boolean;
+  canManageOffers: boolean;
 }) {
+  const [picked, setPicked] = useState<number[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const allPicked = rows.length > 0 && picked.length === rows.length;
+
+  function toggle(clientId: number) {
+    setPicked((prev) =>
+      prev.includes(clientId)
+        ? prev.filter((id) => id !== clientId)
+        : [...prev, clientId],
+    );
+  }
+
   return (
     <ChartCard
       title="Top clients"
       full
       action={
-        <ListDownload
-          list="top"
-          range={range}
-          title="Download every client billed in these dates"
-          empty={total === 0}
-        />
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          {canGrantOffer && (
+            <Button
+              size="small"
+              startIcon={<LocalOfferIcon />}
+              disabled={picked.length === 0}
+              onClick={() => setPickerOpen(true)}
+            >
+              {picked.length > 0
+                ? `Apply offer (${picked.length})`
+                : "Apply offer"}
+            </Button>
+          )}
+          <ListDownload
+            list="top"
+            range={range}
+            title="Download every client billed in these dates"
+            empty={total === 0}
+          />
+        </Stack>
       }
     >
+      {note && (
+        <Alert
+          severity="success"
+          sx={{ mb: 1.5 }}
+          onClose={() => setNote(null)}
+        >
+          {note}
+        </Alert>
+      )}
       <Table size="small">
         <TableHead>
           <TableRow>
+            {canGrantOffer && (
+              <TableCell padding="checkbox">
+                <Checkbox
+                  size="small"
+                  checked={allPicked}
+                  indeterminate={picked.length > 0 && !allPicked}
+                  disabled={rows.length === 0}
+                  onChange={() =>
+                    setPicked(allPicked ? [] : rows.map((r) => r.clientId))
+                  }
+                  slotProps={{
+                    input: { "aria-label": "Select every client shown" },
+                  }}
+                />
+              </TableCell>
+            )}
             <TableCell>Client</TableCell>
             <TableCell>Phone</TableCell>
             <TableCell align="right">Invoices</TableCell>
@@ -151,10 +219,24 @@ function TopClientsCard({
         </TableHead>
         <TableBody>
           {rows.length === 0 ? (
-            <EmptyRow span={5}>Nobody was billed in these dates.</EmptyRow>
+            <EmptyRow span={canGrantOffer ? 6 : 5}>
+              Nobody was billed in these dates.
+            </EmptyRow>
           ) : (
             rows.map((row) => (
               <TableRow key={row.clientId} hover>
+                {canGrantOffer && (
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={picked.includes(row.clientId)}
+                      onChange={() => toggle(row.clientId)}
+                      slotProps={{
+                        input: { "aria-label": `Select ${row.name}` },
+                      }}
+                    />
+                  </TableCell>
+                )}
                 <TableCell>
                   <ClientLink row={row} />
                 </TableCell>
@@ -170,6 +252,34 @@ function TopClientsCard({
         </TableBody>
       </Table>
       <ListFooter shown={rows.length} total={total} />
+
+      <OfferPickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        clientIds={picked}
+        clientLabel={
+          picked.length === 1 ? "1 client" : `${picked.length} clients`
+        }
+        canManage={canManageOffers}
+        onGranted={(result) => {
+          // Says what actually happened. Granting the same offer to the same
+          // list twice adds nothing, and reporting it as a fresh success would
+          // be how someone ends up believing they discounted twice.
+          setNote(
+            [
+              result.granted > 0
+                ? `${result.offerName} given to ${result.granted} client${result.granted === 1 ? "" : "s"}.`
+                : null,
+              result.alreadyHeld > 0
+                ? `${result.alreadyHeld} already had it.`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          );
+          setPicked([]);
+        }}
+      />
     </ChartCard>
   );
 }
@@ -256,8 +366,12 @@ function LapsedClientsCard({
 // records, in which case the counts are shown without the names behind them.
 export default function ClientsSection({
   initialRange,
+  canGrantOffer,
+  canManageOffers,
 }: {
   initialRange: AnalyticsRange;
+  canGrantOffer: boolean;
+  canManageOffers: boolean;
 }) {
   const { range, data, loading, error, setRange, load } =
     useAnalyticsSection<ClientsAnalytics>("clients", initialRange);
@@ -333,6 +447,8 @@ export default function ClientsSection({
                 rows={data.topClients}
                 total={data.tradingCount}
                 range={range}
+                canGrantOffer={canGrantOffer}
+                canManageOffers={canManageOffers}
               />
             )}
 

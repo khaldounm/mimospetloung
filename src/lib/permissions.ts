@@ -191,6 +191,10 @@ const ROUTE_RULES: { prefix: string; permission: string }[] = [
   { prefix: "/api/inventory", permission: "inventory:read" },
   { prefix: "/api/invoices", permission: "invoices:read" },
   { prefix: "/api/services", permission: "invoices:read" },
+  // Offers are a discount decision, so they ride on the invoicing permissions
+  // rather than minting their own. Reading the catalogue follows invoices:read;
+  // granting and redeeming are checked in the handlers.
+  { prefix: "/api/offers", permission: "invoices:read" },
   { prefix: "/api/notifications", permission: "notifications:read" },
 ];
 

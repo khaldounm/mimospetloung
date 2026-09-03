@@ -21,6 +21,13 @@ export const AUDIT_ACTIONS = [
   // The day's drawer counted and filed. Its own action rather than "create",
   // because re-closing a day replaces the count and both times are a close.
   "close",
+  // An offer handed to a client. Its own verb rather than "create", because the
+  // question being asked of the log later is "who gave this discount away", and
+  // that reads badly as a row saying someone created something.
+  "grant",
+  // An offer spent against an invoice. Paired with "grant" so the log tells the
+  // whole story: given on this date by this person, used on that invoice.
+  "redeem",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -58,6 +65,11 @@ export const AUDIT_ENTITIES = [
   // The audit log recording its own pruning. The row survives the delete it
   // describes, because it is written afterwards.
   "audit_log",
+  // The deal itself, in the catalogue.
+  "offer",
+  // One client holding one offer. entityId is the grant, and the payload names
+  // the client and the offer, because a grant id means nothing on its own.
+  "offer_grant",
 ] as const;
 export type AuditEntity = (typeof AUDIT_ENTITIES)[number];
 
@@ -90,6 +102,8 @@ export const AUDIT_ENTITY_LABELS: Record<AuditEntity, string> = {
   role: "Role permissions",
   register_closing: "Register close",
   audit_log: "Audit log",
+  offer: "Offer",
+  offer_grant: "Offer given",
 };
 
 // MUI Chip colors per action for the viewer.
@@ -108,4 +122,6 @@ export const AUDIT_ACTION_COLOR: Record<
   cancel: "warning",
   return: "warning",
   close: "info",
+  grant: "success",
+  redeem: "success",
 };

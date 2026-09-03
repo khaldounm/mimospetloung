@@ -61,6 +61,7 @@ import LineItemRow, {
   lineItemColumnWidths,
 } from "./LineItemRow";
 import PaymentDialog from "./PaymentDialog";
+import InvoiceOfferBanner from "@/components/offers/InvoiceOfferBanner";
 import ReturnDialog from "./ReturnDialog";
 import ScanBar from "./ScanBar";
 
@@ -502,6 +503,16 @@ export default function InvoiceDetail({
             : ""}
           . More lines may still be coming.
         </Alert>
+      )}
+
+      {/* A walk-in belongs to no account, so there is nothing to hold an offer
+          and nothing for this to say. */}
+      {invoice.clientId != null && (
+        <InvoiceOfferBanner
+          invoice={invoice}
+          canWrite={canWrite}
+          onApplied={applyInvoice}
+        />
       )}
 
       {invoice.isWalkIn && !isDraft && balanceDue > 0 && (

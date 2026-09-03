@@ -29,6 +29,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { apiRequest } from "@/utils/api-client";
 import { formatDate, formatMoney } from "@/utils/format";
 import type { ClientDTO, PatientDTO } from "@/types/entities";
+import ClientOffersPanel from "@/components/offers/ClientOffersPanel";
 import AccountPaymentDialog from "./AccountPaymentDialog";
 import ClientFormDialog from "./ClientFormDialog";
 import PatientFormDialog from "@/components/patients/PatientFormDialog";
@@ -39,6 +40,11 @@ interface Props {
   canWrite: boolean;
   // Taking money is gated separately from editing the client.
   canPay: boolean;
+  // Giving an offer is the same decision as discounting at the till, so it
+  // follows invoices:write rather than the permission to edit the client.
+  canGrantOffer: boolean;
+  // Inventing a new offer rather than picking an existing one. Admin.
+  canManageOffers: boolean;
   // LBP per 1 USD, from the clinic settings.
   fxRate: number;
 }
@@ -59,6 +65,8 @@ export default function ClientDetail({
   patients,
   canWrite,
   canPay,
+  canGrantOffer,
+  canManageOffers,
   fxRate,
 }: Props) {
   const router = useRouter();
@@ -185,6 +193,13 @@ export default function ClientDetail({
           )}
         </Grid>
       </Paper>
+
+      <ClientOffersPanel
+        clientId={client.clientId}
+        clientName={`${client.firstName} ${client.lastName}`.trim()}
+        canGrant={canGrantOffer}
+        canManage={canManageOffers}
+      />
 
       <Stack
         direction="row"

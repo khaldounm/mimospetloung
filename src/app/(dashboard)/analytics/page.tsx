@@ -5,6 +5,10 @@ import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { defaultRange, resolvePreset } from "@/utils/date-range";
 import { CLIENTS_DEFAULT_PRESET_ID } from "@/constants/analytics";
+import {
+  OFFER_GRANT_PERMISSION,
+  OFFER_MANAGE_PERMISSION,
+} from "@/constants/offers";
 import AnalyticsDashboard from "@/components/analytics/AnalyticsDashboard";
 import AnalyticsGuide from "@/components/analytics/AnalyticsGuide";
 
@@ -17,6 +21,10 @@ export default async function AnalyticsPage() {
   const includeProfit = hasPermission(session?.user, "costs:read");
   // Purchases exposes what suppliers charge, so it follows orders:read.
   const includePurchases = hasPermission(session?.user, "orders:read");
+  // Rewarding a top client is a discount decision, so it follows the same
+  // permission as discounting an invoice; inventing the deal itself is admin.
+  const canGrantOffer = hasPermission(session?.user, OFFER_GRANT_PERMISSION);
+  const canManageOffers = hasPermission(session?.user, OFFER_MANAGE_PERMISSION);
   // No figures are computed here. Each section fetches its own the first time
   // someone opens it, which for most visits is none of them.
   //
@@ -45,6 +53,8 @@ export default async function AnalyticsPage() {
         generatedAt={new Date().toISOString()}
         canSeeProfit={includeProfit}
         canSeePurchases={includePurchases}
+        canGrantOffer={canGrantOffer}
+        canManageOffers={canManageOffers}
       />
     </Box>
   );

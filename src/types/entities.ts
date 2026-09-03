@@ -13,6 +13,7 @@ import type {
   RecordType,
 } from "./enums";
 import type { SupplierSettlementKind } from "@/constants/supplier";
+import type { OfferDiscountMode } from "@/constants/offers";
 
 export interface ClientDTO {
   clientId: number;
@@ -1271,4 +1272,56 @@ export interface ClientStatementDTO {
   // ALREADY inside accountBalance and is never added to it.
   openingEntry: { amount: string; asOfDate: string } | null;
   lines: ClientStatementLineDTO[];
+}
+
+// ---- Offers ----
+
+// A deal in the catalogue. Money arrives as strings, the string-Decimal
+// convention every other DTO follows.
+export interface OfferDTO {
+  offerId: number;
+  name: string;
+  discountMode: OfferDiscountMode;
+  discountPct: string;
+  discountAmount: string;
+  notes: string | null;
+  /** "YYYY-MM-DD", or null for an offer that runs until it is archived. */
+  expiresOn: string | null;
+  archived: boolean;
+  /** False once expiresOn has passed, or once archived. */
+  grantable: boolean;
+  /** Live grants outstanding, and grants already spent on an invoice. */
+  liveCount: number;
+  redeemedCount: number;
+}
+
+// One client holding one offer. Carries the offer's terms so a banner or a
+// chip can be drawn without a second lookup.
+export interface OfferGrantDTO {
+  grantId: number;
+  offerId: number;
+  offerName: string;
+  discountMode: OfferDiscountMode;
+  discountPct: string;
+  discountAmount: string;
+  expiresOn: string | null;
+  clientId: number;
+  clientName: string;
+  grantedAt: string;
+  grantedByName: string | null;
+  /** Set once the grant has been spent. */
+  redeemedInvoiceId: number | null;
+  redeemedInvoiceNumber: string | null;
+  redeemedAt: string | null;
+  /** Past its offer's expiry date: still on file, no longer redeemable. */
+  expired: boolean;
+}
+
+// What a bulk grant did. Clients who already held the offer are reported rather
+// than counted as granted, so clicking twice reads as "nothing new" instead of
+// as a second discount.
+export interface OfferGrantResultDTO {
+  granted: number;
+  alreadyHeld: number;
+  offerName: string;
 }

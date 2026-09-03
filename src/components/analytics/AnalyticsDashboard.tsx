@@ -45,12 +45,16 @@ export default function AnalyticsDashboard({
   generatedAt,
   canSeeProfit,
   canSeePurchases,
+  canGrantOffer,
+  canManageOffers,
 }: {
   defaultRange: AnalyticsRange;
   clientsRange: AnalyticsRange;
   generatedAt: string;
   canSeeProfit: boolean;
   canSeePurchases: boolean;
+  canGrantOffer: boolean;
+  canManageOffers: boolean;
 }) {
   return (
     <Box>
@@ -58,7 +62,11 @@ export default function AnalyticsDashboard({
       {canSeePurchases && <PurchasesSection initialRange={defaultRange} />}
       <RevenueSection initialRange={defaultRange} />
       <CategoriesSection initialRange={defaultRange} />
-      <ClientsSection initialRange={clientsRange} />
+      <ClientsSection
+        initialRange={clientsRange}
+        canGrantOffer={canGrantOffer}
+        canManageOffers={canManageOffers}
+      />
       <InventorySection initialRange={defaultRange} />
       <BookingsSection initialRange={defaultRange} />
 

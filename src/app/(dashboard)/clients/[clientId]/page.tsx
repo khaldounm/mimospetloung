@@ -2,6 +2,10 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
+import {
+  OFFER_GRANT_PERMISSION,
+  OFFER_MANAGE_PERMISSION,
+} from "@/constants/offers";
 import { getFxRate } from "@/lib/settings";
 import { toDateOnly } from "@/utils/format";
 import type { ClientDTO, PatientDTO } from "@/types/entities";
@@ -21,6 +25,10 @@ export default async function ClientDetailPage({
   // Taking money is its own permission, the same one the invoice payment
   // button is gated on.
   const canPay = hasPermission(session?.user, "payments:write");
+  // An offer is a discount decided in advance, so giving one follows the same
+  // permission as discounting an invoice. Creating the deal itself is admin.
+  const canGrantOffer = hasPermission(session?.user, OFFER_GRANT_PERMISSION);
+  const canManageOffers = hasPermission(session?.user, OFFER_MANAGE_PERMISSION);
   const fxRate = await getFxRate();
 
   const client = await prisma.client.findFirst({
@@ -76,6 +84,8 @@ export default async function ClientDetailPage({
       patients={patients}
       canWrite={canWrite}
       canPay={canPay}
+      canGrantOffer={canGrantOffer}
+      canManageOffers={canManageOffers}
       fxRate={fxRate}
     />
   );

@@ -81,6 +81,8 @@ model User {
   auditLogs             AuditLog[]
   attendingInvoices     Invoice[]              @relation("InvoiceAttendingVet")
   registerClosings      RegisterClosing[]
+  offersCreated         Offer[]                @relation("OfferCreatedBy")
+  offersGranted         OfferGrant[]           @relation("OfferGrantedBy")
 
   @@index([roleId], map: "idx_users_role")
   @@map("users")
@@ -127,6 +129,7 @@ model Client {
   payments        Payment[]
   notifications   Notification[]
   openingBalances OpeningBalance[]
+  offerGrants     OfferGrant[]
 
   @@map("clients")
 }
@@ -927,6 +930,7 @@ model Invoice {
   lineItems    InvoiceLineItem[]
   payments     Payment[]
   accruals     PartnerAccrual[]
+  offerGrants  OfferGrant[]
 
   @@index([clientId], map: "idx_invoices_client")
   // Every analytics query over invoices and their lines filters on issuedAt
@@ -1285,4 +1289,70 @@ model Setting {
   updatedBy Int?     @map("updated_by")
 
   @@map("settings")
+}
+
+// ============================================================
+// OFFERS
+// ============================================================
+// A deal the clinic decides to give: "20% off, September". Three things are
+// deliberately kept apart. The OFFER is the catalogue entry. GRANTING it to a
+// client is a row of its own. REDEEMING that row on an invoice is a third
+// state of it. Fold them together and the clinic can never ask who was given
+// what and whether they came back, which is the only thing this buys over
+// typing a discount straight onto the invoice.
+model Offer {
+  offerId        Int       @id @default(autoincrement()) @map("offer_id")
+  name           String    @db.VarChar(100)
+  // "pct" or "amount", mirroring the two ways an invoice carries a discount.
+  // Only the matching column is read; offers_one_discount_mode holds the other
+  // at zero so no row can leave a reader guessing which one applied.
+  discountMode   String    @map("discount_mode") @db.VarChar(10)
+  discountPct    Decimal   @default(0) @map("discount_pct") @db.Decimal(5, 2)
+  discountAmount Decimal   @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  notes          String?   @db.Text
+  // Last day a grant of this offer can be redeemed. It sits on the offer rather
+  // than on the grant because a clinic runs a campaign to a date, not a
+  // per-client clock, so extending the campaign extends everyone at once.
+  // Null means it runs until archived.
+  expiresOn      DateTime? @map("expires_on") @db.Date
+  // Retired rather than deleted, so grants already made keep naming what they
+  // were. An archived offer can still be redeemed; it just cannot be granted.
+  archivedAt     DateTime? @map("archived_at") @db.Timestamptz(6)
+  createdBy      Int?      @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  creator User?        @relation("OfferCreatedBy", fields: [createdBy], references: [userId], onDelete: SetNull)
+  grants  OfferGrant[]
+
+  @@map("offers")
+}
+
+// One client's entitlement to one offer. Live until it is redeemed against an
+// invoice or revoked by hand.
+//
+// Redemption is reversible: taking the offer back off an invoice clears these
+// columns and puts the grant back in play rather than burning it, which is what
+// makes voiding or re-editing a draft safe.
+model OfferGrant {
+  grantId   Int      @id @default(autoincrement()) @map("grant_id")
+  offerId   Int      @map("offer_id")
+  clientId  Int      @map("client_id")
+  grantedBy Int?     @map("granted_by")
+  grantedAt DateTime @default(now()) @map("granted_at") @db.Timestamptz(6)
+
+  redeemedInvoiceId Int?      @map("redeemed_invoice_id")
+  redeemedAt        DateTime? @map("redeemed_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  offer   Offer    @relation(fields: [offerId], references: [offerId], onDelete: Cascade)
+  client  Client   @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  granter User?    @relation("OfferGrantedBy", fields: [grantedBy], references: [userId], onDelete: SetNull)
+  invoice Invoice? @relation(fields: [redeemedInvoiceId], references: [invoiceId], onDelete: SetNull)
+
+  // The banner on an invoice asks "does this client have a live grant", which
+  // is this index plus the two null checks.
+  @@index([clientId], map: "idx_offer_grants_client")
+  @@index([offerId], map: "idx_offer_grants_offer")
+  @@map("offer_grants")
 }

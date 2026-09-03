@@ -105,7 +105,7 @@ export async function PATCH(
 
     const existing = await prisma.invoice.findUnique({
       where: { invoiceId },
-      select: { status: true },
+      select: { status: true, discountPct: true, discountAmount: true },
     });
     if (!existing) throw new ApiError(404, "Invoice not found");
     if (existing.status !== "Draft") {
@@ -120,6 +120,13 @@ export async function PATCH(
       if (!client) throw new ApiError(400, "Client not found");
     }
 
+    const patch = discountPatch(data);
+    const discountChanged =
+      (patch.discountPct !== undefined &&
+        !existing.discountPct.equals(patch.discountPct)) ||
+      (patch.discountAmount !== undefined &&
+        !existing.discountAmount.equals(patch.discountAmount));
+
     const invoice = await prisma.$transaction(async (tx) => {
       await tx.invoice.update({
         where: { invoiceId },
@@ -129,7 +136,7 @@ export async function PATCH(
             ? { bookingId: data.bookingId }
             : {}),
           ...(data.dueDate !== undefined ? { dueDate: data.dueDate } : {}),
-          ...discountPatch(data),
+          ...patch,
           ...(data.taxPct !== undefined ? { taxPct: data.taxPct } : {}),
           ...(data.adjustment !== undefined
             ? { adjustment: data.adjustment }
@@ -137,6 +144,22 @@ export async function PATCH(
           ...(data.notes !== undefined ? { notes: data.notes } : {}),
         },
       });
+      // Typing a DIFFERENT discount by hand takes the invoice off any offer
+      // that was applied to it, and hands that offer back to the client.
+      // Otherwise the banner keeps claiming the figure below it is the offer
+      // while the figure is whatever was just typed, and the client ends up
+      // having paid for an offer they never got.
+      //
+      // Compared against what is stored rather than merely being present in the
+      // body: the edit dialog posts both discount fields on every save, so
+      // "was sent" would release the offer when someone only changed the due
+      // date.
+      if (discountChanged) {
+        await tx.offerGrant.updateMany({
+          where: { redeemedInvoiceId: invoiceId },
+          data: { redeemedInvoiceId: null, redeemedAt: null },
+        });
+      }
       // Discount, tax and adjustment changes shift the snapshot even with the
       // same lines.
       await recomputeInvoiceTotals(tx, invoiceId);

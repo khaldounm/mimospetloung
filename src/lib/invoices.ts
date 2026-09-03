@@ -1513,6 +1513,17 @@ export async function voidInvoice(
       });
     }
 
+    // An offer spent on this invoice goes back to the client unspent. The
+    // document is cancelled, so what it consumed was never consumed, and
+    // leaving the grant marked used would quietly take a discount away from
+    // someone who never received one. Written inline rather than through
+    // lib/offers so it stays inside this transaction, and because lib/offers
+    // already imports from this file.
+    await tx.offerGrant.updateMany({
+      where: { redeemedInvoiceId: invoiceId },
+      data: { redeemedInvoiceId: null, redeemedAt: null },
+    });
+
     return tx.invoice.update({
       where: { invoiceId },
       data: { status: "Void" },
