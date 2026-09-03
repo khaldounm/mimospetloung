@@ -10,7 +10,7 @@
  */
 import { notFound } from "next/navigation";
 
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import {
   getInventoryCategories,
@@ -37,7 +37,7 @@ export default async function InventorySegmentPage({
     return <ItemPage id={id} />;
   }
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "inventory:write");
   const canViewSuppliers = hasPermission(session?.user, "orders:read");
   const canPurchase = hasPermission(session?.user, "orders:write");

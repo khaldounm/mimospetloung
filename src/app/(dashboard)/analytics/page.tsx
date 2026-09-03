@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { defaultRange, resolvePreset } from "@/utils/date-range";
 import { CLIENTS_DEFAULT_PRESET_ID } from "@/constants/analytics";
@@ -16,7 +16,7 @@ import AnalyticsGuide from "@/components/analytics/AnalyticsGuide";
 export const dynamic = "force-dynamic";
 
 export default async function AnalyticsPage() {
-  const session = await auth();
+  const session = await liveSession();
   // Net profit folds in running costs, which are admin-only (costs:read).
   const includeProfit = hasPermission(session?.user, "costs:read");
   // Purchases exposes what suppliers charge, so it follows orders:read.

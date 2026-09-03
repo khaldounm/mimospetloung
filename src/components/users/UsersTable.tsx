@@ -72,6 +72,25 @@ export default function UsersTable({
     setFormOpen(true);
   }
 
+  // Ends every session this person has open, without disabling the account:
+  // they can sign back in immediately. Allowed on yourself, which signs you out
+  // of this screen too, so the list is not reloaded afterwards.
+  async function signOutEverywhere(user: UserDTO) {
+    setError(null);
+    setBusyId(user.userId);
+    try {
+      await apiRequest(`/api/users/${user.userId}/signout`, { method: "POST" });
+      if (user.userId === currentUserId) {
+        window.location.href = "/login";
+        return;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to sign user out");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function toggleActive(user: UserDTO) {
     setError(null);
     setBusyId(user.userId);
@@ -175,6 +194,23 @@ export default function UsersTable({
                           <Button size="small" onClick={() => setPwUser(u)}>
                             Reset password
                           </Button>
+                          <Tooltip
+                            title={
+                              isSelf
+                                ? "Ends your own session here too"
+                                : "Ends every session on every device. They can sign back in."
+                            }
+                          >
+                            <span>
+                              <Button
+                                size="small"
+                                disabled={busyId === u.userId}
+                                onClick={() => void signOutEverywhere(u)}
+                              >
+                                Sign out
+                              </Button>
+                            </span>
+                          </Tooltip>
                           <Tooltip
                             title={
                               isSelf

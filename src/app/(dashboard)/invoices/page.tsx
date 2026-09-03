@@ -1,10 +1,10 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { listInvoices } from "@/lib/invoices";
 import InvoicesTable from "@/components/invoices/InvoicesTable";
 
 export default async function InvoicesPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "invoices:write");
 
   // Only the first page. Filtering, searching and paging all happen in SQL, and

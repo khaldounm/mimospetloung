@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { getSuppliersWithStats } from "@/lib/suppliers";
@@ -8,7 +8,7 @@ import SuppliersTable from "@/components/suppliers/SuppliersTable";
 export const dynamic = "force-dynamic";
 
 export default async function SuppliersPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "orders:write");
 
   const [suppliers, unassignedItemCount] = await Promise.all([

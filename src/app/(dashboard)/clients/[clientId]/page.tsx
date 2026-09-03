@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -20,7 +20,7 @@ export default async function ClientDetailPage({
   const id = Number(clientId);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "patients:write");
   // Taking money is its own permission, the same one the invoice payment
   // button is gated on.

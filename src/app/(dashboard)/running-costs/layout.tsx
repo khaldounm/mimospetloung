@@ -1,5 +1,5 @@
 import { Box } from "@mui/material";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { listCostMonths } from "@/lib/running-cost";
 import RunningCostsHeader from "@/components/running-costs/RunningCostsHeader";
@@ -20,7 +20,10 @@ export default async function RunningCostsLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const [session, months] = await Promise.all([auth(), listCostMonths()]);
+  const [session, months] = await Promise.all([
+    liveSession(),
+    listCostMonths(),
+  ]);
   const canWrite = hasPermission(session?.user, "costs:write");
 
   return (

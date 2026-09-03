@@ -1,13 +1,13 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { toContactMessageDTO } from "@/lib/messages";
 import MessagesView from "@/components/messages/MessagesView";
 
 export default async function MessagesPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "notifications:write");
 
   const messages = await prisma.contactMessage.findMany({

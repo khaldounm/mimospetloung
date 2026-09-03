@@ -1,6 +1,6 @@
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import ChangePasswordForm from "@/components/users/ChangePasswordForm";
 
@@ -8,7 +8,7 @@ import ChangePasswordForm from "@/components/users/ChangePasswordForm";
 // signed in, whatever their role. It replaces the old /reset-password stub,
 // which asked for an email and sent nothing, because there is no mail server.
 export default async function AccountPage() {
-  const session = await auth();
+  const session = await liveSession();
   const userId = session?.user?.userId;
 
   // Read the row rather than the token: a name or role changed by an admin

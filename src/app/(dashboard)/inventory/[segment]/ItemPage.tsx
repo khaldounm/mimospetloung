@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -10,7 +10,7 @@ import {
 import InventoryDetail from "@/components/inventory/InventoryDetail";
 
 export default async function InventoryItemPage({ id }: { id: number }) {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "inventory:write");
   const canViewSuppliers = hasPermission(session?.user, "orders:read");
   const canCreateSuppliers = hasPermission(session?.user, "orders:write");

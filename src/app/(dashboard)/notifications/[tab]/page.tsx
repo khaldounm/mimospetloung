@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -101,7 +101,7 @@ export default async function NotificationsTabPage({
   params: Promise<{ tab: string }>;
 }) {
   const { tab } = await params;
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "notifications:write");
 
   if (tab === "upcoming") {

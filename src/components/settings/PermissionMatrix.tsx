@@ -177,7 +177,8 @@ export default function PermissionMatrix({ initial }: Props) {
           write with it.
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          A change reaches someone the next time they sign in.
+          A change reaches someone within about two minutes. They do not need to
+          sign out and back in.
         </Typography>
       </Stack>
 

@@ -80,5 +80,16 @@ export default auth((req) => {
 
 export const config = {
   // Run on everything except Next internals and static files.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.[\\w]+$).*)"],
+  //
+  // /api/account/signout is excluded deliberately, not as an optimisation. This
+  // proxy reads the session on every path it matches, Auth.js re-encodes and
+  // re-sets the cookie on every read, and next-auth copies those Set-Cookie
+  // headers onto the response after the handler has run. A route whose whole job
+  // is to clear that cookie would therefore ship a fresh token alongside the
+  // clear, and which one stuck would depend on the client. Returning early from
+  // the function above does not help: the session read has already happened by
+  // then. It has to stay out of the matcher.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|api/account/signout|.*\\.[\\w]+$).*)",
+  ],
 };

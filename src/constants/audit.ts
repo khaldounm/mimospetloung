@@ -28,6 +28,10 @@ export const AUDIT_ACTIONS = [
   // An offer spent against an invoice. Paired with "grant" so the log tells the
   // whole story: given on this date by this person, used on that invoice.
   "redeem",
+  // Every device a person was signed in on, ended by an admin. Its own verb
+  // rather than "update", because "who threw this person off the till" is a
+  // question someone asks of the log later and it should read as an answer.
+  "signout",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -124,4 +128,5 @@ export const AUDIT_ACTION_COLOR: Record<
   close: "info",
   grant: "success",
   redeem: "success",
+  signout: "warning",
 };

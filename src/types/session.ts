@@ -5,4 +5,9 @@ export interface AppUserFields {
   permissions: string[];
   firstName: string;
   lastName: string;
+  // Epoch ms of the sign-in that began this session, stamped once in the jwt
+  // callback. Compared against the user's sessionsValidFrom to tell whether an
+  // admin has signed this session out since. Optional because tokens minted
+  // before this existed carry no stamp.
+  signedInAt?: number;
 }

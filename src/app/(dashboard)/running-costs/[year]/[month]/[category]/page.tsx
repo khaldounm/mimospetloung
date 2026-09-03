@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { listCostsForMonth } from "@/lib/running-cost";
 import { ALL_CATEGORIES_SLUG } from "@/constants/running-cost";
@@ -33,7 +33,7 @@ export default async function RunningCostsCategoryPage({
     notFound();
   }
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "costs:write");
   const costs = await listCostsForMonth(period);
 

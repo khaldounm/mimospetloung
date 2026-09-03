@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { toBookingDTO } from "@/lib/bookings";
@@ -14,7 +14,7 @@ const bookingInclude = {
 } as const;
 
 export default async function BookingsPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "bookings:write");
 
   // The diary opens on today onwards rather than on every booking ever taken.

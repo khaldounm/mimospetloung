@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import {
   canSeeCost,
@@ -10,7 +10,7 @@ import { costComponentInclude } from "@/lib/services";
 import ServicesTable from "@/components/invoices/ServicesTable";
 
 export default async function ServicesPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "invoices:write");
   const canSeeDeal = canSeePartnerDeal(session?.user);
   // Setting a deal is a partners:write term; seeing one is partners:read. Both

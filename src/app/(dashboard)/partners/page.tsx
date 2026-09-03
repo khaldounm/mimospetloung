@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { getPartnersWithStats } from "@/lib/partners";
 import { defaultRange, rangeFromParams } from "@/utils/date-range";
@@ -12,7 +12,7 @@ export default async function PartnersPage({
 }: {
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "partners:write");
 
   // The range comes off the URL so a chosen period survives a reload and can be

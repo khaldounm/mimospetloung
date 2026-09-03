@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { toClinicalRecordDTO } from "@/lib/patients";
@@ -20,7 +20,7 @@ export default async function PatientDetailPage({
   const id = Number(patientId);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const session = await auth();
+  const session = await liveSession();
   const canWritePatient = hasPermission(session?.user, "patients:write");
   const canReadClinical = hasPermission(session?.user, "clinical:read");
   const canWriteClinical = hasPermission(session?.user, "clinical:write");

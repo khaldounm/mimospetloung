@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { toUserDTO, userInclude } from "@/lib/users";
@@ -6,7 +6,7 @@ import UsersTable from "@/components/users/UsersTable";
 import type { RoleOption } from "@/types/entities";
 
 export default async function UsersPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "users:write");
   const currentUserId = session?.user?.userId ?? null;
 

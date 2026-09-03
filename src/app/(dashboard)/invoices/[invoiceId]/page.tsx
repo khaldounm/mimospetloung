@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import {
   canSeeCost,
@@ -24,7 +24,7 @@ export default async function InvoiceDetailPage({
   const id = Number(invoiceId);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "invoices:write");
   const canPay = hasPermission(session?.user, "payments:write");
 

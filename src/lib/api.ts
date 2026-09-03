@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ZodType } from "zod";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import type { Session } from "next-auth";
 
@@ -18,15 +18,21 @@ export class ApiError extends Error {
 // that belong to whoever is signed in rather than to a module: changing your own
 // password is one, and gating that on a permission would mean a role could exist
 // that cannot change its own credentials.
+//
+// Goes through liveSession(), so the role and permissions on the returned
+// session are the database's answer rather than the copy frozen into the cookie
+// at sign-in, and a deactivated account fails here with a 401 even though its
+// cookie is still perfectly valid.
 export async function requireSession(): Promise<Session> {
-  const session = await auth();
-  if (!session?.user) throw new ApiError(401, "Unauthorized");
+  const session = await liveSession();
+  if (!session) throw new ApiError(401, "Unauthorized");
   return session;
 }
 
-// Resolves the session and asserts the given permission. The middleware already
-// gates *read* access by path prefix; handlers call this to enforce the
-// write/read permission appropriate to the HTTP method.
+// Resolves the session and asserts the given permission. proxy.ts also gates
+// read access by path prefix, but it runs on the Edge against the token alone
+// and so can be stale: this is the check that actually decides, because it is
+// the one reading live permissions.
 export async function requirePermission(permission: string): Promise<Session> {
   const session = await requireSession();
   if (!hasPermission(session.user, permission)) {

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import DashboardShell from "@/components/ui/DashboardShell";
 
 export default async function DashboardLayout({
@@ -7,8 +7,12 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth();
-  if (!session?.user) redirect("/login");
+  const session = await liveSession();
+  // Null means the account behind the cookie is gone or deactivated, since a
+  // request with no cookie at all never reaches this layout: proxy.ts turns
+  // those away first. Redirecting to /login would bounce off that same proxy,
+  // which still reads the cookie as valid, so go somewhere that can clear it.
+  if (!session?.user) redirect("/api/account/signout");
 
   const user = session.user;
 

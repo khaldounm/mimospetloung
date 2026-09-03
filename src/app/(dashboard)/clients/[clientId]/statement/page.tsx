@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { getClientStatement } from "@/lib/client-statement";
 import { getFxRate } from "@/lib/settings";
@@ -27,7 +27,7 @@ export default async function ClientStatementPage({
   const { from, to } = await searchParams;
   const range = rangeFromParams(from, to);
 
-  const session = await auth();
+  const session = await liveSession();
   const [statement, fxRate] = await Promise.all([
     getClientStatement(id, range),
     getFxRate(),

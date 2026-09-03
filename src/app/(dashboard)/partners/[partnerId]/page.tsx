@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { getPartnerDetail } from "@/lib/partners";
 import { defaultRange, rangeFromParams } from "@/utils/date-range";
@@ -18,7 +18,7 @@ export default async function PartnerPage({
   const id = Number(partnerId);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "partners:write");
 
   // Carried in from the list's link so clicking a partner keeps the period the

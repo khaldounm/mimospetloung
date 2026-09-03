@@ -1,10 +1,10 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import { listPatients } from "@/lib/patients";
 import PatientsTable from "@/components/patients/PatientsTable";
 
 export default async function PatientsPage() {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "patients:write");
 
   // First page only. Paging, search and the letter filter all run in SQL, and

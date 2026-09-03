@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import {
   getInventoryCategories,
@@ -13,7 +13,7 @@ export default async function InventoryPage({
 }: {
   searchParams: Promise<{ supplier?: string }>;
 }) {
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "inventory:write");
   const canViewSuppliers = hasPermission(session?.user, "orders:read");
   // One permission covers both creating a supplier inline and pushing items

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { prisma } from "@/lib/prisma";
 import { canSeeCost, hasPermission } from "@/lib/permissions";
 import { toInventoryItemDTO } from "@/lib/inventory";
@@ -18,7 +18,7 @@ export default async function OrderPage({
   const id = Number(orderId);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "orders:write");
   // Receiving moves stock, so it needs the inventory permission too.
   const canReceive = hasPermission(session?.user, "inventory:write");

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { liveSession } from "@/lib/session-user";
 import { hasPermission } from "@/lib/permissions";
 import {
   getPayableOrders,
@@ -20,7 +20,7 @@ export default async function SupplierPage({
   const id = Number(supplierId);
   if (!Number.isInteger(id) || id <= 0) notFound();
 
-  const session = await auth();
+  const session = await liveSession();
   const canWrite = hasPermission(session?.user, "orders:write");
 
   // The two tables arrive a page at a time; the pickers get every payable bill
