@@ -50,6 +50,14 @@ interface Props {
   pageSize: number;
   payableOrders: PayableOrderOption[];
   canWrite: boolean;
+  // payables:read. Without it the supplier still opens, showing who they are
+  // and what was bought, with every figure about what is owed, paid or
+  // credited left out. The DTO arrives without `money`, so these blocks would
+  // otherwise render zeros and read as a settled account.
+  showMoney: boolean;
+  // payables:write. Separate from canWrite (orders:write), so someone who may
+  // edit the supplier record is not offered buttons that will 403.
+  canRecordPayments: boolean;
 }
 
 export default function SupplierDetail({
@@ -61,6 +69,8 @@ export default function SupplierDetail({
   pageSize,
   payableOrders,
   canWrite,
+  showMoney,
+  canRecordPayments,
 }: Props) {
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
@@ -173,20 +183,24 @@ export default function SupplierDetail({
         </Box>
         {canWrite && (
           <Stack direction="row" spacing={1}>
-            <Button
-              variant="contained"
-              startIcon={<PaymentsIcon />}
-              onClick={() => setPayOpen(true)}
-            >
-              Record payment
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<ReceiptLongIcon />}
-              onClick={() => setCreditOpen(true)}
-            >
-              Record credit
-            </Button>
+            {canRecordPayments && (
+              <Button
+                variant="contained"
+                startIcon={<PaymentsIcon />}
+                onClick={() => setPayOpen(true)}
+              >
+                Record payment
+              </Button>
+            )}
+            {canRecordPayments && (
+              <Button
+                variant="outlined"
+                startIcon={<ReceiptLongIcon />}
+                onClick={() => setCreditOpen(true)}
+              >
+                Record credit
+              </Button>
+            )}
             <Button
               variant="outlined"
               startIcon={<EditIcon />}
@@ -204,80 +218,84 @@ export default function SupplierDetail({
         </Alert>
       )}
 
-      <Box
-        sx={{
-          display: "grid",
-          gap: 2,
-          mb: 2,
-          gridTemplateColumns: {
-            xs: "1fr",
-            sm: "repeat(2, 1fr)",
-            md: `repeat(${4 + (broughtForward !== 0 ? 1 : 0) + (credited !== 0 ? 1 : 0)}, 1fr)`,
-          },
-        }}
-      >
-        {/* Only shown when there is one. An account opened at zero does not
+      {showMoney && (
+        <Box
+          sx={{
+            display: "grid",
+            gap: 2,
+            mb: 2,
+            gridTemplateColumns: {
+              xs: "1fr",
+              sm: "repeat(2, 1fr)",
+              md: `repeat(${4 + (broughtForward !== 0 ? 1 : 0) + (credited !== 0 ? 1 : 0)}, 1fr)`,
+            },
+          }}
+        >
+          {/* Only shown when there is one. An account opened at zero does not
             need a row explaining itself. The date is whatever the balance was
             struck on, not a year end: plenty of accounts never close on one. */}
-        {broughtForward !== 0 && (
+          {broughtForward !== 0 && (
+            <StatCard
+              label="Opening balance"
+              value={formatMoney(money?.openingBalance)}
+              hint={
+                money?.openingBalanceAsOf
+                  ? `As at ${formatDate(money.openingBalanceAsOf)}`
+                  : undefined
+              }
+            />
+          )}
           <StatCard
-            label="Opening balance"
-            value={formatMoney(money?.openingBalance)}
-            hint={
-              money?.openingBalanceAsOf
-                ? `As at ${formatDate(money.openingBalanceAsOf)}`
-                : undefined
-            }
+            label="Billed"
+            value={formatMoney(money?.invoiced)}
+            hint={`${money?.orderCount ?? 0} delivered order(s)`}
           />
-        )}
-        <StatCard
-          label="Billed"
-          value={formatMoney(money?.invoiced)}
-          hint={`${money?.orderCount ?? 0} delivered order(s)`}
-        />
-        <StatCard label="Paid" value={formatMoney(money?.paid)} />
-        {/* Only shown once a credit note exists. On an account that has never
+          <StatCard label="Paid" value={formatMoney(money?.paid)} />
+          {/* Only shown once a credit note exists. On an account that has never
             had one the card would be a permanent zero explaining nothing. */}
-        {credited !== 0 && (
-          <StatCard
-            label="Credited"
-            value={formatMoney(money?.credited)}
-            hint="Settled by credit note, not cash"
-          />
-        )}
-        {/* A negative balance is money paid with no bill to match it, which is a
+          {credited !== 0 && (
+            <StatCard
+              label="Credited"
+              value={formatMoney(money?.credited)}
+              hint="Settled by credit note, not cash"
+            />
+          )}
+          {/* A negative balance is money paid with no bill to match it, which is a
             credit rather than a debt. Shown as such and flagged, not coloured
             green: unmatched cash needs looking at, it is not "settled". */}
-        <StatCard
-          label={inCredit ? "In credit" : "Owed now"}
-          value={formatMoney(Math.abs(balance))}
-          accent={inCredit ? "info" : balance > 0 ? "warning" : "success"}
-          hint={
-            broughtForward !== 0
-              ? "Opening balance plus billed, less settled"
-              : inCredit
-                ? "Settled more than has been billed"
-                : credited !== 0
-                  ? "Billed, less paid and credited"
-                  : "Billed minus paid"
-          }
-        />
-        <StatCard
-          label="In progress"
-          value={formatMoney(money?.inProgress)}
-          hint={`${money?.openOrderCount ?? 0} order(s) not yet delivered`}
-        />
-      </Box>
+          <StatCard
+            label={inCredit ? "In credit" : "Owed now"}
+            value={formatMoney(Math.abs(balance))}
+            accent={inCredit ? "info" : balance > 0 ? "warning" : "success"}
+            hint={
+              broughtForward !== 0
+                ? "Opening balance plus billed, less settled"
+                : inCredit
+                  ? "Settled more than has been billed"
+                  : credited !== 0
+                    ? "Billed, less paid and credited"
+                    : "Billed minus paid"
+            }
+          />
+          <StatCard
+            label="In progress"
+            value={formatMoney(money?.inProgress)}
+            hint={`${money?.openOrderCount ?? 0} order(s) not yet delivered`}
+          />
+        </Box>
+      )}
 
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        An order counts as billed once it is Received, meaning fully delivered
-        or closed short. Orders still in draft, placed or part-delivered show
-        under In progress and are not owed yet.
-        {broughtForward !== 0 &&
-          " The opening balance is what the account stood at on the date it" +
-            " was struck, so it counts towards the balance without having an" +
-            " order here to point at."}
-      </Typography>
+      {showMoney && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+          An order counts as billed once it is Received, meaning fully delivered
+          or closed short. Orders still in draft, placed or part-delivered show
+          under In progress and are not owed yet.
+          {broughtForward !== 0 &&
+            " The opening balance is what the account stood at on the date it" +
+              " was struck, so it counts towards the balance without having an" +
+              " order here to point at."}
+        </Typography>
+      )}
 
       <Typography variant="h5" sx={{ mb: 2 }}>
         Contacts
@@ -429,86 +447,94 @@ export default function SupplierDetail({
         noun="orders"
       />
 
-      <Typography variant="h5" sx={{ mb: 2, mt: 2 }}>
-        Payments
-      </Typography>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Date</TableCell>
-              <TableCell>Kind</TableCell>
-              <TableCell align="right">Amount</TableCell>
-              <TableCell>Against</TableCell>
-              <TableCell>Method</TableCell>
-              <TableCell>Reference</TableCell>
-              <TableCell>Added by</TableCell>
-              {canWrite && <TableCell align="right">Actions</TableCell>}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {payments.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={canWrite ? 8 : 7} align="center">
-                  <Typography color="text.secondary" sx={{ py: 2 }}>
-                    Nothing settled yet.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              payments.map((p) => (
-                <TableRow key={p.paymentId} hover>
-                  <TableCell>{formatDate(p.paidOn)}</TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      color={p.kind === "Credit" ? "info" : "default"}
-                      label={SETTLEMENT_KIND_LABEL[p.kind]}
-                    />
-                  </TableCell>
-                  <TableCell align="right">{formatMoney(p.amount)}</TableCell>
-                  <TableCell>
-                    {p.orderId ? (
-                      <Link href={`/orders/${p.orderId}`}>
-                        {p.orderReference}
-                      </Link>
-                    ) : (
-                      <Typography variant="body2" color="text.secondary">
-                        The account
-                      </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>{p.method ?? "-"}</TableCell>
-                  <TableCell>{p.reference ?? "-"}</TableCell>
-                  <TableCell>{p.createdByName ?? "-"}</TableCell>
-                  {canWrite && (
-                    <TableCell align="right">
-                      <Tooltip title="Delete">
-                        <IconButton
-                          size="small"
-                          onClick={() => void deletePayment(p)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  )}
+      {showMoney && (
+        <Typography variant="h5" sx={{ mb: 2, mt: 2 }}>
+          Payments
+        </Typography>
+      )}
+      {showMoney && (
+        <>
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Date</TableCell>
+                  <TableCell>Kind</TableCell>
+                  <TableCell align="right">Amount</TableCell>
+                  <TableCell>Against</TableCell>
+                  <TableCell>Method</TableCell>
+                  <TableCell>Reference</TableCell>
+                  <TableCell>Added by</TableCell>
+                  {canWrite && <TableCell align="right">Actions</TableCell>}
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              </TableHead>
+              <TableBody>
+                {payments.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={canWrite ? 8 : 7} align="center">
+                      <Typography color="text.secondary" sx={{ py: 2 }}>
+                        Nothing settled yet.
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  payments.map((p) => (
+                    <TableRow key={p.paymentId} hover>
+                      <TableCell>{formatDate(p.paidOn)}</TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color={p.kind === "Credit" ? "info" : "default"}
+                          label={SETTLEMENT_KIND_LABEL[p.kind]}
+                        />
+                      </TableCell>
+                      <TableCell align="right">
+                        {formatMoney(p.amount)}
+                      </TableCell>
+                      <TableCell>
+                        {p.orderId ? (
+                          <Link href={`/orders/${p.orderId}`}>
+                            {p.orderReference}
+                          </Link>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            The account
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>{p.method ?? "-"}</TableCell>
+                      <TableCell>{p.reference ?? "-"}</TableCell>
+                      <TableCell>{p.createdByName ?? "-"}</TableCell>
+                      {canWrite && (
+                        <TableCell align="right">
+                          <Tooltip title="Delete">
+                            <IconButton
+                              size="small"
+                              onClick={() => void deletePayment(p)}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
 
-      <TablePaginationBar
-        page={paymentsPage}
-        count={paymentsTotal}
-        pageSize={pageSize}
-        onChange={(p) => void loadPayments(p)}
-        loading={paymentsLoading}
-        noun="settlements"
-      />
+          <TablePaginationBar
+            page={paymentsPage}
+            count={paymentsTotal}
+            pageSize={pageSize}
+            onChange={(p) => void loadPayments(p)}
+            loading={paymentsLoading}
+            noun="settlements"
+          />
+        </>
+      )}
 
       <SupplierFormDialog
         open={editOpen}

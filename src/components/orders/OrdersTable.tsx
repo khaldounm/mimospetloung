@@ -47,6 +47,9 @@ interface Props {
   /** Counts and value for the whole open book, not just the page on screen. */
   totals: OrderTotals;
   suppliers: SupplierDTO[];
+  // payables:read. The statement is accounts payable, so without it the button
+  // would only lead to a redirect back out of the page.
+  showStatement: boolean;
 }
 
 interface SupplierGroup {
@@ -63,6 +66,7 @@ export default function OrdersTable({
   pageSize,
   totals,
   suppliers,
+  showStatement,
 }: Props) {
   const [creating, setCreating] = useState(false);
   const [orders, setOrders] = useState(initialOrders);
@@ -142,14 +146,16 @@ export default function OrdersTable({
       >
         <Typography variant="h4">Orders</Typography>
         <Stack direction="row" spacing={1}>
-          <Button
-            component={Link}
-            href="/orders/statement"
-            variant="outlined"
-            startIcon={<DescriptionIcon />}
-          >
-            Statement
-          </Button>
+          {showStatement && (
+            <Button
+              component={Link}
+              href="/orders/statement"
+              variant="outlined"
+              startIcon={<DescriptionIcon />}
+            >
+              Statement
+            </Button>
+          )}
           <Button
             variant="contained"
             startIcon={<AddIcon />}

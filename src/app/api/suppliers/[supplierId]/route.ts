@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { canSeePayables } from "@/lib/permissions";
 import {
   ApiError,
   handle,
@@ -25,10 +26,13 @@ export async function GET(
   { params }: { params: Promise<{ supplierId: string }> },
 ) {
   return handle(async () => {
-    await requirePermission("orders:read");
+    const session = await requirePermission("orders:read");
     const supplierId = await getSupplierId(params);
 
-    const supplier = await getSupplier(supplierId);
+    const supplier = await getSupplier(
+      supplierId,
+      canSeePayables(session.user),
+    );
     if (!supplier) throw new ApiError(404, "Supplier not found");
 
     return NextResponse.json({ supplier });

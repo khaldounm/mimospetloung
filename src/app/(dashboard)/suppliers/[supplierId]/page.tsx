@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { liveSession } from "@/lib/session-user";
-import { hasPermission } from "@/lib/permissions";
+import { canSeePayables, hasPermission } from "@/lib/permissions";
 import {
   getPayableOrders,
   getSupplierDetail,
@@ -22,12 +22,15 @@ export default async function SupplierPage({
 
   const session = await liveSession();
   const canWrite = hasPermission(session?.user, "orders:write");
+  const showMoney = canSeePayables(session?.user);
 
   // The two tables arrive a page at a time; the pickers get every payable bill
-  // but as four fields each rather than a whole purchase order.
+  // but as four fields each rather than a whole purchase order. The payable
+  // list is what is still owed on each order, so it is not fetched at all
+  // without the permission.
   const [detail, payableOrders] = await Promise.all([
-    getSupplierDetail(id),
-    getPayableOrders(id),
+    getSupplierDetail(id, showMoney),
+    showMoney ? getPayableOrders(id) : Promise.resolve([]),
   ]);
   if (!detail) notFound();
 
@@ -41,6 +44,8 @@ export default async function SupplierPage({
       pageSize={SUPPLIER_PAGE_SIZE}
       payableOrders={payableOrders}
       canWrite={canWrite}
+      showMoney={showMoney}
+      canRecordPayments={hasPermission(session?.user, "payables:write")}
     />
   );
 }

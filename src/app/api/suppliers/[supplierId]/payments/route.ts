@@ -25,7 +25,7 @@ export async function GET(
   { params }: { params: Promise<{ supplierId: string }> },
 ) {
   return handle(async () => {
-    await requirePermission("orders:read");
+    await requirePermission("payables:read");
     const supplierId = await getSupplierId(params);
 
     const pageRaw = new URL(request.url).searchParams.get("page")?.trim();
@@ -43,7 +43,7 @@ export async function POST(
   { params }: { params: Promise<{ supplierId: string }> },
 ) {
   return handle(async () => {
-    const session = await requirePermission("orders:write");
+    const session = await requirePermission("payables:write");
     const supplierId = await getSupplierId(params);
     const data = await parseBody(request, supplierPaymentCreateSchema);
 
@@ -95,7 +95,7 @@ export async function POST(
     return NextResponse.json(
       {
         payment: toSupplierPaymentDTO(payment),
-        supplier: await getSupplier(supplierId),
+        supplier: await getSupplier(supplierId, true),
       },
       { status: 201 },
     );

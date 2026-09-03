@@ -30,6 +30,11 @@ export const PERMISSIONS: Record<string, string> = {
   // see stock levels without seeing what the clinic pays for it.
   "orders:read": "View suppliers and purchase orders",
   "orders:write": "Manage suppliers and purchase orders",
+  // Accounts payable. Separate from orders:* so someone can receive a delivery
+  // and correct what it cost without seeing what the clinic owes the supplier,
+  // what it has paid, or the statement.
+  "payables:read": "View supplier balances, statements and payments",
+  "payables:write": "Record supplier payments and credit notes",
 };
 
 // ── Role → permission grants ────────────────────────────────

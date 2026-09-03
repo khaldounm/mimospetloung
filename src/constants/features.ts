@@ -21,6 +21,7 @@ export const ENABLED_MODULES = [
   "audit",
   "inventory", // she runs a separate store application
   "orders", // purchase orders and suppliers
+  "payables", // supplier balances, statements and payments
   "partners",
   "costs",
   "analytics", // mostly store-derived, off for v1

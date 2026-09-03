@@ -28,8 +28,13 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
   { module: "inventory", label: "Inventory" },
   {
     module: "orders",
-    label: "Suppliers & purchase orders",
-    hint: "Read also reveals what stock costs the clinic",
+    label: "Purchase orders & suppliers",
+    hint: "Read also reveals what stock costs the clinic. Balances and payments are their own row below",
+  },
+  {
+    module: "payables",
+    label: "Supplier balances & payments",
+    hint: "What is owed, what was paid, and the statement. Without it the supplier still opens, minus the money",
   },
   {
     module: "partners",

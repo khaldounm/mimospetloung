@@ -16,7 +16,7 @@ export async function POST(
   { params }: { params: Promise<{ supplierId: string }> },
 ) {
   return handle(async () => {
-    const session = await requirePermission("orders:write");
+    const session = await requirePermission("payables:write");
     const supplierId = parseId((await params).supplierId, "supplier id");
     const data = await parseBody(request, supplierCreditSchema);
 
@@ -35,11 +35,11 @@ export async function POST(
       changes: { creditNote: data, paymentIds },
     });
 
-    const detail = await getSupplierDetail(supplierId);
+    const detail = await getSupplierDetail(supplierId, true);
     return NextResponse.json(
       {
         payments: detail?.payments ?? [],
-        supplier: await getSupplier(supplierId),
+        supplier: await getSupplier(supplierId, true),
       },
       { status: 201 },
     );

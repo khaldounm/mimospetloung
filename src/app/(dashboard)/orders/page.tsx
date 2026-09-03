@@ -4,6 +4,8 @@ import {
   ORDER_PAGE_SIZE,
 } from "@/lib/purchase-orders";
 import { getActiveSuppliers } from "@/lib/suppliers";
+import { liveSession } from "@/lib/session-user";
+import { canSeePayables } from "@/lib/permissions";
 import OrdersTable from "@/components/orders/OrdersTable";
 
 // Drafts change as the low-stock basket is filled; always render fresh.
@@ -19,7 +21,8 @@ export default async function OrdersPage() {
   // Orders arrive one page at a time and already filtered: the tab strip and
   // the pager both re-query rather than sorting through a copy of the whole
   // order book in the browser.
-  const [page, totals, suppliers] = await Promise.all([
+  const [session, page, totals, suppliers] = await Promise.all([
+    liveSession(),
     getOrders({ status: INITIAL_FILTER, page: 1 }),
     getOrderTotals(),
     getActiveSuppliers(),
@@ -33,6 +36,7 @@ export default async function OrdersPage() {
       pageSize={ORDER_PAGE_SIZE}
       totals={totals}
       suppliers={suppliers}
+      showStatement={canSeePayables(session?.user)}
     />
   );
 }

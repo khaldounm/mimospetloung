@@ -11,7 +11,7 @@ export async function DELETE(
   { params }: { params: Promise<{ supplierId: string; paymentId: string }> },
 ) {
   return handle(async () => {
-    const session = await requirePermission("orders:write");
+    const session = await requirePermission("payables:write");
     const { supplierId: rawSupplier, paymentId: rawPayment } = await params;
     const supplierId = parseId(rawSupplier, "supplier id");
     const paymentId = parseId(rawPayment, "payment id");
@@ -33,6 +33,6 @@ export async function DELETE(
       changes: { softDelete: true, supplierId },
     });
 
-    return NextResponse.json({ supplier: await getSupplier(supplierId) });
+    return NextResponse.json({ supplier: await getSupplier(supplierId, true) });
   });
 }

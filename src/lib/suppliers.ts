@@ -68,7 +68,9 @@ export function toSupplierContactDTO(c: ContactRow): SupplierContactDTO {
 
 type SupplierStats = {
   itemCount: number;
-  money: SupplierMoneyDTO;
+  // Omitted for a caller without payables:read. Stripped here rather than in
+  // the component so the figures never reach the browser at all.
+  money?: SupplierMoneyDTO;
 };
 
 export function toSupplierDTO(
@@ -95,7 +97,7 @@ export function toSupplierDTO(
   };
   if (stats) {
     dto.itemCount = stats.itemCount;
-    dto.money = stats.money;
+    if (stats.money) dto.money = stats.money;
   }
   return dto;
 }
@@ -338,7 +340,9 @@ function toMoneyDTO(
 
 // All suppliers with item counts and their balance. Inactive suppliers sort last
 // but stay visible, since their history still matters.
-export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
+export async function getSuppliersWithStats(
+  canSeePayables: boolean,
+): Promise<SupplierDTO[]> {
   const [suppliers, itemGroups, orderTotals, paidGroups, openingGroups] =
     await Promise.all([
       prisma.supplier.findMany({
@@ -384,12 +388,14 @@ export async function getSuppliersWithStats(): Promise<SupplierDTO[]> {
   return suppliers.map((s) =>
     toSupplierDTO(s, {
       itemCount: itemMap.get(s.supplierId) ?? 0,
-      money: toMoneyDTO(
-        orderTotals.get(s.supplierId) ?? NO_ORDERS,
-        settledMap.get(s.supplierId) ?? { paid: D(0), credited: D(0) },
-        openingMap.get(s.supplierId)?.amount ?? D(0),
-        openingMap.get(s.supplierId)?.asOfDate ?? null,
-      ),
+      money: !canSeePayables
+        ? undefined
+        : toMoneyDTO(
+            orderTotals.get(s.supplierId) ?? NO_ORDERS,
+            settledMap.get(s.supplierId) ?? { paid: D(0), credited: D(0) },
+            openingMap.get(s.supplierId)?.amount ?? D(0),
+            openingMap.get(s.supplierId)?.asOfDate ?? null,
+          ),
     }),
   );
 }
@@ -406,6 +412,7 @@ export async function getActiveSuppliers(): Promise<SupplierDTO[]> {
 
 export async function getSupplier(
   supplierId: number,
+  canSeePayables: boolean,
 ): Promise<SupplierDTO | null> {
   const supplier = await prisma.supplier.findFirst({
     where: { supplierId, deletedAt: null },
@@ -430,15 +437,18 @@ export async function getSupplier(
 
   return toSupplierDTO(supplier, {
     itemCount,
-    money: toMoneyDTO(
-      orderTotals.get(supplierId) ?? NO_ORDERS,
-      {
-        paid: paidAgg.find((g) => g.kind !== "Credit")?._sum.amount ?? D(0),
-        credited: paidAgg.find((g) => g.kind === "Credit")?._sum.amount ?? D(0),
-      },
-      openingAgg?.amount ?? D(0),
-      openingAgg?.asOfDate ?? null,
-    ),
+    money: !canSeePayables
+      ? undefined
+      : toMoneyDTO(
+          orderTotals.get(supplierId) ?? NO_ORDERS,
+          {
+            paid: paidAgg.find((g) => g.kind !== "Credit")?._sum.amount ?? D(0),
+            credited:
+              paidAgg.find((g) => g.kind === "Credit")?._sum.amount ?? D(0),
+          },
+          openingAgg?.amount ?? D(0),
+          openingAgg?.asOfDate ?? null,
+        ),
   });
 }
 
@@ -542,13 +552,24 @@ export interface SupplierDetailData {
 
 export async function getSupplierDetail(
   supplierId: number,
+  canSeePayables: boolean,
 ): Promise<SupplierDetailData | null> {
-  const supplier = await getSupplier(supplierId);
+  const supplier = await getSupplier(supplierId, canSeePayables);
   if (!supplier) return null;
 
+  // The payment history is money, so it is not fetched at all without the
+  // permission rather than fetched and hidden. The order history stays: it is
+  // what was bought and what it cost, which rides with orders:read.
   const [orders, payments] = await Promise.all([
     getSupplierOrders(supplierId, 1),
-    getSupplierPayments(supplierId, 1),
+    canSeePayables
+      ? getSupplierPayments(supplierId, 1)
+      : Promise.resolve<SupplierPaymentsPage>({
+          payments: [],
+          total: 0,
+          page: 1,
+          pageSize: 0,
+        }),
   ]);
 
   return { supplier, orders, payments };

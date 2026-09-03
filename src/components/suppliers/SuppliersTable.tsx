@@ -33,12 +33,17 @@ interface Props {
   initialSuppliers: SupplierDTO[];
   unassignedItemCount: number;
   canWrite: boolean;
+  // payables:read. False strips the money columns and the two money tiles: the
+  // DTO arrives without `money` at all, so rendering them would show zeros and
+  // read as "this supplier is settled" rather than "you cannot see this".
+  showMoney: boolean;
 }
 
 export default function SuppliersTable({
   initialSuppliers,
   unassignedItemCount,
   canWrite,
+  showMoney,
 }: Props) {
   const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -119,24 +124,31 @@ export default function SuppliersTable({
           display: "grid",
           gap: 2,
           mb: 2,
-          gridTemplateColumns: { xs: "1fr", sm: "repeat(4, 1fr)" },
+          gridTemplateColumns: {
+            xs: "1fr",
+            sm: showMoney ? "repeat(4, 1fr)" : "repeat(2, 1fr)",
+          },
         }}
       >
-        <StatCard
-          label="Owed to suppliers"
-          value={formatMoney(totals.owed)}
-          accent={totals.owed > 0 ? "warning" : "success"}
-          hint={
-            totals.credit > 0
-              ? `Plus ${formatMoney(totals.credit)} held in credit`
-              : "Delivered orders, minus payments"
-          }
-        />
-        <StatCard
-          label="In progress"
-          value={formatMoney(totals.inProgress)}
-          hint="Ordered, not yet delivered"
-        />
+        {showMoney && (
+          <StatCard
+            label="Owed to suppliers"
+            value={formatMoney(totals.owed)}
+            accent={totals.owed > 0 ? "warning" : "success"}
+            hint={
+              totals.credit > 0
+                ? `Plus ${formatMoney(totals.credit)} held in credit`
+                : "Delivered orders, minus payments"
+            }
+          />
+        )}
+        {showMoney && (
+          <StatCard
+            label="In progress"
+            value={formatMoney(totals.inProgress)}
+            hint="Ordered, not yet delivered"
+          />
+        )}
         <StatCard
           label="Suppliers"
           value={`${activeCount} / ${initialSuppliers.length}`}
@@ -156,16 +168,19 @@ export default function SuppliersTable({
               <TableCell>Supplier</TableCell>
               <TableCell>Contact</TableCell>
               <TableCell align="right">Items</TableCell>
-              <TableCell align="right">Billed</TableCell>
-              <TableCell align="right">Paid</TableCell>
-              <TableCell align="right">Owed</TableCell>
+              {showMoney && <TableCell align="right">Billed</TableCell>}
+              {showMoney && <TableCell align="right">Paid</TableCell>}
+              {showMoney && <TableCell align="right">Owed</TableCell>}
               {canWrite && <TableCell align="right">Actions</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
             {initialSuppliers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={canWrite ? 7 : 6} align="center">
+                <TableCell
+                  colSpan={(showMoney ? 6 : 3) + (canWrite ? 1 : 0)}
+                  align="center"
+                >
                   <Typography color="text.secondary" sx={{ py: 2 }}>
                     No suppliers yet.
                   </Typography>
@@ -234,22 +249,28 @@ export default function SuppliersTable({
                       0
                     )}
                   </TableCell>
-                  <TableCell align="right">
-                    {formatMoney(s.money?.invoiced)}
-                    {Number(s.money?.inProgress ?? 0) > 0 && (
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ display: "block" }}
-                      >
-                        {formatMoney(s.money?.inProgress)} in progress
-                      </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell align="right">
-                    {formatMoney(s.money?.paid)}
-                  </TableCell>
-                  <OwedCell balance={Number(s.money?.balance ?? 0)} />
+                  {showMoney && (
+                    <TableCell align="right">
+                      {formatMoney(s.money?.invoiced)}
+                      {Number(s.money?.inProgress ?? 0) > 0 && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: "block" }}
+                        >
+                          {formatMoney(s.money?.inProgress)} in progress
+                        </Typography>
+                      )}
+                    </TableCell>
+                  )}
+                  {showMoney && (
+                    <TableCell align="right">
+                      {formatMoney(s.money?.paid)}
+                    </TableCell>
+                  )}
+                  {showMoney && (
+                    <OwedCell balance={Number(s.money?.balance ?? 0)} />
+                  )}
                   {canWrite && (
                     <TableCell align="right">
                       <Tooltip title="Edit">

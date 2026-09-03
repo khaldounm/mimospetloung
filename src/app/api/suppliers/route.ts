@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { handle, parseBody, requirePermission } from "@/lib/api";
+import { canSeePayables } from "@/lib/permissions";
 import {
   getActiveSuppliers,
   getSuppliersWithStats,
@@ -13,14 +14,14 @@ import { supplierCreateSchema } from "@/schemas/supplier";
 
 export async function GET(request: Request) {
   return handle(async () => {
-    await requirePermission("orders:read");
+    const session = await requirePermission("orders:read");
 
     // ?active=1 returns the lightweight active list for the inventory picker;
     // otherwise the full list with item counts.
     const active = new URL(request.url).searchParams.get("active") === "1";
     const suppliers = active
       ? await getActiveSuppliers()
-      : await getSuppliersWithStats();
+      : await getSuppliersWithStats(canSeePayables(session.user));
 
     return NextResponse.json({ suppliers });
   });

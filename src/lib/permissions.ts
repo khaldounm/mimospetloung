@@ -42,6 +42,18 @@ export function canSeePartnerDeal(
   return hasPermission(user, PARTNER_DEAL_PERMISSION);
 }
 
+// Who may see what the clinic owes its suppliers: balances, the statement, what
+// has been paid and credited. Deliberately NOT orders:read, so someone can be
+// given purchasing (receive a delivery, correct what it cost) without being
+// handed the accounts payable picture that sits behind it.
+export const PAYABLES_PERMISSION = "payables:read";
+
+export function canSeePayables(
+  user: PermissionHolder | null | undefined,
+): boolean {
+  return hasPermission(user, PAYABLES_PERMISSION);
+}
+
 export function hasAnyPermission(
   user: PermissionHolder | null | undefined,
   permissions: string[],
@@ -161,6 +173,10 @@ const ROUTE_RULES: { prefix: string; permission: string }[] = [
   // staff never see purchase costs.
   { prefix: "/suppliers", permission: "orders:read" },
   { prefix: "/api/suppliers", permission: "orders:read" },
+  // Accounts payable rather than purchasing, so it has its own gate. MUST stay
+  // above /orders: requiredPermissionForPath() returns the first prefix that
+  // matches, and /orders would otherwise swallow it.
+  { prefix: "/orders/statement", permission: "payables:read" },
   { prefix: "/orders", permission: "orders:read" },
   { prefix: "/api/orders", permission: "orders:read" },
   { prefix: "/patients", permission: "patients:read" },
