@@ -52,6 +52,13 @@ export default auth((req) => {
 
   // Logged in: keep users out of the auth pages.
   if (isAuthPage) {
+    // Except when they have just come from /api/account/signout. If that clear
+    // ever fails, bouncing them back into the dashboard makes an infinite loop
+    // and the app becomes unreachable, which is what happened on 2026-09-03.
+    // Landing on /login while technically still holding a cookie is harmless;
+    // looping is not.
+    if (nextUrl.searchParams.has("signedout")) return NextResponse.next();
+
     return NextResponse.redirect(
       new URL(firstAllowedHref(user) ?? "/login", nextUrl),
     );
