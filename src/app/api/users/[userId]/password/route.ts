@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
+import { invalidateLiveUser } from "@/lib/session-user";
 import { hashPassword } from "@/lib/users";
 import { passwordResetSchema } from "@/schemas/user";
 
@@ -25,19 +26,27 @@ export async function PATCH(
     const existing = await prisma.user.findUnique({ where: { userId } });
     if (!existing) throw new ApiError(404, "User not found");
 
+    // Ends every session this person has open, in the same write as the new
+    // hash. The usual reason to reset someone else's password is that the old
+    // one is no longer trusted, and leaving their existing sessions alive would
+    // hand the new password to the admin while whoever already had the account
+    // open carried on regardless.
     await prisma.user.update({
       where: { userId },
       data: {
         passwordHash: await hashPassword(password),
+        sessionsValidFrom: new Date(),
         updatedAt: new Date(),
       },
     });
+
+    invalidateLiveUser(userId);
 
     await writeAudit(session, {
       action: "update",
       entity: "user",
       entityId: userId,
-      changes: { passwordChanged: true },
+      changes: { passwordChanged: true, sessionsEnded: true },
     });
 
     return NextResponse.json({ ok: true });

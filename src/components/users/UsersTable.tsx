@@ -19,7 +19,7 @@ import {
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
-import { apiRequest } from "@/utils/api-client";
+import { apiRequest, redirectToSignIn } from "@/utils/api-client";
 import { formatDateTime } from "@/utils/format";
 import type { RoleOption, UserDTO } from "@/types/entities";
 import UserFormDialog from "./UserFormDialog";
@@ -81,7 +81,10 @@ export default function UsersTable({
     try {
       await apiRequest(`/api/users/${user.userId}/signout`, { method: "POST" });
       if (user.userId === currentUserId) {
-        window.location.href = "/login";
+        // Not /login: the cookie is still in the browser and proxy.ts reads it
+        // as a live session, so that would bounce back into the dashboard before
+        // the layout eventually turned it around. Go where it gets cleared.
+        redirectToSignIn();
         return;
       }
     } catch (err) {

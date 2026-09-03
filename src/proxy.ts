@@ -65,6 +65,17 @@ export default auth((req) => {
   }
 
   // Server-side RBAC: reject access to gated paths without the permission.
+  //
+  // This reads the token's copy of the permissions, which is written at sign-in
+  // and never rewritten. That is safe only because the copy is never allowed to
+  // drift: liveSession() ends the session as soon as it differs from the
+  // database in either direction, so by the time a request gets here the token
+  // either matches or the session is already over. See permissionsChanged() in
+  // src/lib/session-user.ts.
+  //
+  // Do not be tempted to delete this gate in favour of the live checks. The
+  // top-level module pages do not enforce anything, they only vary their content
+  // by permission, so this is the only thing standing in front of them.
   const required = requiredPermissionForPath(path);
   if (required && !hasPermission(user, required)) {
     if (path.startsWith("/api/")) {

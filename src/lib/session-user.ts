@@ -87,6 +87,35 @@ async function read(userId: number): Promise<LiveUser | null> {
 // happens on every request, so `iat` is always "just now" and would never look
 // stale. A token carrying no stamp predates the feature and cannot prove when it
 // began, so a revocation wins and it has to sign in again.
+// Whether the role's permissions have changed since this token was minted.
+//
+// The token carries a copy of the permissions taken at sign-in, and proxy.ts
+// gates the module routes on that copy because it runs on the Edge and cannot
+// reach the database. Letting the copy drift from the database is what creates
+// every awkward case: a granted permission is invisible to the gate and the
+// request is refused before any live check runs, and a revoked one is still
+// claimed, so the gate waves the request through to a page whose own data call
+// then comes back 403 and leaves a broken table on screen.
+//
+// So the two are simply never allowed to disagree. Any difference in either
+// direction ends the session; signing in again mints a token that matches. It
+// costs one interruption at the moment an admin changes someone's access, which
+// is when it is expected and easy to explain, and in exchange the proxy, the
+// pages and the handlers can never reach different conclusions.
+//
+// Bounded staleness caveat: the live set is read through a per-instance cache,
+// so during the TTL window one instance can hold an older set than another. A
+// person moving between them around a permission change can be signed out more
+// than once before it settles. It self-heals within PERMISSION_TTL_MS.
+function permissionsChanged(
+  tokenPermissions: string[] | undefined,
+  livePermissions: string[],
+): boolean {
+  const held = new Set(tokenPermissions ?? []);
+  if (held.size !== livePermissions.length) return true;
+  return livePermissions.some((p) => !held.has(p));
+}
+
 function isSignedOut(
   validFrom: Date | null,
   signedInAt: number | undefined,
@@ -127,6 +156,17 @@ export function invalidateLiveUser(userId: number): void {
   entries.delete(userId);
 }
 
+// Drops the cached entry and reads again. Used when a cached answer contradicts
+// the token in front of it, where the cache is the more likely thing to be
+// wrong: a sign-in reads the database directly, so a token minted seconds ago
+// can legitimately disagree with an entry cached before the change.
+export async function refreshLiveUser(
+  userId: number,
+): Promise<LiveUser | null> {
+  entries.delete(userId);
+  return readLiveUser(userId);
+}
+
 // Same courtesy for a change that moves everybody at once: toggling a permission
 // on a role rewrites what every user holding it may do, and the cache is keyed
 // by user, so there is nothing finer to invalidate and nothing worth the code to
@@ -139,10 +179,11 @@ export function invalidateAllLiveUsers(): void {
 // The session every server-side caller should use: Auth.js for identity, the
 // database for authority.
 //
-// Returns null on any of three counts: no session at all, the account behind a
-// still-valid cookie has been deactivated, or an admin has signed that account
-// out of everything since this particular session began. Every one of them is
-// handled the same way upstream, by clearing the cookie.
+// Returns null on any of four counts: no session at all, the account behind a
+// still-valid cookie has been deactivated, an admin has signed that account out
+// of everything since this session began, or the role has since been granted a
+// permission the token does not carry. Every one is handled the same way
+// upstream, by clearing the cookie and sending them to sign in.
 export async function liveSession(): Promise<Session | null> {
   const session = await auth();
   if (!session?.user) return null;
@@ -152,11 +193,27 @@ export async function liveSession(): Promise<Session | null> {
   const userId = session.user.userId;
   if (typeof userId !== "number") return null;
 
-  const live = await readLiveUser(userId);
+  let live = await readLiveUser(userId);
   if (!live) return null;
 
+  // A disagreement is not enough on its own. The cached set can simply be older
+  // than the token it is being compared against: signing in reads the database
+  // directly, so a token minted a second ago will disagree with anything cached
+  // before the change that prompted it. Ending the session on that reading locks
+  // the person out of a sign-in they just completed correctly, and every retry
+  // does it again until the entry expires. So confirm against the database
+  // before believing it.
+  if (permissionsChanged(session.user.permissions, live.permissions)) {
+    live = await refreshLiveUser(userId);
+    if (!live) return null;
+    if (permissionsChanged(session.user.permissions, live.permissions)) {
+      return null;
+    }
+  }
+
   // sessionsValidFrom is this module's business, not the caller's, so it is
-  // peeled off rather than spread onto session.user.
+  // peeled off rather than spread onto session.user. Read from whichever copy
+  // survived above, so a refresh is reflected here too.
   const { sessionsValidFrom, ...fields } = live;
   if (isSignedOut(sessionsValidFrom, session.user.signedInAt)) return null;
 

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CircularProgress, IconButton, Tooltip } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
+import { redirectToSignIn } from "@/utils/api-client";
 
 interface Props {
   /** API route that answers with a CSV body. */
@@ -31,6 +32,10 @@ export default function DownloadCsvButton({
     setError(null);
     try {
       const res = await fetch(url);
+      if (res.status === 401) {
+        redirectToSignIn();
+        throw new Error("Your session has ended. Taking you back to sign in.");
+      }
       if (!res.ok) {
         // The route reports its failures as JSON, so read the message out of it
         // rather than saving the error body to a .csv file.
