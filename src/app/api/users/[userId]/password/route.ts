@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
-import { invalidateLiveUser } from "@/lib/session-user";
 import { hashPassword } from "@/lib/users";
 import { passwordResetSchema } from "@/schemas/user";
 
@@ -39,8 +38,6 @@ export async function PATCH(
         updatedAt: new Date(),
       },
     });
-
-    invalidateLiveUser(userId);
 
     await writeAudit(session, {
       action: "update",

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseBody, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
-import { invalidateLiveUser } from "@/lib/session-user";
 import {
   countActiveAdmins,
   roleCanManageUsers,
@@ -108,11 +107,6 @@ export async function PATCH(
       },
       include: userInclude,
     });
-
-    // A new role or a deactivation has to bite before this person's next click,
-    // not after their cached permissions lapse. Other instances still wait out
-    // the TTL, so this shortens the common case rather than guaranteeing it.
-    invalidateLiveUser(userId);
 
     await writeAudit(session, {
       action: "update",

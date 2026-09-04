@@ -13,9 +13,7 @@
 // does not.
 export const SESSION_IDLE_SECONDS = 60 * 60;
 
-// How long a role's permissions may be trusted before they are read back from
-// the database. This bounds how long a revoked grant keeps working, and it is
-// the only knob that decides how often the live lookup queries Postgres: at two
-// minutes it is roughly 90k queries a month for ten users, independent of how
-// much traffic they generate.
-export const PERMISSION_TTL_MS = 2 * 60 * 1000;
+// There is deliberately no permission TTL any more. Role and permission reads
+// are memoised per REQUEST in src/lib/session-user.ts, so a revoked grant stops
+// working on the revoked person's very next request rather than up to two
+// minutes later. The comment there explains the bug the old TTL caused.

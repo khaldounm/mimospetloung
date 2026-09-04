@@ -7,19 +7,19 @@
 // one delivery and taken back the same afternoon.
 //
 // The split this file introduces: the token stays the *identity* (which user is
-// this), the database becomes the *authority* (what may they do). Reads are
-// cached per warm instance for PERMISSION_TTL_MS, which is what keeps it from
-// becoming a query per request.
+// this), the database becomes the *authority* (what may they do). The read is
+// memoised for the life of ONE request, so a render that asks several times
+// pays for a single query and nothing survives to go stale between requests.
 //
 // proxy.ts still gates paths on the token, because it runs on the Edge and
 // cannot reach Postgres. It is therefore a navigation convenience, not the
 // security boundary: a user whose role was just narrowed can still reach a page
 // shell, but every guard below fetches live and returns 403 or empty data.
 
+import { cache } from "react";
 import type { Session } from "next-auth";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { PERMISSION_TTL_MS } from "@/constants/session";
 
 export interface LiveUser {
   roleName: string;
@@ -31,24 +31,41 @@ export interface LiveUser {
   sessionsValidFrom: Date | null;
 }
 
-interface Entry {
-  // null means "no longer allowed in": the row is gone, or isActive is false.
-  // Cached like any other answer so a deactivated account cannot turn each
-  // request it keeps making into another round trip.
-  user: LiveUser | null;
-  expiresAt: number;
-}
-
-// Module scope, so it lives as long as the warm instance and dies with it.
-// Bounded by headcount, so it needs no eviction policy beyond the TTL.
-const entries = new Map<number, Entry>();
-
-// Collapses concurrent misses for one user into a single query. A page load
-// fires several requests at once, and without this each would independently
-// notice the entry had gone stale and go to the database.
-const inFlight = new Map<number, Promise<LiveUser | null>>();
-
-async function read(userId: number): Promise<LiveUser | null> {
+// The live answer for one user, memoised for the life of a single request.
+//
+// THERE IS DELIBERATELY NO CROSS-REQUEST CACHE. There used to be: a module-level
+// map with a two-minute TTL, plus invalidateLiveUser() called wherever a role
+// changed. It was wrong in two compounding ways, and the second one handed out
+// access that had already been taken away.
+//
+// First, Next.js gives route handlers and server components SEPARATE module
+// instances, so they held separate maps. A demote runs in a route handler, so
+// the invalidation cleared that copy and left the server-component copy warm
+// with the old permissions.
+//
+// Second, and worse: liveSession() only re-read the database when the token and
+// the cached set DISAGREED. After a demote the stale cache still said
+// "promoted" and so did the token, so they agreed, the re-read never ran, and
+// the session came back carrying the stale permissions for hasPermission() to
+// say yes to. Reported from the clinic on 2026-09-05: demoted in one browser,
+// still fully promoted in the other until the page was refreshed.
+//
+// Request scope removes the window rather than shortening it. React's cache()
+// memoises per request and starts empty on the next one, so the answer can
+// never predate the token it is compared against, and there is nothing to
+// invalidate from anywhere else. Where no request scope exists cache() simply
+// calls through, which costs a query and is still correct.
+//
+// The price is about one ~2ms in-region query per request instead of one per
+// user per two minutes per instance. At clinic volume that is single-digit
+// seconds of database time a month.
+//
+// Do not reintroduce a cross-request cache here without a SHARED store. A
+// per-instance one cannot be invalidated across instances and this is the file
+// where being stale means being wrong about who may do what.
+export const readLiveUser = cache(async function readLiveUser(
+  userId: number,
+): Promise<LiveUser | null> {
   const row = await prisma.user.findUnique({
     where: { userId },
     // Names only. This runs often, so it pulls the handful of permission
@@ -78,7 +95,7 @@ async function read(userId: number): Promise<LiveUser | null> {
     lastName: row.lastName,
     sessionsValidFrom: row.sessionsValidFrom,
   };
-}
+});
 
 // Whether an admin has signed this session out since it began.
 //
@@ -103,10 +120,10 @@ async function read(userId: number): Promise<LiveUser | null> {
 // is when it is expected and easy to explain, and in exchange the proxy, the
 // pages and the handlers can never reach different conclusions.
 //
-// Bounded staleness caveat: the live set is read through a per-instance cache,
-// so during the TTL window one instance can hold an older set than another. A
-// person moving between them around a permission change can be signed out more
-// than once before it settles. It self-heals within PERMISSION_TTL_MS.
+// The live set is read fresh per request, so there is no window in which one
+// instance holds an older answer than another and no way for this comparison to
+// be made against something that predates the token. A difference here is a
+// real difference.
 function permissionsChanged(
   tokenPermissions: string[] | undefined,
   livePermissions: string[],
@@ -123,57 +140,6 @@ function isSignedOut(
   if (!validFrom) return false;
   if (typeof signedInAt !== "number") return true;
   return signedInAt < validFrom.getTime();
-}
-
-export async function readLiveUser(userId: number): Promise<LiveUser | null> {
-  const cached = entries.get(userId);
-  if (cached && cached.expiresAt > Date.now()) return cached.user;
-
-  const pending = inFlight.get(userId);
-  if (pending) return pending;
-
-  // A rejection propagates to the caller and surfaces as a 500, the same as any
-  // other query in the request would when Postgres is unreachable. Nothing is
-  // cached on failure, so the next request retries rather than inheriting it.
-  const promise = read(userId)
-    .then((user) => {
-      entries.set(userId, { user, expiresAt: Date.now() + PERMISSION_TTL_MS });
-      return user;
-    })
-    .finally(() => {
-      inFlight.delete(userId);
-    });
-
-  inFlight.set(userId, promise);
-  return promise;
-}
-
-// Drops a cached entry so the next request re-reads. Called wherever a role or
-// isActive changes, which makes a revoke land at once on the instance that
-// served the change. Other instances still wait out the TTL, so treat this as a
-// courtesy that shortens the common case, never as the guarantee.
-export function invalidateLiveUser(userId: number): void {
-  entries.delete(userId);
-}
-
-// Drops the cached entry and reads again. Used when a cached answer contradicts
-// the token in front of it, where the cache is the more likely thing to be
-// wrong: a sign-in reads the database directly, so a token minted seconds ago
-// can legitimately disagree with an entry cached before the change.
-export async function refreshLiveUser(
-  userId: number,
-): Promise<LiveUser | null> {
-  entries.delete(userId);
-  return readLiveUser(userId);
-}
-
-// Same courtesy for a change that moves everybody at once: toggling a permission
-// on a role rewrites what every user holding it may do, and the cache is keyed
-// by user, so there is nothing finer to invalidate and nothing worth the code to
-// work out who was affected. The map holds one entry per signed-in member of
-// staff, so clearing it costs a handful of re-reads.
-export function invalidateAllLiveUsers(): void {
-  entries.clear();
 }
 
 // The session every server-side caller should use: Auth.js for identity, the
@@ -193,27 +159,25 @@ export async function liveSession(): Promise<Session | null> {
   const userId = session.user.userId;
   if (typeof userId !== "number") return null;
 
-  let live = await readLiveUser(userId);
+  const live = await readLiveUser(userId);
   if (!live) return null;
 
-  // A disagreement is not enough on its own. The cached set can simply be older
-  // than the token it is being compared against: signing in reads the database
-  // directly, so a token minted a second ago will disagree with anything cached
-  // before the change that prompted it. Ending the session on that reading locks
-  // the person out of a sign-in they just completed correctly, and every retry
-  // does it again until the entry expires. So confirm against the database
-  // before believing it.
+  // This used to re-read the database before believing a disagreement, because
+  // a cached set could be older than the token: signing in reads the database
+  // directly, so a token minted a second ago disagreed with anything cached
+  // before the change that prompted it, and ending the session on that reading
+  // locked people out of a sign-in they had just completed correctly. That
+  // second read is gone because its cause is gone. The read above happens
+  // inside this request and therefore always after the token was minted, so a
+  // disagreement can only mean the database has since changed. Restoring a
+  // cross-request cache would bring the false positive back with it.
+
   if (permissionsChanged(session.user.permissions, live.permissions)) {
-    live = await refreshLiveUser(userId);
-    if (!live) return null;
-    if (permissionsChanged(session.user.permissions, live.permissions)) {
-      return null;
-    }
+    return null;
   }
 
   // sessionsValidFrom is this module's business, not the caller's, so it is
-  // peeled off rather than spread onto session.user. Read from whichever copy
-  // survived above, so a refresh is reflected here too.
+  // peeled off rather than spread onto session.user.
   const { sessionsValidFrom, ...fields } = live;
   if (isSignedOut(sessionsValidFrom, session.user.signedInAt)) return null;
 

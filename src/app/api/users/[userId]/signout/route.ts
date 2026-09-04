@@ -12,7 +12,6 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, parseId, requirePermission } from "@/lib/api";
 import { writeAudit } from "@/lib/audit";
-import { invalidateLiveUser } from "@/lib/session-user";
 
 export async function POST(
   _request: Request,
@@ -37,8 +36,6 @@ export async function POST(
       where: { userId: id },
       data: { sessionsValidFrom: signedOutAt },
     });
-
-    invalidateLiveUser(id);
 
     await writeAudit(session, {
       action: "signout",

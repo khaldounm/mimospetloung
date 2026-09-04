@@ -12,7 +12,6 @@ import { ApiError } from "@/lib/api";
 import { isPermissionEnabled, moduleOf } from "@/constants/features";
 import { fallbackGroupLabel, PERMISSION_GROUPS } from "@/constants/rbac";
 import { USER_ADMIN_PERMISSION } from "@/lib/users";
-import { invalidateAllLiveUsers } from "@/lib/session-user";
 import type {
   PermissionMatrixDTO,
   PermissionMatrixRow,
@@ -237,11 +236,6 @@ export async function applyPermissionToggle(input: {
         : prisma.rolePermission.deleteMany({ where: { roleId, permissionId } });
     }),
   );
-
-  // Everyone holding this role is now allowed something different. Guards read
-  // permissions live but through a short per-instance cache, so drop it here to
-  // land the change at once on this instance rather than after the TTL.
-  invalidateAllLiveUsers();
 
   return changes;
 }
