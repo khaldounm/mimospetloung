@@ -58,7 +58,9 @@ export async function POST(
       itemId,
       type: data.type,
       quantity: data.quantity,
-      unitCost: data.unitCost,
+      // A Received movement's unit cost writes straight through to the item's
+      // lastCost, so it carries the same orders:read gate the field does.
+      unitCost: canSeeCost(session.user) ? data.unitCost : undefined,
       referenceType: data.referenceType,
       referenceId: data.referenceId,
       notes: data.notes,

@@ -80,7 +80,12 @@ export async function PATCH(
           ...(data.salePrice !== undefined
             ? { salePrice: data.salePrice }
             : {}),
-          ...(data.lastCost !== undefined ? { lastCost: data.lastCost } : {}),
+          // Cost is orders:read only. Hiding the field is not enough on its
+          // own: a hand-rolled request from someone holding inventory:write
+          // would still set a figure they are not allowed to read back.
+          ...(data.lastCost !== undefined && canSeeCost(session.user)
+            ? { lastCost: data.lastCost }
+            : {}),
           ...(data.partnerId !== undefined
             ? { partnerId: data.partnerId }
             : {}),

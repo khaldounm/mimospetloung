@@ -30,7 +30,14 @@ async function loadDraftLine(invoiceId: number, lineItemId: number) {
     include: {
       invoice: { select: { invoiceId: true, status: true } },
       item: {
-        select: { looseUnit: true, loosePerUnit: true, loosePrice: true },
+        select: {
+          looseUnit: true,
+          loosePerUnit: true,
+          loosePrice: true,
+          // Switching a line back off the loose unit has to put the pack's own
+          // price back, so the price the item sells at comes along.
+          salePrice: true,
+        },
       },
     },
   });
@@ -62,6 +69,15 @@ export async function PATCH(
         ? resolveLine(existing.item, { looseQty: data.looseQty })
         : null;
 
+    // A pack quantity on a line that is currently loose is the counter putting
+    // the unit back from the kilo to the bag. The loose record goes with it, and
+    // so does the price: a loose line's per-pack figure is worked back from the
+    // loose rate, so leaving it would sell whole bags at the scooped price.
+    const backToPacks =
+      resolved === null &&
+      data.quantity !== undefined &&
+      existing.looseQty !== null;
+
     const invoice = await prisma.$transaction(async (tx) => {
       await tx.invoiceLineItem.update({
         where: { lineItemId },
@@ -80,9 +96,12 @@ export async function PATCH(
                 ...(data.quantity !== undefined
                   ? { quantity: data.quantity }
                   : {}),
+                ...(backToPacks ? { looseQty: null, looseUnit: null } : {}),
                 ...(data.unitPrice !== undefined
                   ? { unitPrice: data.unitPrice }
-                  : {}),
+                  : backToPacks && existing.item?.salePrice != null
+                    ? { unitPrice: existing.item.salePrice }
+                    : {}),
               }),
           ...(data.isHidden !== undefined ? { isHidden: data.isHidden } : {}),
         },

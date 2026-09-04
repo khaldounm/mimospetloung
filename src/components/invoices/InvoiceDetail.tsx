@@ -640,20 +640,33 @@ export default function InvoiceDetail({
                 ) : (
                   /* Editing happens in the row itself. A price correction at a
                      busy counter is a click and a number, not a dialog. */
-                  invoice.lineItems.map((l) => (
-                    <LineItemRow
-                      key={l.lineItemId}
-                      invoiceId={invoice.invoiceId}
-                      line={l}
-                      item={
-                        l.itemId != null ? itemById.get(l.itemId) : undefined
-                      }
-                      editable={canEditLines}
-                      onSaved={applyInvoice}
-                      onDelete={() => void deleteLine(l.lineItemId)}
-                      onError={setError}
-                    />
-                  ))
+                  invoice.lineItems.map((l) => {
+                    const item =
+                      l.itemId != null ? itemById.get(l.itemId) : undefined;
+                    return (
+                      <LineItemRow
+                        key={l.lineItemId}
+                        invoiceId={invoice.invoiceId}
+                        line={l}
+                        item={item}
+                        // Only worth saying on a draft. Stock comes off the
+                        // shelf at issue, so on an issued invoice every line
+                        // that emptied a shelf would light up for a sale that
+                        // already went through. A return line is putting stock
+                        // back, so it is not selling anything it does not have.
+                        outOfStock={
+                          isDraft &&
+                          item != null &&
+                          item.currentStock <= 0 &&
+                          Number(l.quantity) > 0
+                        }
+                        editable={canEditLines}
+                        onSaved={applyInvoice}
+                        onDelete={() => void deleteLine(l.lineItemId)}
+                        onError={setError}
+                      />
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

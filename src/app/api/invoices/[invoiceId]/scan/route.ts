@@ -90,11 +90,19 @@ export async function POST(
         // Only lines still priced at the item's current sale price are merged
         // into; a line whose price was overridden by hand is left alone so the
         // scan cannot silently reprice it.
+        //
+        // A line being sold by the kilo is left alone too. A scan means one more
+        // whole pack, and the two figures on a loose line are derived together
+        // from the amount asked for: incrementing the pack count would leave it
+        // billing more than the amount it still says it is selling. On an item
+        // whose loose rate happens to price a whole pack at its shelf price,
+        // that is a match the price filter alone would not catch.
         const existing = await tx.invoiceLineItem.findFirst({
           where: {
             invoiceId,
             itemId: item.itemId,
             unitPrice,
+            looseQty: null,
           },
           orderBy: { lineItemId: "asc" },
         });

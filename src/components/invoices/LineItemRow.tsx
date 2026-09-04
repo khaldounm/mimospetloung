@@ -5,6 +5,8 @@ import {
   Box,
   IconButton,
   InputAdornment,
+  MenuItem,
+  Select,
   Stack,
   Switch,
   TableCell,
@@ -12,15 +14,21 @@ import {
   TextField,
   Tooltip,
   Typography,
+  alpha,
+  type SxProps,
+  type Theme,
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { apiRequest } from "@/utils/api-client";
+import { useWriteQueue } from "@/hooks/useWriteQueue";
 import { formatMoney } from "@/utils/format";
 import {
   formatLineQuantity,
   looseConfigOf,
   looseLine,
+  looseToPacks,
   minLooseQuantity,
+  packsToLoose,
 } from "@/utils/inventory";
 import type { InvoiceDTO, InvoiceLineItemDTO } from "@/types/entities";
 import type { ItemLineOption } from "./LineItemDialog";
@@ -30,9 +38,10 @@ import type { ItemLineOption } from "./LineItemDialog";
 // product name wraps inside its column instead of shouldering the number
 // columns out of alignment.
 //
-// The three editable columns split their space 60 / 15 / 25. Price is the wider
-// of the two numbers: it carries cents and gets typed over far more often than a
-// quantity.
+// The three editable columns split their space 54 / 21 / 25. Price is still the
+// wider of the two numbers: it carries cents and gets typed over far more often
+// than a quantity. Quantity takes more than the digits need because a pack that
+// is also sold loose carries its unit picker inside the field.
 //
 // Everything is a plain percentage, and every column has one, because a fixed
 // table layout ignores a `calc()` width that mixes a percentage with a length
@@ -41,7 +50,7 @@ import type { ItemLineOption } from "./LineItemDialog";
 //
 // The table carries a minWidth instead, and its container scrolls: below that
 // the number columns would be too narrow to type a price into.
-export const LINE_ITEM_TABLE_MIN_WIDTH = 620;
+export const LINE_ITEM_TABLE_MIN_WIDTH = 680;
 
 // Table cells default to 16px of padding a side, which is 32px taken out of
 // every column. On the narrow number columns that left the input barely wider
@@ -56,8 +65,8 @@ export function lineItemColumnWidths(editable: boolean) {
   const typed = 100 - total - controls;
   const share = (fraction: number) => `${(typed * fraction).toFixed(2)}%`;
   return {
-    description: share(0.6),
-    quantity: share(0.15),
+    description: share(0.54),
+    quantity: share(0.21),
     unitPrice: share(0.25),
     total: `${total}%`,
     controls: `${controls}%`,
@@ -74,6 +83,11 @@ interface Props {
   item?: ItemLineOption;
   // Lines are only editable on a draft, and only by someone who can write.
   editable: boolean;
+  // Nothing left on the shelf for the item this line is selling. Decided by the
+  // invoice, which is the only thing that knows the stock figure is still worth
+  // reading: stock does not move until the invoice is issued, so on anything
+  // past a draft the count has already gone down and the warning would be a lie.
+  outOfStock?: boolean;
   onSaved: (invoice: InvoiceDTO) => void;
   onDelete: () => void;
   onError: (message: string) => void;
@@ -81,10 +95,26 @@ interface Props {
 
 // A return reads as an ordinary line with a minus in front of it, which is easy
 // to skim past on a busy counter, so the row says what it is.
-function rowSx(line: InvoiceLineItemDTO) {
-  return Number(line.quantity) < 0
-    ? { "& td": { color: "warning.dark" } }
-    : undefined;
+//
+// Selling stock that is not there gets the whole row rather than a mark in one
+// cell: the counter reads the invoice by scanning down it while the queue moves,
+// and a badge in a single column is exactly what gets skipped. `&&` doubles the
+// selector so the tint outranks TableRow's own hover colour instead of losing
+// the row under the cursor, which is the row being looked at.
+function rowSx(
+  line: InvoiceLineItemDTO,
+  outOfStock: boolean,
+): SxProps<Theme> | undefined {
+  const returned =
+    Number(line.quantity) < 0 ? { "& td": { color: "warning.dark" } } : null;
+  if (!outOfStock) return returned ?? undefined;
+  const tint = (t: Theme, weight: number) =>
+    alpha(t.palette.warning.main, weight);
+  return {
+    ...returned,
+    "&&": { backgroundColor: (t: Theme) => tint(t, 0.16) },
+    "&&:hover": { backgroundColor: (t: Theme) => tint(t, 0.24) },
+  };
 }
 
 export default function LineItemRow(props: Props) {
@@ -95,13 +125,14 @@ export default function LineItemRow(props: Props) {
   );
 }
 
-function ReadOnlyRow({ line }: Props) {
+function ReadOnlyRow({ line, outOfStock = false }: Props) {
   const cols = lineItemColumnWidths(false);
   return (
-    <TableRow hover sx={rowSx(line)}>
+    <TableRow hover sx={rowSx(line, outOfStock)}>
       <TableCell sx={{ ...LINE_ITEM_CELL_SX, width: cols.description }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>{line.description}</Box>
+          {outOfStock && <OutOfStockTag />}
           {line.isHidden && <ClinicUseTag />}
         </Stack>
       </TableCell>
@@ -121,6 +152,20 @@ function ReadOnlyRow({ line }: Props) {
         {line.isHidden ? <NotCharged /> : formatMoney(line.lineTotal)}
       </TableCell>
     </TableRow>
+  );
+}
+
+// Says what the orange means. Colour alone is a poor carrier for one fact in a
+// dense table, and it is the fact the counter has to act on.
+function OutOfStockTag() {
+  return (
+    <Typography
+      variant="caption"
+      color="warning.dark"
+      sx={{ flexShrink: 0, whiteSpace: "nowrap", fontWeight: 600 }}
+    >
+      No stock
+    </Typography>
   );
 }
 
@@ -161,6 +206,7 @@ function EditableRow({
   invoiceId,
   line,
   item,
+  outOfStock = false,
   onSaved,
   onDelete,
   onError,
@@ -168,6 +214,11 @@ function EditableRow({
   // Only the fields actually touched. Everything else reads from the invoice.
   const [draft, setDraft] = useState<Partial<Record<Field, string>>>({});
   const [saving, setSaving] = useState(false);
+  // Writes queue rather than race. Switching the unit blurs the amount field,
+  // so a typed amount and the switch that follows it are two requests a few
+  // milliseconds apart, and each response carries the whole recomputed invoice:
+  // in parallel the slower one would land last and undo the other.
+  const enqueue = useWriteQueue();
   const cols = lineItemColumnWidths(true);
 
   const isItem = line.itemId != null;
@@ -176,6 +227,9 @@ function EditableRow({
   // amount keeps it loose; the server re-derives the pack quantity and price
   // together so the two can never be saved disagreeing.
   const loose = line.looseQty != null && looseConfig != null;
+  // What a whole one of these is called. Items are not required to carry a unit
+  // and a blank option would read as a bug, so anything unnamed is a "Pack".
+  const packUnit = item?.unit?.trim() || "Pack";
 
   const saved: Record<Field, string> = {
     description: line.description,
@@ -196,27 +250,29 @@ function EditableRow({
     return { lineTotal: quantity * unitPrice };
   })();
 
-  async function commit(body: Record<string, unknown>, clear: Field[]) {
+  function commit(body: Record<string, unknown>, clear: Field[]) {
     setSaving(true);
-    try {
-      const data = await apiRequest<{ invoice: InvoiceDTO }>(
-        `/api/invoices/${invoiceId}/line-items/${line.lineItemId}`,
-        { method: "PATCH", body },
-      );
-      onSaved(data.invoice);
-      // Hand these fields back to the invoice now that it agrees with them.
-      setDraft((d) => {
-        const next = { ...d };
-        for (const field of clear) delete next[field];
-        return next;
-      });
-    } catch (err) {
-      // The draft is deliberately kept: whoever typed it should get the chance
-      // to correct it rather than watch it snap back to the old figure.
-      onError(err instanceof Error ? err.message : "Failed to save line");
-    } finally {
-      setSaving(false);
-    }
+    enqueue(async () => {
+      try {
+        const data = await apiRequest<{ invoice: InvoiceDTO }>(
+          `/api/invoices/${invoiceId}/line-items/${line.lineItemId}`,
+          { method: "PATCH", body },
+        );
+        onSaved(data.invoice);
+        // Hand these fields back to the invoice now that it agrees with them.
+        setDraft((d) => {
+          const next = { ...d };
+          for (const field of clear) delete next[field];
+          return next;
+        });
+      } catch (err) {
+        // The draft is deliberately kept: whoever typed it should get the
+        // chance to correct it rather than watch it snap back to the old figure.
+        onError(err instanceof Error ? err.message : "Failed to save line");
+      } finally {
+        setSaving(false);
+      }
+    });
   }
 
   // Leaving a field saves it, and only if it actually changed: tabbing across a
@@ -228,10 +284,40 @@ function EditableRow({
   function commitField(field: Field, value: string) {
     if (value === saved[field]) return;
     if (field === "quantity" && loose) {
-      void commit({ looseQty: value }, ["quantity", "unitPrice"]);
+      commit({ looseQty: value }, ["quantity", "unitPrice"]);
       return;
     }
-    void commit({ [field]: value }, [field]);
+    commit({ [field]: value }, [field]);
+  }
+
+  // Swap the line between whole packs and the loose unit, in place, with no
+  // dialog: scanning the bag is the same scan either way, and which of the two
+  // the customer is buying is decided here.
+  //
+  // The amount carries across as a straight conversion, so the money does not
+  // move on its own when the unit does: a 15kg bag becomes 15 kg, and 3 kg
+  // becomes a fifth of a bag. Whoever switched then types what they meant, and
+  // the server re-derives quantity and price together from whichever was sent.
+  function changeUnit(next: "pack" | "loose") {
+    if (!looseConfig || next === (loose ? "loose" : "pack")) return;
+    // Read off the field rather than the line: the blur that the click on this
+    // select just fired may still be in flight with a newer amount.
+    const shown = Number(valueOf("quantity"));
+    if (next === "loose") {
+      const amount =
+        Number.isFinite(shown) && shown > 0
+          ? packsToLoose(shown, looseConfig)
+          : minLooseQuantity(looseConfig);
+      commit({ looseQty: String(amount) }, ["quantity", "unitPrice"]);
+      return;
+    }
+    const packs = Number.isFinite(shown)
+      ? looseToPacks(shown, looseConfig)
+      : null;
+    commit({ quantity: String(packs ?? line.quantity) }, [
+      "quantity",
+      "unitPrice",
+    ]);
   }
 
   function fieldProps(field: Field) {
@@ -262,10 +348,45 @@ function EditableRow({
     };
   }
 
+  // A pack that is also sold by the kilo picks its unit here, inside the amount
+  // field, so the two read as the one answer they are. Items sold only whole
+  // keep the plain field they always had.
+  const unitAdornment = looseConfig ? (
+    <InputAdornment position="end" sx={{ ml: 0.25 }}>
+      <Select
+        value={loose ? "loose" : "pack"}
+        onChange={(e) => changeUnit(e.target.value as "pack" | "loose")}
+        variant="standard"
+        // The picker sits inside the amount field, so it is inside that field's
+        // FormControl and would otherwise grey itself out every time the amount
+        // saves. Writes queue, so it stays live and the click always lands.
+        disabled={false}
+        SelectDisplayProps={{ "aria-label": "Unit" }}
+        sx={{
+          fontSize: "0.75rem",
+          // The standard variant's rule would draw a line under the picker
+          // inside a field that already has its own border.
+          "&::before, &::after": { display: "none" },
+          "& .MuiSelect-select": { py: 0, pl: 0 },
+        }}
+      >
+        <MenuItem value="pack" sx={{ fontSize: "0.8125rem" }}>
+          {packUnit}
+        </MenuItem>
+        <MenuItem value="loose" sx={{ fontSize: "0.8125rem" }}>
+          {looseConfig.unit}
+        </MenuItem>
+      </Select>
+    </InputAdornment>
+  ) : null;
+
   return (
-    <TableRow sx={rowSx(line)}>
+    <TableRow sx={rowSx(line, outOfStock)}>
       <TableCell sx={{ ...LINE_ITEM_CELL_SX, width: cols.description }}>
-        <TextField {...fieldProps("description")} />
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          <TextField {...fieldProps("description")} />
+          {outOfStock && <OutOfStockTag />}
+        </Stack>
       </TableCell>
       <TableCell sx={{ ...LINE_ITEM_CELL_SX, width: cols.quantity }}>
         <TextField
@@ -277,16 +398,8 @@ function EditableRow({
               step: "0.001",
               style: { textAlign: "right" },
             },
-            ...(loose && looseConfig
-              ? {
-                  input: {
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        {looseConfig.unit}
-                      </InputAdornment>
-                    ),
-                  },
-                }
+            ...(unitAdornment
+              ? { input: { endAdornment: unitAdornment } }
               : {}),
           }}
         />
@@ -342,9 +455,7 @@ function EditableRow({
                 size="small"
                 checked={line.isHidden}
                 disabled={saving}
-                onChange={(e) =>
-                  void commit({ isHidden: e.target.checked }, [])
-                }
+                onChange={(e) => commit({ isHidden: e.target.checked }, [])}
                 slotProps={{
                   input: {
                     "aria-label": "Used in the clinic, not charged",

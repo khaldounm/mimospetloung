@@ -24,12 +24,14 @@ interface Props {
   itemId: number;
   itemName: string;
   unit: string | null;
+  /** orders:read. Gates the unit cost, which writes the item's last cost. */
+  canSeeCost: boolean;
   onClose: () => void;
   onSaved: () => void;
 }
 
 const HELP: Record<InventoryTxType, string> = {
-  Received: "Adds stock. Unit cost updates the item's last cost.",
+  Received: "Adds stock.",
   Used: "Removes stock (e.g. used in a procedure).",
   Sold: "Removes stock sold to a client.",
   Adjusted: "Correction after a count. Use a negative number to reduce stock.",
@@ -62,6 +64,7 @@ function StockMovementForm({
   itemId,
   itemName,
   unit,
+  canSeeCost,
   onClose,
   onSaved,
 }: FormProps) {
@@ -72,7 +75,11 @@ function StockMovementForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Cost follows the same orders:read gate as the rest of the app, and the
+  // server strips it either way. Someone without it books the delivery in and
+  // the item keeps whatever it was last bought at.
   const isReceived = type === "Received";
+  const askCost = isReceived && canSeeCost;
   // Only a signed type may be given a negative quantity; the rest take a
   // magnitude and get their direction from the type.
   const isSigned = SIGNED_TX_TYPES.includes(type);
@@ -87,7 +94,7 @@ function StockMovementForm({
         body: {
           type,
           quantity,
-          unitCost: isReceived ? unitCost : "",
+          unitCost: askCost ? unitCost : "",
           notes,
         },
       });
@@ -119,7 +126,11 @@ function StockMovementForm({
             label="Type"
             value={type}
             onChange={(e) => setType(e.target.value as InventoryTxType)}
-            helperText={HELP[type]}
+            helperText={
+              isReceived && canSeeCost
+                ? `${HELP[type]} Unit cost updates the item's last cost.`
+                : HELP[type]
+            }
             fullWidth
           >
             {MANUAL_TX_TYPES.map((t) => (
@@ -141,7 +152,7 @@ function StockMovementForm({
             required
             fullWidth
           />
-          {isReceived && (
+          {askCost && (
             <TextField
               label="Unit cost"
               type="number"

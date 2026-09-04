@@ -41,6 +41,8 @@ export async function POST(request: Request) {
     const data = await parseBody(request, inventoryItemCreateSchema);
 
     const openingStock = data.openingStock ?? 0;
+    // Same gate as the DTO: someone who cannot read a cost cannot set one.
+    const cost = canSeeCost(session.user) ? data.lastCost : undefined;
 
     try {
       // Create the item and, when an opening stock is given, seed a Received
@@ -55,7 +57,7 @@ export async function POST(request: Request) {
             unit: data.unit,
             reorderLevel: data.reorderLevel,
             salePrice: data.salePrice,
-            lastCost: data.lastCost,
+            lastCost: cost,
             partnerId: data.partnerId ?? null,
             partnerCostPct: data.partnerCostPct ?? null,
             partnerProfitPct: data.partnerProfitPct ?? null,
@@ -74,7 +76,7 @@ export async function POST(request: Request) {
             itemId: created.itemId,
             type: "Received",
             quantity: openingStock,
-            unitCost: data.lastCost ?? undefined,
+            unitCost: cost,
             referenceType: "opening",
             notes: "Opening stock",
             performedBy: session.user.userId,

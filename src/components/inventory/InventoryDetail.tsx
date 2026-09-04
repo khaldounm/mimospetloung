@@ -316,6 +316,7 @@ export default function InventoryDetail({
         itemId={item.itemId}
         itemName={item.name}
         unit={item.unit}
+        canSeeCost={canViewSuppliers}
         onClose={() => setMoveOpen(false)}
         onSaved={() => void reload()}
       />

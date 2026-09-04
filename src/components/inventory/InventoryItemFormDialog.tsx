@@ -378,7 +378,11 @@ function InventoryItemForm({
                 value={openingStock}
                 onChange={(e) => setOpeningStock(e.target.value)}
                 slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
-                helperText="Quantity on hand now (optional). Records a stock receipt at the cost above."
+                helperText={
+                  canViewSuppliers
+                    ? "Quantity on hand now (optional). Records a stock receipt at the cost above."
+                    : "Quantity on hand now (optional). Records a stock receipt."
+                }
                 fullWidth
               />
             )}
@@ -391,15 +395,21 @@ function InventoryItemForm({
                 slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
                 fullWidth
               />
-              <TextField
-                label="Last cost"
-                type="number"
-                value={lastCost}
-                onChange={(e) => setLastCost(e.target.value)}
-                slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
-                helperText="Auto-updated when stock is received"
-                fullWidth
-              />
+              {/* Cost is the supplier price, so the field follows the same
+                  orders:read gate the DTO does. Without it the box would sit
+                  there empty for clinical staff and invite them to type a
+                  figure over a cost they cannot see. */}
+              {canViewSuppliers && (
+                <TextField
+                  label="Last cost"
+                  type="number"
+                  value={lastCost}
+                  onChange={(e) => setLastCost(e.target.value)}
+                  slotProps={{ htmlInput: { min: 0, step: "0.01" } }}
+                  helperText="Auto-updated when stock is received"
+                  fullWidth
+                />
+              )}
             </Stack>
             {canViewSuppliers && (
               <TextField
