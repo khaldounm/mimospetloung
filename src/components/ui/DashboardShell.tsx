@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { useSessionWatch } from "@/hooks/useSessionWatch";
 import {
   AppBar,
   Box,
@@ -124,6 +125,10 @@ export default function DashboardShell({
   children,
 }: DashboardShellProps) {
   const pathname = usePathname();
+  // Nothing on the server can eject a session mid-navigation, so the shell asks
+  // on the client's behalf. See the hook for the three server-side approaches
+  // that were tried and why each one could not work.
+  useSessionWatch();
   const { mode, toggle } = useColorMode();
   const nav = navTokens[mode];
   const [mobileOpen, setMobileOpen] = useState(false);
